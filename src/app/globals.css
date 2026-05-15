@@ -1,0 +1,242 @@
+@import "tailwindcss";
+@import "katex/dist/katex.min.css";
+
+/* ----- Design tokens ------------------------------------------------------ */
+/*
+ * Palette aims for the "Anthropic courses" reading-pane feel: warm off-white
+ * background, near-black ink, generous line-height, serifed body for the
+ * reading column and sans for chrome. Dark mode mirrors the same intent.
+ */
+:root {
+  --background: #fbfaf7;        /* warm paper */
+  --background-elev: #ffffff;   /* cards / sidebar */
+  --foreground: #1a1a1a;        /* near black ink */
+  --muted: #6b6b6b;             /* secondary text */
+  --rule: #e6e3dc;              /* hairlines */
+  --accent: #c9602a;            /* terracotta — sparingly, for completed marks */
+  --accent-soft: #f1d8c4;
+  --link: #2a5cb8;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background: #16161a;
+    --background-elev: #1f1f24;
+    --foreground: #ececec;
+    --muted: #9a9a9a;
+    --rule: #2a2a30;
+    --accent: #d97a45;
+    --accent-soft: #3a2820;
+    --link: #7aa6ff;
+  }
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-background-elev: var(--background-elev);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-rule: var(--rule);
+  --color-accent: var(--accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-link: var(--link);
+  /* System font stacks — fast, no network dependency, look near-native on
+     each OS. Swap to next/font/google later if you want a fixed face. */
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Fira Code", Menlo, Consolas, monospace;
+}
+
+html, body { height: 100%; }
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans), ui-sans-serif, system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+/* ----- Reading column ----------------------------------------------------- */
+/*
+ * `.prose-textbook` is applied to the rendered MDX. Everything in here is a
+ * vanilla-CSS rule (no @apply for utilities, since Tailwind v4 deprecated that
+ * pattern) so that the reading pane stays self-contained and predictable.
+ */
+.prose-textbook {
+  font-size: 1.0625rem;          /* 17px */
+  line-height: 1.7;
+  color: var(--foreground);
+  max-width: 70ch;
+}
+
+.prose-textbook p {
+  margin: 0 0 1.1em 0;
+}
+
+.prose-textbook h1,
+.prose-textbook h2,
+.prose-textbook h3,
+.prose-textbook h4 {
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--foreground);
+  margin: 2.2em 0 0.6em 0;
+  line-height: 1.25;
+}
+
+.prose-textbook h1 { font-size: 1.9rem; margin-top: 0; }
+.prose-textbook h2 { font-size: 1.45rem; }
+.prose-textbook h3 { font-size: 1.2rem;  }
+.prose-textbook h4 { font-size: 1.05rem; }
+
+.prose-textbook a {
+  color: var(--link);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+}
+
+.prose-textbook strong { font-weight: 600; }
+.prose-textbook em { font-style: italic; }
+
+.prose-textbook code:not(pre code) {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 0.92em;
+  padding: 0.1em 0.35em;
+  background: var(--background-elev);
+  border: 1px solid var(--rule);
+  border-radius: 4px;
+}
+
+.prose-textbook pre {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-size: 0.875rem;
+  line-height: 1.55;
+  background: var(--background-elev);
+  border: 1px solid var(--rule);
+  border-radius: 8px;
+  padding: 1rem 1.15rem;
+  overflow-x: auto;
+  margin: 1.2em 0;
+}
+
+.prose-textbook ul,
+.prose-textbook ol {
+  margin: 0.4em 0 1.2em 0;
+  padding-left: 1.4em;
+}
+.prose-textbook ul { list-style: disc; }
+.prose-textbook ol { list-style: decimal; }
+.prose-textbook li { margin: 0.25em 0; }
+.prose-textbook li > p { margin: 0.25em 0; }
+
+.prose-textbook blockquote {
+  margin: 1.2em 0;
+  padding: 0.4em 1.1em;
+  border-left: 3px solid var(--rule);
+  color: var(--muted);
+}
+
+.prose-textbook hr {
+  border: 0;
+  border-top: 1px solid var(--rule);
+  margin: 2.2em 0;
+}
+
+.prose-textbook table {
+  width: 100%;
+  margin: 1.2em 0;
+  border-collapse: collapse;
+  font-size: 0.95em;
+}
+.prose-textbook th,
+.prose-textbook td {
+  border-bottom: 1px solid var(--rule);
+  padding: 0.55em 0.7em;
+  text-align: left;
+}
+.prose-textbook th { font-weight: 600; }
+
+/* ----- MDX custom components ---------------------------------------------- */
+
+.mdx-aside {
+  margin: 1.4em 0;
+  padding: 0.65em 1em 0.65em 1.1em;
+  border-left: 3px solid var(--rule);
+  border-radius: 0 6px 6px 0;
+  background: var(--background-elev);
+}
+.mdx-aside--warning {
+  border-left-color: #d97706;
+  background: #fffbeb;
+}
+@media (prefers-color-scheme: dark) {
+  .mdx-aside--warning { background: #2a1f05; }
+}
+.mdx-aside--history {
+  border-left-color: var(--muted);
+  font-style: italic;
+}
+.mdx-aside__label {
+  display: block;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 0.4em;
+}
+.mdx-aside--warning .mdx-aside__label { color: #b45309; }
+@media (prefers-color-scheme: dark) {
+  .mdx-aside--warning .mdx-aside__label { color: #fbbf24; }
+}
+
+.mdx-self-test {
+  margin: 1.6em 0;
+  padding: 0.8em 1.1em;
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  background: var(--background-elev);
+}
+.mdx-self-test__label {
+  display: block;
+  font-size: 0.72rem;
+  font-variant: small-caps;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+  margin-bottom: 0.55em;
+}
+
+.mdx-figure {
+  margin: 1.6em 0;
+  text-align: center;
+}
+.mdx-figure__img {
+  max-width: 100%;
+  height: auto;
+  border-radius: 4px;
+}
+.mdx-figure__caption {
+  margin-top: 0.5em;
+  font-size: 0.88rem;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+/* ----- KaTeX overrides ---------------------------------------------------- */
+/*
+ * Default KaTeX font-size matches surrounding text exactly; we bump display
+ * math slightly so the reader's eye lands on it. We also center display math
+ * and add breathing room so derivations feel paced, not crammed.
+ */
+.prose-textbook .katex { font-size: 1.04em; }
+.prose-textbook .katex-display {
+  margin: 1.4em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.prose-textbook .katex-display > .katex {
+  font-size: 1.12em;
+  display: inline-block;
+}

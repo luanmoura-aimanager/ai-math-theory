@@ -1,0 +1,101 @@
+---
+title: "0.2 — Cálculo matricial: derivadas que importam para backprop"
+chapter: 0
+order: 2
+estimatedMinutes: 22
+goal: "Derivar ∂(Wx+b)/∂x e ∂(Wx+b)/∂W com convenção de denominador, sem 'segue que'."
+prerequisites: ["ch0-math-foundations/0.1-vector-spaces"]
+---
+
+## 1. Convenção: numerador vs. denominador
+
+Antes de qualquer derivada, fixe a convenção. Para $f : \mathbb{R}^n \to
+\mathbb{R}^m$ definida por $y = f(x)$, a *convenção de numerador* declara
+
+$$
+\frac{\partial y}{\partial x} \in \mathbb{R}^{m \times n}, \qquad
+\Big(\frac{\partial y}{\partial x}\Big)_{ij} = \frac{\partial y_i}{\partial x_j}.
+$$
+
+A *convenção de denominador* faz o oposto: $\partial y / \partial x \in
+\mathbb{R}^{n \times m}$. Escolho numerador porque ele faz a regra da cadeia
+empilhar matrizes na ordem natural de multiplicação. **Toda derivação deste
+texto usa numerador.** Quem mistura sofre.
+
+## 2. Derivada de $Wx + b$ em relação a $x$
+
+Seja $f(x) = Wx + b$ com $W \in \mathbb{R}^{m\times n}$, $b \in
+\mathbb{R}^m$. Componente a componente,
+
+$$
+y_i = \sum_{k=1}^{n} W_{ik}\, x_k + b_i.
+$$
+
+Diferenciando $y_i$ em relação a $x_j$, todos os termos com $k \neq j$
+desaparecem:
+
+$$
+\frac{\partial y_i}{\partial x_j}
+= \frac{\partial}{\partial x_j} \Big( \sum_{k} W_{ik}\, x_k + b_i \Big)
+= \sum_{k} W_{ik}\, \delta_{kj}
+= W_{ij}.
+$$
+
+Empilhando para todo par $(i, j)$,
+
+$$
+\boxed{\;\frac{\partial (Wx + b)}{\partial x} = W \;\in \mathbb{R}^{m\times n}.\;}
+$$
+
+A intuição: derivar uma transformação afim em relação à entrada devolve a
+parte linear, ponto.
+
+## 3. Derivada em relação a $W$ — o ponto onde a maioria escorrega
+
+Aqui $W$ é uma matriz, então $\partial y / \partial W$ é a princípio um
+*tensor de ordem 3*: tem índices $(i, j, k)$ com $i$ percorrendo $y$, $(j, k)$
+percorrendo $W$. Vamos calcular elemento a elemento e só depois decidir como
+guardar.
+
+$$
+\frac{\partial y_i}{\partial W_{jk}}
+= \frac{\partial}{\partial W_{jk}} \Big( \sum_{l} W_{il}\, x_l + b_i \Big)
+= \sum_{l} \delta_{ij}\, \delta_{lk}\, x_l
+= \delta_{ij}\, x_k.
+$$
+
+Note o $\delta_{ij}$: a derivada da $i$-ésima saída em relação ao elemento
+$W_{jk}$ só é não-nula quando $j = i$. Em outras palavras, o peso $W_{jk}$
+afeta apenas a saída $y_j$.
+
+## 4. Por que isso aparece como produto externo no backprop
+
+Em treinamento, o que precisamos não é o tensor inteiro, mas o gradiente da
+função de perda escalar $L$ em relação a $W$. Aplicando a regra da cadeia:
+
+$$
+\frac{\partial L}{\partial W_{jk}}
+= \sum_i \frac{\partial L}{\partial y_i}\, \frac{\partial y_i}{\partial W_{jk}}
+= \sum_i \frac{\partial L}{\partial y_i}\, \delta_{ij}\, x_k
+= \frac{\partial L}{\partial y_j}\, x_k.
+$$
+
+Defina $\delta := \partial L / \partial y \in \mathbb{R}^{m}$. Em forma
+matricial, $\partial L / \partial W$ é a matriz $m \times n$ cujo elemento
+$(j,k)$ é $\delta_j\, x_k$ — exatamente o produto externo:
+
+$$
+\boxed{\;\frac{\partial L}{\partial W} = \delta\, x^\top \;\in \mathbb{R}^{m\times n}.\;}
+$$
+
+E para o viés, $\partial L/\partial b = \delta$ (cada $b_i$ contribui com $1$
+para $y_i$). Isso completa a *regra de atualização local* de uma camada
+linear; encadeada por todas as camadas, é literalmente o `backward()` do
+PyTorch.
+
+## 5. Checagem rápida (faça com caneta)
+
+Para $W = \begin{pmatrix} 1 & 2 \\ 3 & 4 \end{pmatrix}$ e $x = (5, 6)^\top$,
+compute $y = Wx$, depois $\partial y / \partial x$, e finalmente — supondo
+$L = \tfrac{1}{2}\|y\|^2$ — obtenha $\delta$ e o produto externo $\delta\,
+x^\top$. Se sair $W^\top y\, x^\top$ no lugar errado, releia §1.

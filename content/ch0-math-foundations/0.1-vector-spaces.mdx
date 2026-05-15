@@ -1,0 +1,90 @@
+---
+title: "0.1 — Espaços vetoriais e produto interno, a visão de ML"
+chapter: 0
+order: 1
+estimatedMinutes: 18
+goal: "Reobter ⟨x,y⟩ = xᵀy passo a passo e convencer-se de que uma camada linear é uma transformação afim."
+prerequisites: []
+---
+
+## 1. Onde os dados vivem
+
+Em ML, o objeto subjacente de qualquer ponto de dado é um vetor em um espaço
+vetorial real de dimensão finita $V = \mathbb{R}^d$. Uma imagem $28\times 28$
+em escala de cinza vira um vetor com $d = 784$ componentes; uma sequência de
+$T$ tokens em um modelo de linguagem, depois de embedados, vira uma matriz em
+$\mathbb{R}^{T\times d_\text{model}}$, mas cada linha é um vetor em
+$\mathbb{R}^{d_\text{model}}$.
+
+A escolha de $\mathbb{R}^d$ não é inocente — ela traz três compromissos
+imediatos: a estrutura aditiva ($x + y \in V$), a multiplicação por escalar
+($\lambda x \in V$) e a existência de um produto interno canônico que vamos
+deduzir agora.
+
+## 2. Produto interno via combinações de base
+
+Fixe uma base $\{e_1, \dots, e_d\}$ de $V$. Todo vetor se escreve de forma
+única como
+
+$$
+x = \sum_{i=1}^{d} x_i \, e_i, \qquad x_i \in \mathbb{R}.
+$$
+
+Suponha que $V$ esteja munido de uma forma bilinear simétrica positiva
+definida $\langle \cdot, \cdot \rangle : V \times V \to \mathbb{R}$. Por
+bilinearidade, dado $y = \sum_j y_j e_j$,
+
+$$
+\langle x, y \rangle
+= \Big\langle \sum_i x_i e_i,\, \sum_j y_j e_j \Big\rangle
+= \sum_{i,j} x_i\, y_j\, \langle e_i, e_j \rangle.
+$$
+
+Quando a base é ortonormal, $\langle e_i, e_j \rangle = \delta_{ij}$, e a
+soma dupla colapsa:
+
+$$
+\boxed{\;\langle x, y \rangle = \sum_i x_i y_i = x^\top y.\;}
+$$
+
+Esta é a forma que aparece em toda derivação de ML: produto interno é
+multiplicação linha-coluna.
+
+## 3. Norma induzida e ângulo
+
+A norma induzida pelo produto interno é
+
+$$
+\|x\| = \sqrt{\langle x, x \rangle} = \Big( \sum_i x_i^2 \Big)^{1/2}.
+$$
+
+E o ângulo $\theta$ entre $x$ e $y$ é definido implicitamente por
+
+$$
+\cos\theta = \frac{\langle x, y \rangle}{\|x\|\, \|y\|}.
+$$
+
+A *similaridade de cossenos* usada em busca semântica e em normalização de
+embeddings é exatamente esta razão. Quando os vetores estão pré-normalizados a
+norma unitária, $\cos\theta = x^\top y$ — ponto.
+
+## 4. Camada linear é transformação afim
+
+Uma camada totalmente conectada com pesos $W \in \mathbb{R}^{m\times d}$ e
+viés $b \in \mathbb{R}^m$ implementa o mapa
+
+$$
+f : \mathbb{R}^d \to \mathbb{R}^m, \qquad f(x) = Wx + b.
+$$
+
+Esta é a definição clássica de transformação afim: linear ($x \mapsto Wx$)
+mais translação ($+\,b$). A *bias trick* — concatenar um $1$ ao final de $x$ e
+empilhar $b$ como última coluna de $W$ — converte uma transformação afim em
+puramente linear num espaço aumentado $\mathbb{R}^{d+1}$. Isto simplifica
+provas, mas em código mantém-se $b$ separado por eficiência (broadcast).
+
+## 5. Onde isso vai
+
+Toda a álgebra que vem a seguir — *attention*, *softmax*, normalização de
+camadas — repousa sobre estes três fatos: existe uma base, existe um produto
+interno, e camadas são afins. Internalize-os; não há atalho.
