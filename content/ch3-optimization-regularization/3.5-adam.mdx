@@ -1,0 +1,174 @@
+---
+title: "3.5 — Adam: momentum + RMSProp + bias correction"
+chapter: 3
+order: 5
+estimatedMinutes: 22
+goal: "Derive the full Adam update from momentum, RMSProp, and the EMA bias correction; recover the equations of the Adam paper."
+prerequisites: ["ch3-optimization-regularization/3.2-ema-bias-correction", "ch3-optimization-regularization/3.3-momentum-nesterov", "ch3-optimization-regularization/3.4-adagrad-rmsprop"]
+---
+
+## 1. Why this session exists
+
+Adam (Kingma & Ba, 2014) is the optimiser you will see in 95% of deep-learning code written since 2015 — every GPT, every BERT, every diffusion model. It is also the most assembled optimiser in this chapter: a clean stack of the three ideas we just built. Once you see it this way, the paper's equations stop looking like magic and become inevitable.
+
+The recipe:
+
+1. Maintain an EMA $m_t$ of the gradient. (Momentum, 3.3.)
+2. Maintain an EMA $v_t$ of the *squared* gradient. (RMSProp, 3.4.)
+3. Bias-correct both. (3.2.)
+4. Take a step in $-\alpha \cdot \hat m_t / (\sqrt{\hat v_t} + \varepsilon)$.
+
+That's the entire algorithm. The rest of this session is one derivation, one careful look at the bias correction, and a handful of practical notes.
+
+---
+
+## 2. The Adam update, derived
+
+At step $t$, compute the (mini-batch) gradient $g_t = \nabla L(\theta_t)$. Then:
+
+**(a) First-moment EMA** — a velocity, mean of recent gradients:
+
+$$
+m_t = \beta_1\, m_{t-1} + (1 - \beta_1)\, g_t, \qquad m_0 = 0.
+$$
+
+**(b) Second-moment EMA** — element-wise mean of squared gradients:
+
+$$
+v_t = \beta_2\, v_{t-1} + (1 - \beta_2)\, g_t^{\odot 2}, \qquad v_0 = 0,
+$$
+
+where $g_t^{\odot 2}$ denotes the element-wise square.
+
+**(c) Bias correction** (from 3.2): both EMAs are initialised at zero, so they are biased toward zero in early steps. Correct:
+
+$$
+\hat m_t = \frac{m_t}{1 - \beta_1^t}, \qquad \hat v_t = \frac{v_t}{1 - \beta_2^t}.
+$$
+
+**(d) Update:**
+
+$$
+\boxed{\ \theta_{t+1} = \theta_t - \alpha\, \frac{\hat m_t}{\sqrt{\hat v_t} + \varepsilon}.\ }
+$$
+
+All operations after the gradient are element-wise. $\varepsilon \sim 10^{-8}$ for numerical stability of the division.
+
+That's Adam, equation (1) of the paper. Read it: each parameter coordinate gets its own *direction* (sign of the momentum) and its own *step size* (inversely proportional to its recent gradient magnitude).
+
+---
+
+## 3. What each piece does
+
+Re-cast each component in terms of what it solves:
+
+- The $m_t$ term **smooths the gradient over time**, providing variance reduction (cf. 3.1's batch-noise argument) and acceleration in consistent directions (cf. 3.3's valley argument).
+- The $\sqrt{\hat v_t}$ term **rescales per coordinate**, equalising the magnitude of steps across parameters with very different gradient statistics (cf. 3.4).
+- The bias correction $1/(1 - \beta_i^t)$ **fixes the cold-start bias** of zero-initialised EMAs (cf. 3.2). Without it, the first few hundred steps of training would be artificially small.
+
+The combined unit analysis is clean: $\hat m_t$ has the units of $\theta$ per unit time; $\sqrt{\hat v_t}$ has the units of $|\theta|$ per unit time; their ratio is dimensionless; $\alpha$ supplies the units. The effective per-coordinate learning rate is
+
+$$
+\alpha_t^{(i)} = \alpha \cdot \frac{|\hat m_t^{(i)}|}{\sqrt{\hat v_t^{(i)}} + \varepsilon} \cdot \frac{1}{|\hat m_t^{(i)}|} = \frac{\alpha}{\sqrt{\hat v_t^{(i)}} + \varepsilon},
+$$
+
+bounded above by $\alpha / \varepsilon$ (which is *huge* — $10^5$ for $\alpha = 10^{-3}, \varepsilon = 10^{-8}$) but in practice always much smaller because $\hat v_t^{(i)}$ dominates $\varepsilon$ after the first few steps.
+
+A more useful bound: the *signal-to-noise* form. Note
+
+$$
+\frac{|\hat m_t^{(i)}|}{\sqrt{\hat v_t^{(i)}}} = \frac{|\mathrm{mean}(g)|}{\sqrt{\mathrm{mean}(g^2)}} \le 1,
+$$
+
+with equality iff the gradient is constant in sign. So at each coordinate, Adam's step is at most $\alpha$ in absolute value (modulo the $\varepsilon$ correction). The per-parameter LR is **bounded by $\alpha$**, which is one of the reasons Adam is so easy to tune — you almost never have to worry about it blowing up a coordinate.
+
+---
+
+## 4. The bias correction in practice
+
+Let's see the correction at work. Take $\beta_1 = 0.9$, $\beta_2 = 0.999$, a constant gradient $g = 1$, and start from $m_0 = v_0 = 0$.
+
+At $t = 1$:
+
+$$
+m_1 = 0.1, \quad v_1 = 0.001, \quad \hat m_1 = \frac{0.1}{0.1} = 1, \quad \hat v_1 = \frac{0.001}{0.001} = 1.
+$$
+
+So $\hat m_1 / \sqrt{\hat v_1} = 1$, and the first Adam step is exactly $-\alpha \cdot 1$. Without bias correction, the first step would be $-\alpha \cdot 0.1 / \sqrt{0.001} = -\alpha \cdot 3.16$ — overshooting in the *other* direction by a factor of 3, because $v_1$ is underestimating the variance more than $m_1$ is underestimating the mean.
+
+The correction is what makes early steps well-scaled.
+
+---
+
+## 5. Compute and memory
+
+Per parameter, Adam stores two extra scalars ($m$ and $v$) and performs $\sim 10$ float operations per step (two EMA updates, two corrections, one division, one $\sqrt{}$, one step). Memory cost: **3× the model parameters** ($\theta, m, v$). For a 7B-parameter model in float32, that is $\sim 84$ GB of optimiser state alone, plus the model and gradients. This is why "Adam optimiser state" is the dominant memory cost in LLM training and why much of the recent work (Shazeer's Adafactor, bitsandbytes 8-bit Adam, ZeRO sharding) is about compressing or sharding $(m, v)$.
+
+For convolutional and small-scale models the memory is rarely an issue. For LLMs it is a first-class concern.
+
+---
+
+## 6. Default hyperparameters and convergence intuition
+
+The Adam paper's recommended defaults — used unchanged by nearly every major model — are
+
+$$
+\alpha = 10^{-3}, \qquad \beta_1 = 0.9, \qquad \beta_2 = 0.999, \qquad \varepsilon = 10^{-8}.
+$$
+
+For LLMs, $\alpha$ is usually scaled down to $10^{-4}$ or $3 \times 10^{-4}$, and $\beta_2$ is sometimes pushed to $0.95$ (more reactive second moment, helps with noisy LM gradients).
+
+Adam *does not have a convergence guarantee for non-convex losses*. Reddi et al. (2018, "On the Convergence of Adam") even showed it can diverge in some convex problems where AdaGrad converges. The fix in that paper (**AMSGrad**) keeps $\hat v_t$ monotonically non-decreasing. It is correct theory and almost no-one uses it in practice — vanilla Adam works empirically.
+
+<Aside type="warning">
+"Adam diverges in convex problems" is not a defeat for Adam — it is a hint that the convergence theory of optimisers in deep learning is genuinely incomplete. Adam works *very* well empirically on the non-convex losses we actually care about. Treat the theoretical guarantees as a sanity check, not a contract.
+</Aside>
+
+---
+
+## 7. Pseudocode (PyTorch-equivalent)
+
+```python
+# state per parameter: m, v
+for t, batch in enumerate(loader, start=1):
+    g = compute_gradient(theta, batch)
+
+    m = beta1 * m + (1 - beta1) * g
+    v = beta2 * v + (1 - beta2) * (g * g)
+
+    m_hat = m / (1 - beta1 ** t)
+    v_hat = v / (1 - beta2 ** t)
+
+    theta = theta - alpha * m_hat / (np.sqrt(v_hat) + eps)
+```
+
+Ten lines. Drop in $\beta_1 = 0.9, \beta_2 = 0.999, \alpha = 10^{-3}, \varepsilon = 10^{-8}$ and you have the most-used optimiser of the last decade.
+
+<Aside type="history">
+Your dissertation §C.4 lists Adam as one of the optimisers tried for the Raman 1D-CNN, with the same hyperparameters as above. The derivation here is the same one you wrote there: momentum + RMSProp + bias correction. We've simply organised the three pieces as independent sessions.
+</Aside>
+
+---
+
+## 8. Takeaways
+
+- Adam = momentum ($m_t$) + RMSProp ($v_t$) + bias correction.
+- Update: $\theta \leftarrow \theta - \alpha\, \hat m_t / (\sqrt{\hat v_t} + \varepsilon)$, element-wise.
+- Per-coordinate step is bounded above by $\alpha$, which makes the LR robust to tune.
+- Memory cost: 3× model parameters. The main bottleneck in LLM training optimiser state.
+- Defaults that work: $\beta_1 = 0.9$, $\beta_2 = 0.999$, $\alpha = 10^{-3}$ (or $10^{-4}$ for LLMs), $\varepsilon = 10^{-8}$.
+- Adam has no general non-convex convergence guarantee; we use it because it works.
+
+---
+
+<SelfTest>
+
+**(a)** With $\beta_1 = 0.9$, $\beta_2 = 0.999$, and a constant gradient $g = 1$, compute $\hat m_t$ and $\hat v_t$ at $t = 1, 2, 10, 100$. Confirm that $\hat m_t / \sqrt{\hat v_t} = 1$ exactly at every $t$ (so the first 100 Adam steps are exactly $-\alpha$ each).
+
+**(b)** Show the per-coordinate-bound: $|\hat m_t^{(i)}| / \sqrt{\hat v_t^{(i)}} \le 1$. (Hint: Cauchy–Schwarz, or directly the inequality $|\mathbb{E}[X]| \le \sqrt{\mathbb{E}[X^2]}$ applied to the weighted-average defining the EMAs.)
+
+**(c)** Implement Adam in 10 lines of NumPy and train it on the two-moons code from 2.12 (replace the SGD update with the Adam update). Report the final loss after 200 epochs and compare to plain SGD.
+
+**(d)** A common "Adam pathology" is huge gradients during the first few steps (e.g., from a poorly-initialised classifier head). Argue that the per-coordinate bound $\le 1$ makes Adam *immune* to gradient explosions in a way that plain SGD is not.
+
+</SelfTest>

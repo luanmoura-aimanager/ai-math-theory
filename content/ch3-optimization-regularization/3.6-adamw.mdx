@@ -1,0 +1,164 @@
+---
+title: "3.6 — AdamW: decoupled weight decay"
+chapter: 3
+order: 6
+estimatedMinutes: 16
+goal: "See why Adam-with-L2 is not the same as Adam-with-weight-decay, and derive the AdamW update used in every modern LLM."
+prerequisites: ["ch3-optimization-regularization/3.5-adam"]
+---
+
+## 1. Why this session exists
+
+If you read Adam optimiser configs in real LLM code (GPT-NeoX, LLaMA, Mistral, nanoGPT), you almost never see `Adam(weight_decay=...)`. You see `AdamW(weight_decay=...)`. The difference is one line of the update, and it matters enough that every serious modern training run uses the W variant.
+
+This session pins down *why*. The short version: in plain SGD, "add an L2 penalty to the loss" and "shrink weights toward zero each step" are the same thing. In Adam they are not, because of the per-parameter scaling $1/\sqrt{\hat v_t}$. Loshchilov & Hutter (2017, *Decoupled Weight Decay Regularization*) noticed this and fixed it by re-coupling the shrinkage in the *parameter* update rather than in the *gradient*.
+
+---
+
+## 2. L2 vs weight decay in plain SGD
+
+Start with plain SGD on a loss with L2 penalty:
+
+$$
+\tilde L(\theta) = L(\theta) + \frac{\lambda}{2} \lVert \theta \rVert^2,
+\qquad
+\nabla \tilde L = g + \lambda \theta,
+$$
+
+with $g = \nabla L$. The SGD step is
+
+$$
+\theta \leftarrow \theta - \alpha (g + \lambda \theta) = (1 - \alpha \lambda)\, \theta - \alpha\, g.
+$$
+
+Read it: take the usual SGD step, then multiply $\theta$ by the shrink factor $(1 - \alpha \lambda)$. This is what people call **weight decay**: an explicit multiplicative shrinkage of the parameters at every step.
+
+So in plain SGD, "L2 penalty on the loss" and "decay the weights by $(1 - \alpha \lambda)$ at each step" are *algebraically identical*. The two names refer to the same update.
+
+---
+
+## 3. The non-equivalence in Adam
+
+Now do the same with Adam. Add an L2 penalty to the loss, so the gradient becomes $\tilde g = g + \lambda \theta$. Adam's EMAs run on $\tilde g$, not on $g$:
+
+$$
+m_t = \beta_1 m_{t-1} + (1 - \beta_1)(g_t + \lambda \theta_t),
+\qquad
+v_t = \beta_2 v_{t-1} + (1 - \beta_2)(g_t + \lambda \theta_t)^{\odot 2}.
+$$
+
+The update is then
+
+$$
+\theta_{t+1} = \theta_t - \alpha \cdot \frac{\hat m_t}{\sqrt{\hat v_t} + \varepsilon}.
+$$
+
+The shrinkage of $\theta$ is *not* a clean $(1 - \alpha \lambda)\,\theta$ anymore. The L2 term gets folded into the EMAs and rescaled by $1/\sqrt{\hat v_t}$. Concretely: parameters with **large** gradients (large $v_t$) get shrunk *less*, because their effective LR for the L2 term is reduced by $1/\sqrt{\hat v_t}$.
+
+That is the wrong direction. The whole point of weight decay is to keep weights small; "shrink less the parameters that already have big gradients" defeats the regulariser.
+
+<Aside type="warning">
+This is the subtle bug Loshchilov & Hutter pointed out. Calling `Adam(weight_decay=...)` in early versions of PyTorch (and Keras' `kernel_regularizer=l2(...)`) implemented Adam-with-L2, *not* what most people meant by weight decay. Models silently regularised differently across coordinates. AdamW is the explicit fix.
+</Aside>
+
+---
+
+## 4. The AdamW update
+
+Loshchilov & Hutter's fix: **decouple** the weight decay from the gradient pipeline. Compute Adam's adaptive step on the *unmodified* gradient $g$, then apply weight decay as a separate multiplicative shrinkage of $\theta$:
+
+$$
+\boxed{\
+\begin{aligned}
+m_t &= \beta_1 m_{t-1} + (1 - \beta_1) g_t, \\
+v_t &= \beta_2 v_{t-1} + (1 - \beta_2) g_t^{\odot 2}, \\
+\hat m_t &= m_t / (1 - \beta_1^t), \qquad \hat v_t = v_t / (1 - \beta_2^t), \\
+\theta_{t+1} &= (1 - \alpha \lambda)\, \theta_t \;-\; \alpha\, \frac{\hat m_t}{\sqrt{\hat v_t} + \varepsilon}.
+\end{aligned}
+\ }
+$$
+
+The only line that changed: the parameter update now multiplies $\theta_t$ by $(1 - \alpha \lambda)$ *before* subtracting the Adam step. The EMAs no longer see the L2 gradient.
+
+The shrinkage rate is uniform across all parameters: every coordinate gets multiplied by exactly $(1 - \alpha \lambda)$ each step, independent of its gradient history. This is the L2-on-SGD behaviour, restored.
+
+---
+
+## 5. The two updates side by side
+
+Adam-with-L2 (the "wrong" thing):
+
+$$
+\theta_{t+1} = \theta_t - \alpha \cdot \frac{\hat m_t(\tilde g) }{\sqrt{\hat v_t(\tilde g)} + \varepsilon}, \quad \tilde g = g + \lambda \theta.
+$$
+
+AdamW (the right thing):
+
+$$
+\theta_{t+1} = \theta_t - \alpha \cdot \frac{\hat m_t(g)}{\sqrt{\hat v_t(g)} + \varepsilon} - \alpha\, \lambda\, \theta_t.
+$$
+
+The decay term in AdamW is **not** rescaled by $\sqrt{\hat v_t}$. That single difference is responsible for AdamW's robustly better generalisation across vision, NLP, and LLMs.
+
+A useful mental model: in AdamW, the shrinkage acts on the *parameter*; in Adam-with-L2, the shrinkage acts on the *gradient*. The first is what we mean by "decay". The second only happens to coincide with decay in the plain-SGD case where there is no adaptive scaling.
+
+---
+
+## 6. Practical defaults for LLMs
+
+Modern LLM training (GPT-3, LLaMA, Mistral, Qwen) ships AdamW with:
+
+- $\alpha = 6 \times 10^{-4}$ peak (smaller for bigger models; see scaling laws in Ch.7).
+- $\beta_1 = 0.9$, $\beta_2 = 0.95$ (note: smaller than Adam's $0.999$; LM gradients are noisier and we want $v_t$ to track them).
+- $\varepsilon = 10^{-8}$.
+- $\lambda = 0.1$ (weight decay).
+- Cosine LR schedule with linear warmup over first 1% of steps (next session).
+
+Notably, weight decay is usually **applied only to weight matrices**, not to biases, layer-norm parameters, or embedding bias. Why? Layer-norm $\gamma, \beta$ are scale parameters of the activations — shrinking them toward zero would deliberately break the unit-variance property LN tries to preserve. Biases see no L2 penalty in Bayesian-prior derivations either (see [Appendix 3.A](/session/ch3-optimization-regularization/3.A-l2-map) for the L2-as-Gaussian-prior derivation). Most implementations expose a `param_groups` mechanism so you can set `weight_decay=0` on those parameters.
+
+```python
+no_decay = ["bias", "LayerNorm.weight", "ln.weight"]
+optimizer_groups = [
+    {"params": [p for n, p in model.named_parameters()
+                if not any(nd in n for nd in no_decay)],
+     "weight_decay": 0.1},
+    {"params": [p for n, p in model.named_parameters()
+                if any(nd in n for nd in no_decay)],
+     "weight_decay": 0.0},
+]
+optimizer = torch.optim.AdamW(optimizer_groups, lr=6e-4, betas=(0.9, 0.95))
+```
+
+This snippet (or a near-clone of it) lives in every modern LLM training script.
+
+---
+
+## 7. When to use Adam vs AdamW
+
+- **AdamW** is the modern default. Always start here for LLMs, large vision models, and anything with substantial regularisation.
+- **Plain Adam (no decay)** is fine when you don't want any weight decay — e.g., RL policy optimisation, where shrinking the policy weights toward zero has no statistical motivation.
+- **Adam with L2 (as in old PyTorch's `weight_decay`)** is a historical accident. Don't use it. If you see a paper or codebase that does, treat its weight-decay coefficients as uncalibrated.
+
+---
+
+## 8. Takeaways
+
+- In plain SGD, L2 penalty on the loss = multiplicative weight decay each step. *Identically*.
+- In Adam, the two are not equivalent: L2 gets rescaled by $1/\sqrt{\hat v_t}$, which weakens it for parameters with large gradients.
+- AdamW decouples them: apply $(1 - \alpha \lambda)$ shrinkage to $\theta$ separately from the Adam step on the unmodified gradient $g$.
+- This is the optimiser used by every modern LLM. Typical $\lambda = 0.1$.
+- Exclude biases and LayerNorm parameters from weight decay.
+
+---
+
+<SelfTest>
+
+**(a)** Verify the identity $\theta \leftarrow \theta - \alpha(g + \lambda \theta) = (1 - \alpha \lambda) \theta - \alpha g$. Why does this same identity *fail* to hold once $g$ is replaced by an adaptive step $\hat m / (\sqrt{\hat v} + \varepsilon)$?
+
+**(b)** A parameter $\theta_i$ has a consistently large gradient: $\sqrt{\hat v_t^{(i)}} = 10$. Compare the effective shrinkage rate on $\theta_i$ under Adam-with-L2 ($\lambda = 0.1$) versus AdamW ($\lambda = 0.1$). Numerically, by how much does the L2 version under-shrink relative to AdamW for this coordinate?
+
+**(c)** Argue (informally) why you'd want to exclude bias parameters from weight decay. Hint: think about what the bias parameter "means" in a typical layer and what the L2-as-Gaussian-prior interpretation (3.8) would say about its prior.
+
+**(d)** Modify the Adam pseudocode from 3.5 §7 to become AdamW. How many lines change? Show the diff.
+
+</SelfTest>

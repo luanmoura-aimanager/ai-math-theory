@@ -1,0 +1,146 @@
+---
+title: "3.3 — Momentum and Nesterov accelerated gradient"
+chapter: 3
+order: 3
+estimatedMinutes: 20
+goal: "Derive the momentum update, see why it accelerates in valleys and damps oscillations, then upgrade to Nesterov's look-ahead variant."
+prerequisites: ["ch3-optimization-regularization/3.1-batch-sgd-minibatch", "ch3-optimization-regularization/3.2-ema-bias-correction"]
+---
+
+## 1. Why this session exists
+
+Plain SGD treats every gradient as a fresh truth: $\theta_{t+1} = \theta_t - \alpha g_t$. If the loss surface is an elongated valley — large curvature in some directions, small in others — SGD oscillates across the steep walls and crawls down the gentle floor. The fix is one of the oldest ideas in numerical optimisation: don't move along the instantaneous gradient, move along an *average* of recent gradients.
+
+This is **momentum**. It uses the EMA of §3.2 directly. Nesterov's variant adds one cosmetic-looking but provably better twist: evaluate the gradient at the *look-ahead* point.
+
+---
+
+## 2. The classical momentum update
+
+Maintain a velocity $v_t \in \mathbb{R}^p$, initialised to $v_0 = 0$. At each step:
+
+$$
+\boxed{\
+\begin{aligned}
+v_t &= \beta\, v_{t-1} + (1 - \beta)\, g_t, \\
+\theta_{t+1} &= \theta_t - \alpha\, v_t.
+\end{aligned}
+\ }
+$$
+
+This is exactly the EMA of §3.2 applied to the gradient, followed by a step in $-v_t$. Typical $\beta = 0.9$, so $v_t$ averages the last $\sim 10$ gradients.
+
+<Aside type="note">
+You will also see the formulation $v_t = \beta v_{t-1} + g_t$ (without the $1 - \beta$ factor) and $\theta_{t+1} = \theta_t - \alpha v_t$. The two forms are equivalent up to a rescaling of the learning rate: with the un-normalised form, the effective LR is $\alpha / (1 - \beta)$. PyTorch's `SGD(momentum=β)` actually uses the un-normalised form. Adam will use the normalised one. Read the docstring of any optimiser you depend on.
+</Aside>
+
+---
+
+## 3. Why this helps: the elongated-valley intuition
+
+Consider the quadratic $L(\theta) = \frac{1}{2}(\lambda_1 \theta_1^2 + \lambda_2 \theta_2^2)$ with $\lambda_1 \gg \lambda_2$ — a long, narrow valley along the $\theta_2$ axis. The gradient is $g = (\lambda_1 \theta_1, \lambda_2 \theta_2)$.
+
+**Plain SGD.** Step is $-\alpha g$. To make progress along the slow direction ($\theta_2$), $\alpha$ has to be large. But large $\alpha$ in the fast direction ($\theta_1$) overshoots: $\theta_1^{(t+1)} = (1 - \alpha \lambda_1) \theta_1^{(t)}$ flips sign if $\alpha \lambda_1 > 1$, oscillating. For stable progress in $\theta_1$, $\alpha < 2/\lambda_1$; in $\theta_2$, the effective rate is then $\alpha \lambda_2 = \lambda_2 / \lambda_1$ — tiny. The condition number $\kappa = \lambda_1 / \lambda_2$ caps how fast SGD can move.
+
+**With momentum.** Along $\theta_1$ the gradient alternates sign on consecutive steps (because of the oscillation). The EMA averages those out — successive contributions cancel. Along $\theta_2$ the gradient has consistent sign, so the EMA *accumulates*. Net effect: the optimiser damps motion across the steep walls and accelerates along the slow floor.
+
+Quantitatively (Polyak, 1964; proof on a quadratic), the optimal momentum coefficient is
+
+$$
+\beta^\star = \left(\frac{\sqrt{\kappa} - 1}{\sqrt{\kappa} + 1}\right)^2,
+$$
+
+and the convergence rate improves from $1 - 1/\kappa$ (plain GD) to $1 - 1/\sqrt{\kappa}$ (momentum). A **square-root speedup** in condition number. For $\kappa = 10^4$ (entirely realistic for deep nets), that is a $100\times$ acceleration on the worst directions.
+
+---
+
+## 4. The damped-oscillator analogy
+
+Polyak called this method **heavy-ball**. The update
+
+$$
+\theta_{t+1} = \theta_t - \alpha\, g_t + \beta\,(\theta_t - \theta_{t-1})
+$$
+
+(the un-normalised form, after substituting $v_t$) reads like the discretisation of the second-order ODE
+
+$$
+m \ddot\theta + \gamma \dot\theta + \nabla L(\theta) = 0,
+$$
+
+i.e. a ball with mass $m$ rolling on the loss surface, subject to friction $\gamma$. The mass smooths short-term gradient fluctuations (high curvature directions); friction prevents endless oscillation. The discrete coefficients $(\alpha, \beta)$ correspond to a time-step and mass/friction ratio.
+
+For Luan: this is the same kind of damped-oscillator analysis you do in classical mechanics. The "tuning" of $(\alpha, \beta)$ is the same as picking a critically-damped friction in a mass-spring system — you want enough damping to avoid ringing but not so much that the ball gets stuck.
+
+---
+
+## 5. Nesterov accelerated gradient
+
+Nesterov (1983) noticed: if we are about to move to $\theta_t - \alpha \beta v_{t-1}$ anyway (because of momentum), then the *next* gradient we care about is the one *there*, not the one at $\theta_t$. Evaluate the gradient at the look-ahead point.
+
+$$
+\boxed{\
+\begin{aligned}
+\tilde\theta_t &= \theta_t - \alpha\, \beta\, v_{t-1}, \\
+v_t &= \beta\, v_{t-1} + (1 - \beta)\, \nabla L(\tilde\theta_t), \\
+\theta_{t+1} &= \theta_t - \alpha\, v_t.
+\end{aligned}
+\ }
+$$
+
+The gradient is evaluated after taking a "momentum-only" partial step. Intuition: it's the difference between *driving toward a wall and braking after you hit it* versus *seeing the wall coming and starting to brake earlier*. The correction is small per step but compounds.
+
+For convex smooth problems, Nesterov's method achieves the *optimal* rate $O(1/T^2)$ for first-order methods — provably faster than plain GD's $O(1/T)$ on the same class. Deep nets aren't convex, but Nesterov still tends to outperform classical momentum on many problems and is the default in some frameworks (`torch.optim.SGD(nesterov=True)`).
+
+---
+
+## 6. Implementation note: the "look-ahead trick"
+
+The form in §5 is awkward to implement because $\tilde \theta_t$ is not stored. A standard reparametrisation (Sutskever et al., 2013) keeps the iterate equal to $\tilde\theta_t$ at all times, so the gradient is always evaluated at the iterate. Define $\theta'_t := \theta_t - \alpha \beta v_{t-1}$. Then the update can be rewritten as
+
+$$
+\begin{aligned}
+v_t &= \beta\, v_{t-1} + (1 - \beta)\, \nabla L(\theta'_t), \\
+\theta'_{t+1} &= \theta'_t - \alpha\bigl(\beta v_t + (1 - \beta) \nabla L(\theta'_t)\bigr).
+\end{aligned}
+$$
+
+This is what most deep-learning frameworks actually compute. No need to remember the previous $\theta$ — the bookkeeping lives entirely in $v$.
+
+---
+
+## 7. What momentum buys in deep learning
+
+Three things, in practice.
+
+**(a) Better conditioning for free.** Deep-net Hessians are notoriously ill-conditioned. Momentum's $\sqrt{\kappa}$ rate is a real win.
+
+**(b) Variance reduction in mini-batch noise.** The EMA averages out short-scale mini-batch noise (§3.1), so the optimiser sees a smoother trajectory than the raw gradient stream. This is one of the reasons momentum + SGD is competitive with adaptive methods on vision tasks.
+
+**(c) Cheap.** One extra vector of memory (the same shape as $\theta$). One extra FMA per parameter per step. Negligible compared to the forward/backward cost.
+
+Modern LLMs use Adam (§3.5), which is momentum + an adaptive per-parameter scale. Vision models often still use plain SGD with momentum because it generalises slightly better empirically. Both stories are real.
+
+---
+
+## 8. Takeaways
+
+- Momentum is just an EMA of gradients used as the descent direction.
+- On an elongated valley, it damps oscillations in steep directions and accumulates motion in shallow ones.
+- Optimal convergence rate on quadratics: $1 - 1/\sqrt{\kappa}$ vs $1 - 1/\kappa$ for GD — a square-root improvement in condition number.
+- Nesterov's look-ahead variant evaluates the gradient at $\theta_t - \alpha \beta v_{t-1}$; the same EMA but on the look-ahead point.
+- Implementation: PyTorch's `SGD(momentum=β, nesterov=True)` ships both.
+
+---
+
+<SelfTest>
+
+**(a)** On $L(\theta) = \tfrac{1}{2}(\lambda_1 \theta_1^2 + \lambda_2 \theta_2^2)$ with $\lambda_1 = 100$, $\lambda_2 = 1$, simulate 50 steps of plain GD with $\alpha = 0.018$ from $\theta_0 = (1, 1)$. Then redo with momentum, $\beta = 0.9$. Compare the trajectories.
+
+**(b)** Derive Polyak's optimal rate $\rho = 1 - 2/(\sqrt{\kappa} + 1)$ for momentum on a 1-D quadratic by writing the update as a $2 \times 2$ linear recurrence on $(\theta_t, \theta_{t-1})$, solving the characteristic polynomial, and finding the choice of $(\alpha, \beta)$ that minimises the spectral radius.
+
+**(c)** Show that classical momentum and the un-normalised form $v_t = \beta v_{t-1} + g_t$, $\theta_{t+1} = \theta_t - \alpha v_t$ are equivalent up to a learning-rate rescaling. What is the relation between the two LRs?
+
+**(d)** Nesterov vs classical: on a strongly convex quadratic, both have rate $\rho(\kappa)$. For $\kappa = 1000$, what is the asymptotic improvement of Nesterov over momentum? (Hint: rate $1 - c/\sqrt{\kappa}$ with a different constant $c$.)
+
+</SelfTest>

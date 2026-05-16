@@ -1,0 +1,158 @@
+---
+title: "3.1 — Batch, stochastic, and mini-batch gradient descent"
+chapter: 3
+order: 1
+estimatedMinutes: 18
+goal: "Understand the gradient estimator at each batch size, its bias and variance, and why mini-batches are the universal compromise."
+prerequisites: ["ch1-linear-models-perceptron/1.3-gradient-descent-logistic", "ch2-mlps-backprop/2.7-backprop-weight-gradients"]
+---
+
+## 1. Why this session exists
+
+In Chapter 1 we wrote the update $\theta \leftarrow \theta - \alpha \nabla L(\theta)$ as if $\nabla L$ were a single, computable thing. For modern training that is a fiction. The loss is an average over $N$ examples — $10^4$ for MNIST, $10^{12}$ tokens for a frontier LM — and computing the *true* gradient once per step is prohibitive.
+
+So we estimate it. The estimator's choice — full batch, single example, or a mini-batch of size $B$ — controls bias, variance, memory, and how often we get to update. This session sets up the bias/variance picture and locks in the vocabulary for the rest of Chapter 3.
+
+---
+
+## 2. The empirical risk and its true gradient
+
+The training objective is the empirical risk
+
+$$
+L(\theta) = \frac{1}{N} \sum_{i=1}^N \ell\bigl(f_\theta(x_i),\, y_i\bigr),
+$$
+
+with per-example loss $\ell_i(\theta) := \ell(f_\theta(x_i), y_i)$. Its gradient is the average
+
+$$
+\nabla L(\theta) = \frac{1}{N} \sum_{i=1}^N \nabla \ell_i(\theta) =: \frac{1}{N} \sum_{i=1}^N g_i.
+$$
+
+Call $g_i := \nabla \ell_i(\theta)$ the *per-example gradient*. Then $\nabla L = \bar g$, the population mean of the $g_i$'s. Every estimator we write next is some attempt at $\bar g$.
+
+---
+
+## 3. The three regimes
+
+**Full-batch GD (BGD).** Use all $N$ examples per step:
+
+$$
+\hat g^{\text{BGD}} = \frac{1}{N} \sum_{i=1}^N g_i = \nabla L(\theta).
+$$
+
+This is the *exact* gradient. No noise, but each step costs $O(N)$ forward+backward passes. For $N = 10^9$ that is one step per several minutes; impossible.
+
+**Stochastic GD (SGD).** Pick one example $i$ uniformly at random and use only that gradient:
+
+$$
+\hat g^{\text{SGD}} = g_i, \qquad i \sim \operatorname{Uniform}\{1, \dots, N\}.
+$$
+
+One forward+backward per step; we update parameters $N$ times per pass through the dataset. Maximum noise, maximum step count.
+
+**Mini-batch SGD.** Pick a random subset $\mathcal{B} \subset \{1, \dots, N\}$ with $|\mathcal{B}| = B$:
+
+$$
+\hat g^{\text{mb}} = \frac{1}{B} \sum_{i \in \mathcal{B}} g_i.
+$$
+
+Memory and compute scale linearly with $B$; noise scales as $1 / \sqrt{B}$ (we'll prove this in §4). For $B = 32$ to $2048$ on a GPU, mini-batch GD is what every modern trainer actually runs.
+
+---
+
+## 4. Bias and variance of the estimator
+
+Sample $\mathcal{B}$ uniformly at random (with replacement, to make the math clean — without-replacement is the same up to $O(B/N)$ corrections). Define the per-example gradient as a random variable $G$ taking value $g_i$ with probability $1/N$.
+
+**Mean (bias).**
+
+$$
+\mathbb{E}[\hat g^{\text{mb}}] = \frac{1}{B} \sum_{i \in \mathcal{B}} \mathbb{E}[g_i] = \mathbb{E}[G] = \frac{1}{N} \sum_{j=1}^N g_j = \nabla L(\theta).
+$$
+
+So $\hat g^{\text{mb}}$ is **unbiased** for the true gradient. No bias correction needed — the estimator is honest in expectation, at every $B$ from $1$ to $N$. SGD ($B = 1$) is unbiased; full-batch ($B = N$) is unbiased and noise-free.
+
+**Variance.** Let $\Sigma := \operatorname{Cov}(G)$, the covariance matrix of the per-example gradients. With $B$ i.i.d. samples,
+
+$$
+\operatorname{Cov}\bigl(\hat g^{\text{mb}}\bigr) = \frac{1}{B^2} \sum_{i \in \mathcal{B}} \operatorname{Cov}(g_i) = \frac{\Sigma}{B}.
+$$
+
+The scalar quantity we care about is the squared error of the estimator,
+
+$$
+\mathbb{E}\bigl[\lVert \hat g^{\text{mb}} - \nabla L \rVert^2\bigr] = \operatorname{tr}\bigl(\operatorname{Cov}(\hat g^{\text{mb}})\bigr) = \frac{\operatorname{tr}(\Sigma)}{B}.
+$$
+
+So
+
+$$
+\boxed{\ \operatorname{Var}\bigl(\hat g^{\text{mb}}\bigr) \;\propto\; \frac{1}{B}, \qquad \text{noise std} \;\propto\; \frac{1}{\sqrt{B}}.\ }
+$$
+
+Doubling the batch size halves the variance but doubles the compute per step. To halve the noise std you need *four times* the batch.
+
+---
+
+## 5. Why noise can help
+
+The naive read is "less variance is better, use full-batch". Two reasons that's wrong.
+
+**(a) Saddle escape.** In a high-dimensional non-convex loss, saddle points vastly outnumber local minima (Dauphin et al., 2014). Full-batch GD on a saddle stays exactly there — $\nabla L = 0$. The noise of SGD perturbs $\theta$ off the saddle into a descent direction. Stochasticity is a feature.
+
+**(b) Implicit regularisation.** A line of work (Keskar et al., 2017; Smith & Le, 2018) argues that large-batch GD converges to **sharp** minima — narrow valleys where small parameter perturbations cause large loss changes — and that these generalise *worse* than the **flat** minima preferred by small-batch SGD. The noise effectively acts like a low-pass filter on the loss landscape, biasing the optimiser toward wide basins. We will revisit this in 3.9 and 6.12 in the context of LLM training.
+
+So variance is not pure cost; some of it is doing useful work.
+
+<Aside type="history">
+Empirically: when researchers scale up batch size to use a thousand GPUs, they often see a noticeable drop in test accuracy unless they compensate (LR scaling rules, longer warmup, label smoothing). Goyal et al. 2017's "Accurate, Large Minibatch SGD" was the first systematic recipe — keep $\alpha \cdot B$ roughly constant ("linear scaling rule") and warm up the learning rate over the first few thousand steps. This will resurface in 3.7.
+</Aside>
+
+---
+
+## 6. Step cost vs total compute
+
+Three knobs you can spend compute on: bigger batches, more steps, or a different optimiser. The mini-batch arithmetic gives a clean way to compare.
+
+Let $C_\text{step}(B) = c \cdot B$ be the per-step cost (linear in $B$ — one forward+backward per example, GPU-parallelised). After $T$ steps the total compute is $C = c B T$. To reach a target loss, full-batch needs few but expensive steps; SGD needs many but cheap steps. For convex objectives, an exact bound (Bottou et al., 2018) is
+
+$$
+\text{steps to } \epsilon\text{-optimal} \;\sim\; \frac{1}{\epsilon^2 B} \cdot \operatorname{tr}(\Sigma) + \frac{1}{\epsilon} \cdot \frac{1}{\mu},
+$$
+
+with $\mu$ the strong-convexity constant. The first term shrinks as $1/B$ (variance-dominated regime; helps to increase $B$); the second is independent of $B$ (bias-dominated regime; increasing $B$ is wasted). There is a *critical batch size* $B^\star \sim \operatorname{tr}(\Sigma) \cdot \mu / \epsilon$ past which more batch is wasted compute. Practical takeaway: very small or very large batches are both suboptimal; the sweet spot is data-dependent and what every modern trainer empirically tunes.
+
+---
+
+## 7. Epoch, step, iteration: vocabulary
+
+- **Step (or iteration).** One parameter update: one forward+backward on one mini-batch.
+- **Epoch.** One full pass through the training set: $N / B$ steps.
+- **Sample without replacement per epoch.** Practical implementations shuffle the dataset at the start of each epoch and walk through it in order. This is technically biased (within an epoch, samples are dependent) but the bias is negligible for $N \gg B$.
+
+The convention we will follow: "training for $T$ steps with batch $B$" is unambiguous; "training for $E$ epochs" implies $E \cdot N / B$ steps. Both appear in papers.
+
+---
+
+## 8. Takeaways
+
+- Mini-batch SGD is **unbiased** for the true gradient: $\mathbb{E}[\hat g^{\text{mb}}] = \nabla L$.
+- Variance scales as $\Sigma / B$; noise std as $1/\sqrt{B}$.
+- Pure SGD ($B=1$) is maximally noisy but cheap; full batch is exact but expensive.
+- Noise is partly useful: it escapes saddles and biases toward flat minima.
+- There is a problem-dependent critical batch size $B^\star$; below it, doubling the batch nearly halves time-to-target; above it, the extra batch is wasted.
+
+---
+
+<SelfTest>
+
+**(a)** Show by direct calculation that for i.i.d. per-example gradients $G_1, \dots, G_B$ with covariance $\Sigma$, $\operatorname{Cov}\bigl(\frac{1}{B} \sum_i G_i\bigr) = \Sigma / B$.
+
+**(b)** A trainer reports that doubling batch from $B = 128$ to $B = 256$ doubles wall-clock per step but reduces the number of steps to a given loss by only ~$30\%$. What does this say about whether $B$ is above or below the critical batch size?
+
+**(c)** Why is full-batch GD a particularly *bad* optimiser at saddle points? Set up a 2-D example: $L(\theta_1, \theta_2) = \theta_1^2 - \theta_2^2$ at $(0,0)$. What does BGD do? What does SGD do (assume i.i.d. noise $\xi$ added to the gradient)?
+
+**(d)** Empirically, you sometimes see "linear scaling rule": when you multiply batch $B$ by $k$, also multiply learning rate $\alpha$ by $k$. Argue (informally) that this keeps the *per-epoch* parameter trajectory roughly invariant: write the expected change in $\theta$ after one epoch and show it is approximately the same.
+
+</SelfTest>

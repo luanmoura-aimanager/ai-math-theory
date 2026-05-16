@@ -1,0 +1,163 @@
+---
+title: "3.C — Batch Normalization (rigorous) [appendix]"
+chapter: 3
+order: 11
+estimatedMinutes: 22
+goal: "Derive the BN forward pass, the learnable affine, the EMA at inference, and sketch the backward."
+prerequisites: ["ch2-mlps-backprop/2.10-weight-initialization"]
+---
+
+> **Optional appendix.** BatchNorm is the dominant normalisation in CNNs
+> (ResNet, EfficientNet) but is **not** used in Transformers — LayerNorm
+> and RMSNorm (3.8) win for the reasons listed there. Read this appendix
+> if you want a rigorous BN derivation as background, or to understand the
+> historical contrast between BN and LN. Skip if you only care about the
+> LLM stack.
+
+## 1. Why this session exists
+
+Batch Normalization (Ioffe & Szegedy, 2015) was, with ReLU + He init + Adam, one of the four pillars that made deep networks routinely trainable to 100+ layers around 2015. The idea: normalise each layer's pre-activations to zero mean and unit variance over the current mini-batch, then learn an affine transformation to undo the normalisation if it helps.
+
+This session does the math: the forward pass exactly, the affine, the test-time EMA, and a brief look at the backward pass (which is where many bugs live).
+
+---
+
+## 2. The normalisation step
+
+Within a mini-batch of size $B$, focus on a single hidden coordinate (one entry of the pre-activation vector $z \in \mathbb{R}^d$). Collect the values across the batch: $z_1, z_2, \dots, z_B$. Compute the **batch mean** and **batch variance**:
+
+$$
+\mu_\mathcal{B} = \frac{1}{B} \sum_{i=1}^B z_i, \qquad \sigma_\mathcal{B}^2 = \frac{1}{B} \sum_{i=1}^B (z_i - \mu_\mathcal{B})^2.
+$$
+
+Normalise:
+
+$$
+\hat z_i = \frac{z_i - \mu_\mathcal{B}}{\sqrt{\sigma_\mathcal{B}^2 + \varepsilon}}.
+$$
+
+After this step, the batch has zero mean and unit variance along this coordinate. $\varepsilon \sim 10^{-5}$ avoids division by zero (and stabilises gradients when the variance is small).
+
+So far the operation is *parameter-free* — there is nothing to learn. But there's a problem: by forcibly normalising to zero mean and unit variance, we've removed the ability of the previous layer to choose its own scale. The next step restores it.
+
+---
+
+## 3. The learnable affine
+
+Apply a learnable per-coordinate affine:
+
+$$
+\boxed{\ y_i = \gamma\, \hat z_i + \beta, \ }
+$$
+
+with $\gamma, \beta \in \mathbb{R}^d$ trainable parameters (one $\gamma$ and one $\beta$ per hidden coordinate; total $2d$ extra parameters per BN layer). The output $y$ is what the next layer sees.
+
+Why this affine matters: setting $\gamma = \sqrt{\sigma_\mathcal{B}^2 + \varepsilon}$ and $\beta = \mu_\mathcal{B}$ recovers $y_i = z_i$. The BN layer **can represent the identity**. If a layer would have been better off without normalisation, it can learn to undo it. The point is that the optimiser has the *choice*, and gradient descent on $\gamma, \beta$ tends to leave most BN layers near the identity *plus* a small per-coordinate shift — exactly the behaviour that helps optimisation.
+
+---
+
+## 4. Why it helps: the original "internal covariate shift" claim, and the modern view
+
+Ioffe & Szegedy originally argued BN helps by reducing **internal covariate shift** — the change in distribution of each layer's inputs as the previous layer's weights update. The intuitive story: stabilise the input distribution, and the layer doesn't have to constantly readapt.
+
+Santurkar et al. (2018, "How Does Batch Normalization Help Optimization?") later showed this story is essentially wrong. Adding *deliberate* covariate shift after BN didn't break training. The real effect is on the **loss landscape**: BN makes the loss surface *smoother* (smaller Lipschitz constant of the gradient), which lets the optimiser take larger steps without diverging. Empirically, the practical effects are:
+
+- **Larger learnable LR.** Pre-BN, training a 50-layer net at $\alpha = 0.1$ on ImageNet would diverge. With BN, $\alpha = 0.1$ trains stably.
+- **Less sensitivity to init.** He init (2.10) is good but not magic; BN absorbs much of the variance-explosion problem.
+- **Regularisation effect.** Each mini-batch's $\mu_\mathcal{B}, \sigma_\mathcal{B}^2$ are noisy estimates of the population statistics. The noise acts a bit like dropout — small, beneficial.
+
+In practice "BN works because it smooths the loss landscape and acts as a mild regulariser" is the modern reading. The original "covariate shift" framing is mostly historical.
+
+<Aside type="history">
+The empirical kick of BN in 2015 was enormous. Inception-V2 with BN trained $14\times$ faster than V1 without BN, and pushed top-1 ImageNet accuracy by 4 percentage points. That single change is what made $> 50$-layer training routine; ResNet built on top of it the next year.
+</Aside>
+
+---
+
+## 5. Test-time: EMAs of $\mu, \sigma^2$
+
+At test time, we don't have a batch — we want deterministic predictions, one example at a time. The fix is to keep **running estimates** of the population mean and variance, updated during training:
+
+$$
+\bar \mu \leftarrow \rho\, \bar \mu + (1 - \rho)\, \mu_\mathcal{B}, \qquad \bar\sigma^2 \leftarrow \rho\, \bar\sigma^2 + (1 - \rho)\, \sigma_\mathcal{B}^2,
+$$
+
+with $\rho \approx 0.9$ to $0.99$ — the EMA from 3.2. At inference time, BN switches from batch statistics to these running estimates:
+
+$$
+y_i = \gamma \cdot \frac{z_i - \bar\mu}{\sqrt{\bar\sigma^2 + \varepsilon}} + \beta.
+$$
+
+Two practical consequences:
+
+- **Mode toggle.** `model.train()` uses batch stats; `model.eval()` uses running stats. Forgetting to call `.eval()` at inference is a classic bug; predictions on a single example use the single-example $\mu_\mathcal{B} = z$, so $\hat z = 0$ identically, and the model outputs garbage.
+- **Batch-size dependence in the running stats.** Very small training batches give very noisy $\mu_\mathcal{B}, \sigma_\mathcal{B}^2$, which biases the EMAs. For $B = 1$, BN is undefined. This is why distributed training with tiny per-GPU batches uses **synchronised BN** (compute stats across GPUs) or, more often, abandons BN for LayerNorm / GroupNorm — see 3.11.
+
+---
+
+## 6. The backward pass (sketch)
+
+BN's backward is notably *not* a one-liner: the normalisation $\hat z_i = (z_i - \mu_\mathcal{B})/\sqrt{\sigma_\mathcal{B}^2 + \varepsilon}$ couples *all* $B$ examples in the batch (through $\mu_\mathcal{B}, \sigma_\mathcal{B}^2$). So $\partial \hat z_i / \partial z_j \ne 0$ for $j \ne i$.
+
+The full derivation (Ioffe & Szegedy, Appendix; reproduced in every "batchnorm backward from scratch" blog post) goes through three terms. Sketch:
+
+$$
+\frac{\partial L}{\partial z_i} = \frac{\partial L}{\partial \hat z_i}\cdot \frac{\partial \hat z_i}{\partial z_i} + \frac{\partial L}{\partial \mu_\mathcal{B}}\cdot \frac{\partial \mu_\mathcal{B}}{\partial z_i} + \frac{\partial L}{\partial \sigma_\mathcal{B}^2} \cdot \frac{\partial \sigma_\mathcal{B}^2}{\partial z_i}.
+$$
+
+After simplification (write it out once, factor common terms), the final formula reads
+
+$$
+\boxed{\ \frac{\partial L}{\partial z_i} = \frac{1}{B \cdot \sqrt{\sigma_\mathcal{B}^2 + \varepsilon}}\left[B \cdot \frac{\partial L}{\partial \hat z_i} - \sum_{j=1}^B \frac{\partial L}{\partial \hat z_j} - \hat z_i \sum_{j=1}^B \hat z_j \cdot \frac{\partial L}{\partial \hat z_j}\right]. \ }
+$$
+
+Three terms: the upstream gradient at $\hat z_i$, minus the mean of upstream gradients, minus a correlation term. The whole formula involves a sum over the batch, which is what makes BN's backward expensive enough that some implementations (e.g., FlashAttention-style fused kernels) hand-optimise it.
+
+For backprop through $\gamma, \beta$:
+
+$$
+\frac{\partial L}{\partial \gamma_k} = \sum_{i=1}^B \frac{\partial L}{\partial y_i^{(k)}} \cdot \hat z_i^{(k)}, \qquad \frac{\partial L}{\partial \beta_k} = \sum_{i=1}^B \frac{\partial L}{\partial y_i^{(k)}}.
+$$
+
+These are simple outer-product accumulations over the batch.
+
+---
+
+## 7. Where to put BN
+
+In an MLP/conv block, the standard order is
+
+$$
+z = W a + b, \quad \tilde z = \operatorname{BN}(z), \quad y = g(\tilde z),
+$$
+
+i.e. **before** the nonlinearity. The bias $b$ is redundant once BN runs ($\beta$ already shifts), so frameworks often set bias to zero in BN'd layers.
+
+Alternative: post-activation BN ($\operatorname{BN}(g(z))$) has been tried and works less well empirically. The default is pre-activation BN, occasionally combined with the "pre-activation" residual block (He et al., 2016) where the normalisation precedes the convolution itself.
+
+BN is not used in modern Transformers — LayerNorm is. See 3.11 for why.
+
+---
+
+## 8. Takeaways
+
+- BN per coordinate: $\hat z = (z - \mu_\mathcal{B}) / \sqrt{\sigma_\mathcal{B}^2 + \varepsilon}$, $y = \gamma \hat z + \beta$.
+- The affine $(\gamma, \beta)$ lets BN represent the identity if needed.
+- At inference, swap batch stats for EMA stats $(\bar\mu, \bar\sigma^2)$ accumulated during training.
+- Backward couples all $B$ examples in the batch via $\mu_\mathcal{B}, \sigma_\mathcal{B}^2$.
+- Effect: smoother loss surface, larger usable LR, faster convergence, mild regularisation.
+- Fails for $B = 1$ and for variable-length sequences; Transformers use LayerNorm instead.
+
+---
+
+<SelfTest>
+
+**(a)** Show that setting $\gamma = \sqrt{\sigma_\mathcal{B}^2 + \varepsilon}$ and $\beta = \mu_\mathcal{B}$ makes BN exactly the identity: $y_i = z_i$.
+
+**(b)** Derive the backward formula in §6. Compute $\partial \hat z_i / \partial z_j$ explicitly, distinguishing the cases $i = j$ and $i \ne j$.
+
+**(c)** A practitioner trains a BN'd ResNet for 100 epochs and at inference runs it with `model.train()` (not `.eval()`) by accident. They report "the model works on batches but produces nonsense on single images." Explain.
+
+**(d)** For Luan's dissertation 1D-CNN (Raman 6-class), would BN be applied per spectral coordinate or per feature map? Sketch the operation and the shapes of $\mu_\mathcal{B}, \sigma_\mathcal{B}^2, \gamma, \beta$.
+
+</SelfTest>

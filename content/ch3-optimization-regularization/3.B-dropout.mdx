@@ -1,0 +1,158 @@
+---
+title: "3.B — Dropout: the math and the test-time scaling [appendix]"
+chapter: 3
+order: 10
+estimatedMinutes: 18
+goal: "Derive dropout's forward pass, the test-time scaling, and the ensemble interpretation."
+prerequisites: ["ch2-mlps-backprop/2.6-backprop-recursion"]
+---
+
+> **Optional appendix.** Dropout was central in the deep-learning resurgence
+> of 2012, but in modern LLM **pre-training** dropout is typically set to
+> $0$ (one pass over trillions of tokens, no overfitting to fight). It's
+> still used in **fine-tuning** small models and in some CV pipelines. Read
+> if you want the history and the elegant ensemble argument; skip if you
+> only want the operational LLM stack.
+
+## 1. Why this session exists
+
+Dropout (Srivastava et al., 2014) is the regulariser that broke the late-2000s deadlock on deep MLPs and got Hinton's group AlexNet (2012). The trick: during training, randomly zero out a fraction $p$ of activations at each layer. At test time, use all of them but rescale.
+
+Two things have to be derived: (a) the exact forward and backward passes, and (b) the test-time scaling, which is what makes the trained ensemble of sub-networks reduce to a single deterministic model. We also explain *why* dropout works: it implicitly trains an exponential ensemble of subnetworks, and at inference time we approximate the geometric mean of their predictions.
+
+---
+
+## 2. The training-time forward pass
+
+Take a layer's activation vector $a^{(\ell)} \in \mathbb{R}^{d_\ell}$. Sample a binary mask $\mu^{(\ell)} \in \{0, 1\}^{d_\ell}$ with each component independently $\mu_i \sim \operatorname{Bernoulli}(1 - p)$, where $p$ is the **drop probability** (typical $p = 0.1$ to $0.5$). The dropped activation is
+
+$$
+\boxed{\ \tilde a^{(\ell)} = \frac{1}{1 - p}\, \mu^{(\ell)} \odot a^{(\ell)}. \ }
+$$
+
+Two operations: (1) element-wise masking, (2) division by $(1 - p)$ — the "inverted dropout" scaling. The next layer sees $\tilde a^{(\ell)}$ instead of $a^{(\ell)}$.
+
+The scaling factor $1/(1-p)$ is the key. Without it, the *expected* activation magnitude would shrink: $\mathbb{E}[\mu_i a_i] = (1-p) a_i$. With it,
+
+$$
+\mathbb{E}[\tilde a_i] = \frac{1}{1-p} \cdot (1-p) \cdot a_i = a_i.
+$$
+
+So **in expectation, the masked layer produces the same activation as without dropout**. This is what lets us turn dropout off at test time (mask = all ones, no scaling) and have the rest of the network see roughly the same magnitudes.
+
+<Aside type="note">
+There are two conventions: **inverted dropout** (scale during training, no scaling at test) and **standard dropout** (no scaling during training, scale by $1-p$ at test). They produce identical training dynamics. Inverted is universal in modern code because the test path is then unchanged.
+</Aside>
+
+---
+
+## 3. Backward pass
+
+Backprop through dropout is one line: the gradient passes through the mask, scaled by the same $1/(1-p)$. Let $\delta^{(\ell)}$ be the upstream gradient at the post-dropout activation $\tilde a$. Then
+
+$$
+\delta^{(\ell), \text{pre-dropout}} = \frac{1}{1 - p}\, \mu^{(\ell)} \odot \delta^{(\ell)}.
+$$
+
+Same mask as the forward pass, same scaling. Implementation: cache the mask alongside the other forward-pass intermediates and apply it during the backward.
+
+That is the full mechanics. Now the *why*.
+
+---
+
+## 4. Why it works (1): noise injection
+
+The simplest reading: dropout adds **multiplicative noise** to activations. For a unit with activation $a_i$, the dropped activation is $\frac{1}{1-p}\mu_i a_i$, which has mean $a_i$ and variance $\frac{p}{1-p} a_i^2$.
+
+A model trained with noisy intermediate activations *must* be robust to those perturbations. Robustness has been studied formally (Wager et al., 2013): dropout on a linear regression is *equivalent* to an adaptive L2 penalty whose strength depends on the input. So even at the "noise injection" level it shares DNA with the L2-prior story from 3.8.
+
+More importantly, robustness means a single unit can't carry all the load. If a feature could be encoded by one unit, dropout would zero it half the time, and the loss would punish the network for relying on it. The network is forced to spread information **redundantly** across multiple units — *distributed representations*, which generalise better.
+
+---
+
+## 5. Why it works (2): the ensemble interpretation
+
+A network with $N$ dropoutable units has $2^N$ possible masks. Each mask defines a **sub-network** $f_m$ using only the un-dropped units. Training with a random mask per mini-batch is approximately training all $2^N$ sub-networks in parallel (with shared weights). At test time we'd ideally average their predictions:
+
+$$
+p_{\text{ensemble}}(y \mid x) = \frac{1}{2^N} \sum_m p_{f_m}(y \mid x).
+$$
+
+That sum is exponential in $N$ — uncomputable. But there's a beautiful approximation. For a **single layer**, the dropout-free forward pass with the $1/(1-p)$ scaling computes *exactly* the expectation of the dropped layer:
+
+$$
+\frac{1}{1-p}\, \mu \odot a \;\xrightarrow{\;\mathbb{E}_\mu\;}\; a.
+$$
+
+So for a *linear* network, "test with no dropout and scaled weights" equals "average over all $2^N$ masks". For a *nonlinear* network it's an approximation — the geometric-mean trick (Hinton et al.): if each sub-network outputs a softmax $p_m(y \mid x) \propto \exp(z_m(y))$, then
+
+$$
+\text{geometric mean: } \tilde p(y \mid x) \propto \exp\!\bigl(\mathbb{E}_m[z_m(y)]\bigr) \approx \exp(z_{\text{full}}(y)),
+$$
+
+provided $\mathbb{E}_m[z_m(y)] \approx z_{\text{full}}(y)$ — which is exactly what the $1/(1-p)$ scaling ensures (to first order, for activations that don't saturate). At test time, running the unmasked network with the scaled weights computes (approximately) the geometric mean of the ensemble's softmax predictions. Test-time scaling is not a heuristic; it is the closed-form for the ensemble's prediction.
+
+Srivastava et al. show empirically that the approximation is excellent for typical $p = 0.5$ and small enough networks; for larger $p$ or deeper networks Monte-Carlo dropout (averaging over $K$ stochastic forward passes at test time) gives slightly better calibration. MC-dropout is also the basis for Bayesian approximation in deep nets (Gal & Ghahramani, 2016).
+
+---
+
+## 6. Where to put dropout
+
+Empirical conventions (originated in Srivastava et al., refined since):
+
+- **Hidden MLP layers:** $p = 0.5$.
+- **Inputs:** $p = 0.2$ (lower; you don't want to corrupt the data too aggressively).
+- **Convolutional features:** smaller $p \sim 0.1$ or spatial dropout (drop whole feature maps).
+- **Attention / Transformer residual streams:** typically $p = 0.1$ between each block, applied to the attention outputs and FFN outputs before adding to the residual.
+
+Modern LLMs, surprisingly, often use *very small* dropout ($p = 0.0$ or $p = 0.1$) because the dataset is so large that overfitting is no longer the binding constraint. GPT-3 famously trains with $p = 0.0$ — pure compute and data scale, no dropout. This is genuinely new since 2020 and reflects the shift in the bias–variance tradeoff under massive data.
+
+---
+
+## 7. Implementation note
+
+The full forward+backward in PyTorch:
+
+```python
+class Dropout(nn.Module):
+    def __init__(self, p):
+        self.p = p
+    def forward(self, x):
+        if self.training:
+            mask = (torch.rand_like(x) > self.p).float()
+            return mask * x / (1.0 - self.p)
+        else:
+            return x
+```
+
+Five lines. The `self.training` flag is what every framework uses to toggle the behaviour — at test time `model.eval()` flips it to False and the layer is a no-op.
+
+Two subtle points:
+
+1. **Independent mask per example** in a batch. The mask is sampled per element of the tensor (`rand_like(x)`), not per batch row. This means each example in a mini-batch sees a different dropout pattern.
+2. **Same mask for forward and backward.** The mask is stored as part of the layer's intermediate state; PyTorch's autograd handles it automatically because `mask` participates in the multiply.
+
+---
+
+## 8. Takeaways
+
+- Dropout: at training time, multiply activations by $\frac{1}{1-p} \mu$ with $\mu_i \sim \operatorname{Bernoulli}(1-p)$ i.i.d.
+- Backward: same mask, same scaling.
+- At test time: identity (no mask, no scaling). The expectation match $\mathbb{E}[\tilde a] = a$ is what makes this OK.
+- Why it works (noise view): forces redundant, robust features.
+- Why it works (ensemble view): test-time forward $\approx$ geometric mean of $2^N$ sub-network predictions.
+- Typical $p$: 0.5 for MLPs, 0.1–0.2 for Transformers, 0 for very large data regimes.
+
+---
+
+<SelfTest>
+
+**(a)** Verify $\mathbb{E}_\mu[\tilde a_i] = a_i$ from the definition $\tilde a_i = \frac{1}{1-p} \mu_i a_i$, $\mu_i \sim \operatorname{Bernoulli}(1-p)$.
+
+**(b)** Compute $\operatorname{Var}_\mu[\tilde a_i]$ in terms of $p$ and $a_i$. What does this say about the noise injected — does it scale with the magnitude of the activation?
+
+**(c)** Consider a linear regression model $\hat y = w^\top x$ trained with input dropout (mask the $x$ components). Show (Wager et al.) that this is equivalent to ordinary least squares with an L2 penalty whose strength depends on the variance of each input feature. *(Hint: write out $\mathbb{E}_\mu[\lVert \hat y - y \rVert^2]$ and group terms.)*
+
+**(d)** Why is dropout often *not* applied to LayerNorm or BatchNorm parameters? In one or two sentences, explain what would go wrong if you dropped LN weights.
+
+</SelfTest>

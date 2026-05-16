@@ -1,0 +1,165 @@
+---
+title: "3.2 — Exponential moving averages and bias correction"
+chapter: 3
+order: 2
+estimatedMinutes: 15
+goal: "Define the EMA, derive its bias when initialised at zero, and recover the v_t/(1−β^t) correction used by Adam."
+prerequisites: ["ch3-optimization-regularization/3.1-batch-sgd-minibatch"]
+---
+
+## 1. Why this session exists
+
+Every adaptive optimiser we'll meet — momentum, RMSProp, Adam, AdamW, Lion — runs an **exponential moving average** (EMA) over some quantity that changes from step to step (the gradient itself, or the squared gradient). The EMA gives a smooth, low-variance running estimate without storing the entire history.
+
+This session does the EMA in isolation: definition, recurrence, what it converges to, and *why* the standard initialisation $v_0 = 0$ creates a bias that must be corrected. The correction $v_t / (1 - \beta^t)$ from the Adam paper is not a heuristic — it falls out of one line of algebra.
+
+---
+
+## 2. Definition
+
+Given a sequence of vectors $g_1, g_2, g_3, \dots$ (the "raw" signal) and a decay rate $\beta \in [0, 1)$, define the EMA $v_t$ by the recurrence
+
+$$
+\boxed{\ v_t = \beta v_{t-1} + (1 - \beta) g_t, \qquad v_0 = 0.\ }
+$$
+
+For $\beta = 0.9$, each new gradient contributes $10\%$ to $v_t$ and the previous average is discounted by $90\%$. For $\beta = 0.99$ the average is much smoother — it remembers many more steps.
+
+---
+
+## 3. Unrolling: the EMA as a weighted sum
+
+Iterate the recurrence:
+
+$$
+\begin{aligned}
+v_1 &= \beta \cdot 0 + (1 - \beta) g_1 = (1 - \beta) g_1, \\
+v_2 &= \beta v_1 + (1 - \beta) g_2 = (1 - \beta)\bigl[\beta g_1 + g_2\bigr], \\
+v_3 &= \beta v_2 + (1 - \beta) g_3 = (1 - \beta)\bigl[\beta^2 g_1 + \beta g_2 + g_3\bigr], \\
+&\;\vdots \\
+v_t &= (1 - \beta) \sum_{k=1}^t \beta^{t-k} g_k.
+\end{aligned}
+$$
+
+So $v_t$ is a **weighted sum** of past gradients with weights $w_k = (1 - \beta) \beta^{t-k}$. Most recent: weight $(1 - \beta)$. One step back: $\beta (1 - \beta)$. Geometric decay.
+
+The total weight is
+
+$$
+\sum_{k=1}^t (1 - \beta) \beta^{t-k} = (1 - \beta) \cdot \frac{1 - \beta^t}{1 - \beta} = 1 - \beta^t.
+$$
+
+Two regimes:
+
+- For large $t$ ($\beta^t \approx 0$), the total weight tends to $1$: $v_t$ is a proper convex combination of past $g_k$'s.
+- For small $t$ (early in training), the total weight $1 - \beta^t$ is *less than* $1$, and $v_t$ is biased toward zero.
+
+This second observation is the entire reason for the correction in §5.
+
+---
+
+## 4. Effective window size
+
+A useful sanity check: what is the "effective" number of past gradients an EMA with decay $\beta$ averages over? Heuristic argument — define the *effective window* as the number of recent samples that carry, say, half the total weight.
+
+The weights are $w_{t-k} = (1 - \beta) \beta^k$ for $k = 0, 1, 2, \dots$. The cumulative weight after $K$ most recent samples is
+
+$$
+\sum_{k=0}^{K-1} (1 - \beta) \beta^k = 1 - \beta^K.
+$$
+
+Set this equal to $1/2$: $\beta^K = 1/2 \implies K = \log(1/2) / \log(\beta)$. For $\beta = 0.9$, $K \approx 6.6$. For $\beta = 0.99$, $K \approx 69$. For $\beta = 0.999$, $K \approx 693$.
+
+The convenient rule of thumb is
+
+$$
+\text{effective window} \;\approx\; \frac{1}{1 - \beta}.
+$$
+
+(Same order as the half-life, off by a small constant.) Adam's defaults $\beta_1 = 0.9$ and $\beta_2 = 0.999$ mean: average gradients over the last $\sim 10$ steps; average squared gradients over the last $\sim 1000$ steps.
+
+---
+
+## 5. The bias and its correction
+
+Assume $g_t$ is i.i.d. from some distribution with mean $\mathbb{E}[g_t] = g^\star$ (a "true" gradient we're trying to estimate). Take the expectation of the unrolled $v_t$:
+
+$$
+\mathbb{E}[v_t] = (1 - \beta) \sum_{k=1}^t \beta^{t-k} \mathbb{E}[g_k] = g^\star \cdot (1 - \beta) \sum_{k=1}^t \beta^{t-k} = g^\star \cdot (1 - \beta^t).
+$$
+
+So $v_t$ underestimates $g^\star$ by exactly the factor $1 - \beta^t$. **The estimator is biased** — toward zero, the value $v_0$ was initialised to.
+
+The fix is the obvious one. Define the **bias-corrected EMA**
+
+$$
+\boxed{\ \hat v_t \;:=\; \frac{v_t}{1 - \beta^t}.\ }
+$$
+
+Then $\mathbb{E}[\hat v_t] = g^\star$ exactly. $\hat v_t$ is the unbiased moving average; $v_t$ is the raw one.
+
+The correction matters most in the **early steps**. At $t = 1$ with $\beta = 0.9$, $1 - \beta^t = 0.1$, so $\hat v_1 = 10 \cdot v_1 = g_1$ — exactly the first gradient, as it should be. At $t = 1$ with $\beta = 0.999$, $\hat v_1 = 1000 \cdot v_1 = g_1$ again. After many steps ($\beta^t \to 0$), $\hat v_t \approx v_t$ and the correction is irrelevant.
+
+<Aside type="note">
+This is the same algebra you'd use for the geometric series. The unrolling gives weights $(1-\beta) \beta^{t-k}$; the total weight is $1 - \beta^t$; dividing by it normalises. No magic. The Adam paper writes it down precisely as we did, in equation (2).
+</Aside>
+
+---
+
+## 6. Why not just initialise $v_0 \ne 0$?
+
+You could. Setting $v_0 = g_1$ would make $v_t$ a valid weighted average from step 1 onward. The reason every implementation initialises to zero anyway:
+
+1. **You don't know $g_1$ at $t = 0$.** Code is cleaner if $v_0$ is set before the first gradient is computed.
+2. **The correction is one line of arithmetic.** $\hat v_t = v_t / (1 - \beta^t)$. Cheap.
+3. **For $t \to \infty$ they coincide.** Long training runs barely see the bias; we pay for the correction only when it matters (warmup / short runs).
+
+Zero-init is the convention. Bias correction lives in the optimiser's update.
+
+---
+
+## 7. Two EMAs we will actually use
+
+In the next three sessions, two specific EMAs appear:
+
+**First moment** (momentum, Adam's $m_t$):
+
+$$
+m_t = \beta_1 m_{t-1} + (1 - \beta_1) g_t, \qquad \hat m_t = \frac{m_t}{1 - \beta_1^t}.
+$$
+
+This estimates $\mathbb{E}[g_t]$ — the mean gradient. Used as a velocity in momentum and Adam.
+
+**Second moment** (RMSProp, Adam's $v_t$):
+
+$$
+v_t = \beta_2 v_{t-1} + (1 - \beta_2) g_t^2, \qquad \hat v_t = \frac{v_t}{1 - \beta_2^t},
+$$
+
+with $g_t^2$ understood element-wise. This estimates $\mathbb{E}[g_t^2]$ — the second moment of the gradient (variance + mean$^2$). Used as a per-parameter scale to divide the update by $\sqrt{\hat v_t}$.
+
+Both follow the same EMA pattern. The bias correction is the same line of algebra in both cases.
+
+---
+
+## 8. Takeaways
+
+- An EMA $v_t = \beta v_{t-1} + (1 - \beta) g_t$ is a weighted sum of past inputs with geometric weights $(1-\beta)\beta^{t-k}$.
+- The total weight after $t$ steps is $1 - \beta^t$. For $t$ small, this is well below $1$ — hence the bias toward $v_0 = 0$.
+- The bias-corrected EMA $\hat v_t = v_t / (1 - \beta^t)$ is unbiased for $\mathbb{E}[g]$ when the $g_t$'s are i.i.d.
+- Effective averaging window: $\approx 1/(1 - \beta)$.
+- Adam's $\beta_1 = 0.9$ averages gradients over $\sim 10$ steps; $\beta_2 = 0.999$ averages squared gradients over $\sim 1000$ steps.
+
+---
+
+<SelfTest>
+
+**(a)** Starting from $v_0 = 0$ and the recurrence $v_t = \beta v_{t-1} + (1 - \beta) g_t$, prove the closed form $v_t = (1 - \beta) \sum_{k=1}^t \beta^{t-k} g_k$ by induction.
+
+**(b)** Show that the bias-corrected EMA $\hat v_t = v_t / (1 - \beta^t)$ is also expressible as a weighted average $\hat v_t = \sum_k \tilde w_k g_k$ with $\tilde w_k \ge 0$ and $\sum_k \tilde w_k = 1$.
+
+**(c)** With $\beta = 0.9$ and the constant sequence $g_t = 1$ for all $t$, compute $v_t$ and $\hat v_t$ for $t = 1, 2, 5, 10, 50$. Confirm $\hat v_t = 1$ for all $t$ (no bias) while $v_t$ approaches $1$ only as $t$ grows.
+
+**(d)** A practitioner uses $\beta = 0.99$ and trains for only $T = 50$ steps. Without bias correction, by what factor is the EMA at the final step smaller than the true mean of the gradients (assuming stationary $g$)?
+
+</SelfTest>

@@ -1,0 +1,156 @@
+---
+title: "3.A — L2 weight decay as a Gaussian prior (MAP) [appendix]"
+chapter: 3
+order: 9
+estimatedMinutes: 16
+goal: "Derive that the L2-penalised objective is exactly the MAP estimate under a Gaussian prior on weights, and connect the penalty strength to the prior variance."
+prerequisites: ["ch0-math-foundations/0.7-cross-entropy-mle", "ch3-optimization-regularization/3.6-adamw"]
+---
+
+> **Optional appendix.** This session gives the Bayesian reading of weight
+> decay (already used pragmatically in 3.6 AdamW). It does not block
+> Chapters 4–12 — skip if you only want the operational picture.
+
+## 1. Why this session exists
+
+Weight decay is by far the most common regulariser in deep learning. We've already seen the mechanics (3.6: a $(1 - \alpha \lambda)\,\theta$ shrinkage each step). What we haven't done is justify *why* shrinking weights toward zero should help.
+
+The standard justification is **Bayesian**: weight decay is the MAP estimate of $\theta$ under a *Gaussian prior* on the weights. The penalty strength $\lambda$ is one-over-prior-variance. Once you see the derivation, the choice of L2 (rather than L1 or L4 or anything else) stops being arbitrary — it corresponds to the Gaussian assumption, which is the "most ignorant" symmetric prior in the maximum-entropy sense.
+
+---
+
+## 2. Recap: MLE and the loss
+
+From 0.7: the maximum-likelihood estimator (MLE) of $\theta$ given data $\mathcal{D} = \{(x_i, y_i)\}_{i=1}^N$ is
+
+$$
+\theta_{\text{MLE}} = \arg\max_\theta \prod_{i=1}^N p(y_i \mid x_i; \theta) = \arg\min_\theta -\sum_{i=1}^N \log p(y_i \mid x_i; \theta).
+$$
+
+For Gaussian regression $p(y \mid x, \theta) = \mathcal{N}(f_\theta(x), \sigma^2)$, the right-hand side is (up to a constant) the squared-error loss. For categorical classification with softmax outputs, it is the cross-entropy. The training loss $L(\theta)$ is — by design — proportional to the negative log-likelihood.
+
+---
+
+## 3. Adding a prior: MAP
+
+Now treat $\theta$ as a random variable with a prior $p(\theta)$. By Bayes' rule (0.5),
+
+$$
+p(\theta \mid \mathcal{D}) \;\propto\; p(\mathcal{D} \mid \theta) \cdot p(\theta).
+$$
+
+The **maximum-a-posteriori** (MAP) estimate is
+
+$$
+\theta_{\text{MAP}} = \arg\max_\theta \log p(\theta \mid \mathcal{D}) = \arg\min_\theta \bigl[\underbrace{-\log p(\mathcal{D} \mid \theta)}_{L(\theta)} \;-\; \log p(\theta)\bigr].
+$$
+
+This is the MLE objective with an extra term $-\log p(\theta)$ — the **negative log-prior**, acting as a regulariser. The shape of this term encodes our beliefs about $\theta$ before seeing the data.
+
+---
+
+## 4. The Gaussian prior
+
+Pick the most basic symmetric prior: each parameter $\theta_i$ is independent and Gaussian with mean $0$ and variance $\tau^2$. Then
+
+$$
+p(\theta) = \prod_{i=1}^p \frac{1}{\sqrt{2\pi}\, \tau} \exp\!\left(-\frac{\theta_i^2}{2\tau^2}\right),
+$$
+
+so
+
+$$
+-\log p(\theta) = \frac{1}{2\tau^2} \sum_{i=1}^p \theta_i^2 + \text{const}(\tau) = \frac{1}{2\tau^2} \lVert \theta \rVert^2 + \text{const}.
+$$
+
+Substitute into the MAP objective:
+
+$$
+\boxed{\
+\theta_{\text{MAP}} = \arg\min_\theta\, L(\theta) + \frac{1}{2 \tau^2} \lVert \theta \rVert^2.
+\ }
+$$
+
+Comparing to the L2-penalised loss $L(\theta) + \tfrac{\lambda}{2} \lVert \theta \rVert^2$, we read off
+
+$$
+\boxed{\ \lambda = \frac{1}{\tau^2}.\ }
+$$
+
+The penalty strength is the **reciprocal of the prior variance**. Large $\lambda$ ↔ tight prior (we believe weights should be small). Small $\lambda$ ↔ broad prior (we are agnostic). $\lambda = 0$ ↔ infinite prior variance ↔ pure MLE.
+
+This is the precise statement of "L2 regularisation = Gaussian prior on weights".
+
+---
+
+## 5. Why Gaussian, why on weights?
+
+Three reasons to like this choice.
+
+**(a) Maximum entropy.** Among all distributions on $\mathbb{R}$ with a given variance, the Gaussian is the one with maximum entropy (0.6). It is the least-committal symmetric prior compatible with "weights should be around zero, with some characteristic scale".
+
+**(b) Smoothness of $f$.** For a linear model $f(x) = \theta^\top x$, the gradient w.r.t. input is $\nabla_x f = \theta$, so $\lVert \nabla_x f \rVert = \lVert \theta \rVert$. Small $\lVert \theta \rVert$ ↔ small Lipschitz constant ↔ output changes little under small input perturbations. The L2 penalty *encourages a smoother predictor*, which generalises better when the true target function is smooth. The same intuition extends to deep nets, where each layer's weight matrix contributes to the overall Lipschitz constant.
+
+**(c) Numerical stability.** Big weights amplify activations, which amplify gradients, which can explode. Keeping $\lVert \theta \rVert$ bounded keeps the forward/backward passes in a sane numeric range — relevant for fp16 training of LLMs.
+
+What about biases? Under the same Gaussian prior, biases would also be shrunk. In practice we *do not* shrink biases. The justification: biases set the operating point of each neuron's activation (e.g., they determine where a ReLU starts firing); there is no statistical reason to believe operating points should cluster around zero. The bias on the output layer in particular calibrates the mean of the prediction and is left free. This matches the AdamW convention from 3.6 of excluding biases from weight decay.
+
+---
+
+## 6. What about L1?
+
+The same derivation with a Laplace prior $p(\theta_i) \propto \exp(-|\theta_i| / b)$ yields
+
+$$
+-\log p(\theta) = \frac{1}{b}\sum_i |\theta_i| + \text{const} = \frac{1}{b} \lVert \theta \rVert_1 + \text{const}.
+$$
+
+So **L1 regularisation = Laplace prior on weights**. The minimiser of $L + \lambda \lVert \theta \rVert_1$ tends to set many $\theta_i$ exactly to zero (sparsity), because the Laplace prior is sharply peaked at zero. This is the basis of LASSO regression.
+
+In deep learning L1 is rare for hidden-layer weights — sparsity in weights doesn't translate to sparsity in activations, and dense weights are typically more accurate. L1 reappears in specific contexts: sparse coding, structured pruning, mixture-of-experts gating losses.
+
+---
+
+## 7. The Hessian view (deep nets, briefly)
+
+The MAP objective is
+
+$$
+\tilde L(\theta) = L(\theta) + \frac{\lambda}{2} \lVert \theta \rVert^2.
+$$
+
+Its Hessian is
+
+$$
+\nabla^2 \tilde L = \nabla^2 L + \lambda I.
+$$
+
+The L2 term **shifts every eigenvalue of the Hessian up by $\lambda$**. This regularises the *conditioning*: directions in parameter space that were nearly flat under $L$ alone (eigenvalues near zero — many in deep nets, the "degenerate" directions) become $\lambda$-curved under $\tilde L$. The optimiser sees a strictly convex bowl in those directions and converges instead of wandering. This is the same trick as **Levenberg–Marquardt** or **damped Newton**; weight decay is essentially a free Tikhonov regulariser on the parameter geometry.
+
+<Aside type="note">
+This is also why weight decay helps Adam *more* than plain SGD: Adam's per-parameter scaling already partly handles ill-conditioning of $L$, but the residual zero-eigenvalue directions remain. The $\lambda I$ shift lifts them out of the noise floor.
+</Aside>
+
+---
+
+## 8. Takeaways
+
+- The L2-penalised loss is the MAP estimate under an independent Gaussian prior on each parameter, with mean zero and variance $\tau^2$.
+- The penalty coefficient is $\lambda = 1 / \tau^2$. Large $\lambda$ ↔ tight prior.
+- L1 corresponds to a Laplace prior (sparsity-inducing). Used in sparse models, rare for hidden-layer weights of deep nets.
+- Biases are typically excluded — no reason to believe operating points cluster at zero.
+- Hessian view: L2 shifts every eigenvalue of $\nabla^2 L$ up by $\lambda$, regularising flat directions of the loss landscape.
+
+---
+
+<SelfTest>
+
+**(a)** Derive the L2 = Gaussian-prior MAP claim from scratch: write $p(\theta \mid \mathcal{D}) \propto p(\mathcal{D} \mid \theta) p(\theta)$ with $p(\theta) = \mathcal{N}(0, \tau^2 I)$, take $-\log$, and identify the regulariser.
+
+**(b)** A practitioner uses $\lambda = 0.1$ with their AdamW. What prior variance $\tau^2$ does this correspond to? What does it imply about the typical magnitude they expect for a single parameter?
+
+**(c)** Derive that L1 = Laplace prior MAP. Why does the Laplace prior produce *sparse* solutions while Gaussian does not? (Hint: look at the shape of $-\log p(\theta)$ near $\theta = 0$ for each prior.)
+
+**(d)** Show that for a linear regression model $\hat y = \theta^\top x$ with Gaussian likelihood $p(y \mid x, \theta) = \mathcal{N}(\theta^\top x, \sigma^2)$ and Gaussian prior $p(\theta) = \mathcal{N}(0, \tau^2 I)$, the MAP estimator $\theta_{\text{MAP}}$ is exactly **ridge regression**: $\theta_{\text{MAP}} = (X^\top X + \frac{\sigma^2}{\tau^2} I)^{-1} X^\top y$.
+
+</SelfTest>

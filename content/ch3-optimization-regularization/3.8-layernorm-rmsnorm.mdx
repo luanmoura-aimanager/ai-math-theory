@@ -1,0 +1,173 @@
+---
+title: "3.8 — Layer Normalization and RMSNorm"
+chapter: 3
+order: 8
+estimatedMinutes: 20
+goal: "Define LayerNorm, see why it normalises across features per token rather than across the batch, derive the RMSNorm simplification used by modern LLMs, and understand the pre-norm placement."
+prerequisites: ["ch3-optimization-regularization/3.7-lr-schedules"]
+---
+
+## 1. Why this session exists
+
+Every modern Transformer uses **LayerNorm**, not BatchNorm. RMSNorm — a stripped-down LayerNorm — is the version in LLaMA, Mistral, and most LLMs from 2023 onward. The reason is structural: BN's dependence on the batch breaks down for variable-length sequences and small per-GPU batches, both of which are the norm in Transformer training. LayerNorm sidesteps the issue by normalising **across the feature dimension** for each individual token, with no batch coupling at all.
+
+This is also the first concept in the course that wasn't in Luan's dissertation. Past this point, every architecture choice we make for LLMs builds on it. (If you want a rigorous treatment of BatchNorm first — useful context but not required here — see [Appendix 3.C](/session/ch3-optimization-regularization/3.C-batchnorm).)
+
+---
+
+## 2. The LayerNorm operation
+
+Take a single hidden vector $x \in \mathbb{R}^d$ (typically: the activation at one token position, in a single example, at one layer). Compute the **per-vector** mean and variance:
+
+$$
+\mu = \frac{1}{d} \sum_{k=1}^d x_k, \qquad \sigma^2 = \frac{1}{d} \sum_{k=1}^d (x_k - \mu)^2.
+$$
+
+Normalise:
+
+$$
+\hat x_k = \frac{x_k - \mu}{\sqrt{\sigma^2 + \varepsilon}},
+$$
+
+then apply a learnable per-coordinate affine:
+
+$$
+\boxed{\ y_k = \gamma_k\, \hat x_k + \beta_k.\ }
+$$
+
+The trainable parameters are $\gamma, \beta \in \mathbb{R}^d$, one $(\gamma, \beta)$ pair per *feature*. The statistics $\mu, \sigma^2$ are computed *per token* by averaging over the $d$ features of that token's hidden vector.
+
+That's it. There's no batch in the formula. Same operation at train and inference time. No running EMAs needed.
+
+---
+
+## 3. The single picture: BN vs LN
+
+Take a 3-D activation tensor $A \in \mathbb{R}^{B \times T \times d}$ — batch $\times$ sequence-length $\times$ hidden-dim. The two normalisations operate along *different* axes:
+
+- **BatchNorm:** compute $\mu, \sigma^2$ for each *feature coordinate*, averaging over $B \times T$ (batch and time together) → one $(\mu, \sigma^2)$ per of the $d$ features. The normalised value at position $(b, t, k)$ uses statistics that depend on every $(b', t')$ for that $k$.
+- **LayerNorm:** compute $\mu, \sigma^2$ for each *position*, averaging over the $d$ features → one $(\mu, \sigma^2)$ per of the $B \times T$ tokens. The normalised value at $(b, t, k)$ uses statistics that depend only on $(b, t)$.
+
+Same trainable $\gamma, \beta \in \mathbb{R}^d$ in both cases. Different axis being averaged.
+
+---
+
+## 4. Why LN beats BN for Transformers
+
+Three reasons, in order of importance:
+
+**(a) Variable sequence length.** A Transformer batch contains sequences of different lengths, padded. BN would compute statistics over the *padded* tokens, which are garbage. LN computes statistics *per token*, so each token's normalisation is unaffected by what's in the rest of the batch.
+
+**(b) Small effective batches.** Cutting-edge LLM training distributes a global batch of, say, 4M tokens across thousands of GPUs. Per-GPU batch size in tokens-per-update can be tiny (1–4 sequences). BN's $\mu_\mathcal{B}, \sigma_\mathcal{B}^2$ are very noisy at small $B$, and the EMA estimates at inference get correspondingly noisy. LN doesn't see the batch dimension at all — it works identically at $B = 1$ as at $B = 1000$.
+
+**(c) Causality.** In autoregressive language modelling, the prediction at token $t$ may only depend on tokens $1, \dots, t$. BN's per-feature mean involves *all* time steps, so token $t$'s normalisation depends on tokens $> t$ — a *leak* from the future. LN's per-token statistic is purely local in time and respects causality automatically.
+
+For these reasons, every Transformer (encoder, decoder, encoder–decoder) since *Attention Is All You Need* uses LayerNorm.
+
+<Aside type="history">
+Ba, Kiros & Hinton (2016, *Layer Normalization*) proposed LN as a fix for *recurrent* networks, where BN's batch dependence was a problem because RNN gradients couple time steps non-trivially. The Transformer paper picked it up the next year and froze it as the canonical normalisation for sequence models.
+</Aside>
+
+---
+
+## 5. Backward pass
+
+Like BN, LN's backward couples the normalised entries — but it couples them along the *feature* axis (one token's $d$ features) rather than the batch axis. The structure of the formula is identical with $B$ replaced by $d$ and the sum over the batch replaced by a sum over features:
+
+$$
+\boxed{\ \frac{\partial L}{\partial x_k} = \frac{1}{d \cdot \sqrt{\sigma^2 + \varepsilon}}\left[d \cdot \frac{\partial L}{\partial \hat x_k} - \sum_{j=1}^d \frac{\partial L}{\partial \hat x_j} - \hat x_k \sum_{j=1}^d \hat x_j \cdot \frac{\partial L}{\partial \hat x_j}\right]. \ }
+$$
+
+The sum is over features of a single token. This means LN's backward parallelises beautifully across tokens (no cross-batch sum), which is why it scales cleanly on multi-GPU systems.
+
+---
+
+## 6. RMSNorm: the modern stripped-down version
+
+Zhang & Sennrich (2019) noticed that the *mean-centring* of LN can be removed without hurting performance, leaving just the rescaling by RMS:
+
+$$
+\boxed{\ \operatorname{RMSNorm}(x)_k = \gamma_k \cdot \frac{x_k}{\sqrt{\tfrac{1}{d}\sum_{j=1}^d x_j^2 + \varepsilon}}. \ }
+$$
+
+No $\mu$, no $\beta$. Just a per-vector rescaling by the root-mean-square of the features. Saves one mean computation, one subtraction, and one bias parameter per coordinate — about 7% of the parameters compared to LN.
+
+LLaMA 1/2/3, Mistral, Qwen, Gemini, Claude all use RMSNorm. The empirical case for it is that it trains slightly faster than LN with no quality regression. The theoretical case (Zhang & Sennrich): re-centring is doing little useful work in a deep network where the activations are already roughly centred by the previous layer's normalisation; the rescaling is what matters.
+
+For the rest of this course, when we say "LayerNorm" we mean the LN of Ba et al.; when we discuss modern LLM implementations specifically we will use RMSNorm.
+
+---
+
+## 7. Pre-norm vs post-norm
+
+Where do you put the LN inside a Transformer block? Two conventions:
+
+- **Post-norm** (original Transformer, *Attention Is All You Need*): $y = \operatorname{LN}(x + f(x))$. Apply the residual, then normalise.
+- **Pre-norm** (GPT-2 and everything since): $y = x + f(\operatorname{LN}(x))$. Normalise the input to the sublayer, then add the residual.
+
+Pre-norm is now standard. The reason is that pre-norm leaves a clean *additive residual stream* with no normalisation between layers — gradients flow through the residual with no bottleneck. Post-norm sandwiches each residual addition in an LN, which empirically makes very deep training less stable.
+
+We'll do this in detail in Chapter 6 (Transformers). For now: modern Transformers are **pre-norm + RMSNorm**.
+
+---
+
+## 8. The whole course's normalisation menu
+
+For reference, the four normalisations we will eventually see in code:
+
+| Name | Average over | Used in |
+|---|---|---|
+| BatchNorm | batch $\times$ spatial | ConvNets (ResNet, EfficientNet) |
+| LayerNorm | features (per token) | Transformers (BERT, GPT-2/3, T5) |
+| RMSNorm | features (per token), no mean | Modern LLMs (LLaMA, Mistral, Gemini) |
+| GroupNorm | groups of features | Vision, when batch is too small for BN |
+
+Pick the one whose averaging axis is independent of the dimension you don't have stable statistics for. Transformers don't have stable batch statistics → average over features. ConvNets do have stable batch statistics → average over batch. The right normalisation falls out of the data structure.
+
+---
+
+## 9. Takeaways
+
+- LayerNorm normalises *per token, across the feature dimension*. No batch coupling.
+- Same operation at train and test time; no EMAs needed.
+- Why Transformers use it: variable sequence length, small effective batches, causal correctness.
+- RMSNorm = LN without the mean-centring; what every recent LLM actually uses.
+- Pre-norm placement ($\operatorname{LN}(x)$ inside the sublayer, residual outside) is the modern convention.
+- Backward: same structure as BN's but summed over features instead of batch.
+
+---
+
+## 10. End-of-chapter recap
+
+This chapter built the optimiser and regulariser stack used by every modern LLM training run. Main path:
+
+- **3.1** SGD with mini-batches gives an unbiased gradient estimator; variance scales as $\Sigma/B$.
+- **3.2** EMAs give low-variance estimates with bias correction $1/(1-\beta^t)$.
+- **3.3** Momentum is just an EMA of gradients — Polyak's $\sqrt{\kappa}$ speedup.
+- **3.4** AdaGrad / RMSProp = (cumulative or EMA) of $g^2$, used as a per-parameter rescaling.
+- **3.5** Adam = momentum + RMSProp + bias correction.
+- **3.6** AdamW = Adam with decoupled weight decay (every LLM uses this).
+- **3.7** Schedule = linear warmup + cosine decay (or WSD for extendability) + global-norm gradient clipping at $c = 1.0$.
+- **3.8** LayerNorm and RMSNorm = per-token mean/var (or RMS) normalisation over features; the Transformer choice.
+
+Optional appendices, for cultural completeness — none block Chapters 4–12:
+
+- [**3.A** L2 weight decay = Gaussian prior MAP](/session/ch3-optimization-regularization/3.A-l2-map). $\lambda = 1/\tau^2$. The Bayesian reading of the regulariser already used in 3.6.
+- [**3.B** Dropout](/session/ch3-optimization-regularization/3.B-dropout) = approximate ensemble of $2^N$ sub-networks; $1/(1-p)$ scaling. Rare in modern LLM *pre-training* (dropout = 0); still used in fine-tuning small models.
+- [**3.C** BatchNorm](/session/ch3-optimization-regularization/3.C-batchnorm) = per-feature mean/var normalisation over the batch. Standard in CNNs; *not* used in Transformers (LN/RMSNorm wins for the reasons in §4 above).
+
+Chapter 4 will use the main-path stack to revisit CNNs and then bridge to sequences (Chapter 5) and attention (Chapter 6).
+
+---
+
+<SelfTest>
+
+**(a)** Write the LN operation in NumPy as a one-line function `def layernorm(x, gamma, beta, eps=1e-5)`. Verify the output has zero mean and unit variance along its last axis when $\gamma = 1, \beta = 0$.
+
+**(b)** Explain in one sentence each why BN fails for: (i) variable-length padded sequences; (ii) $B = 1$; (iii) the autoregressive prediction at token $t$.
+
+**(c)** Show that RMSNorm with $\gamma = 1$ applied to $x \sim \mathcal{N}(0, I_d)$ produces a vector with squared-norm $\to d$ as $d \to \infty$ (i.e., it normalises to a length-$\sqrt{d}$ vector, not unit norm). What does this say about how the magnitude of activations propagates through stacked RMSNorms?
+
+**(d)** A LayerNorm has $d = 4096$ features. How many learnable parameters does it have? Compared to a `Linear(4096, 4096)` it precedes, what fraction of the weights is in the LN?
+
+</SelfTest>

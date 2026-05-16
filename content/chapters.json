@@ -10,5 +10,13 @@
   "ch2-mlps-backprop": {
     "title": "Chapter 2 — MLPs and backpropagation",
     "order": 2
+  },
+  "ch3-optimization-regularization": {
+    "title": "Chapter 3 — Optimization and regularization",
+    "order": 3
+  },
+  "references-bibliography": {
+    "title": "References & bibliography",
+    "order": 99
   }
 }

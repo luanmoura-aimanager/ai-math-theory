@@ -1,0 +1,138 @@
+---
+title: "References and bibliography"
+chapter: 13
+order: 1
+estimatedMinutes: 0
+goal: "Curated bibliography for every chapter — primary papers, textbooks, lecture series, and online resources."
+prerequisites: []
+---
+
+> This page collects every primary source cited in the course. It grows as
+> chapters are written. Sources are grouped per chapter; within each
+> group, items are listed in order of first appearance. Arxiv numbers and
+> stable URLs are provided where possible.
+
+---
+
+## Chapter 0 — Math foundations
+
+**Textbooks.**
+
+- **Boyd, S., & Vandenberghe, L.** (2004). *Convex Optimization.* Cambridge University Press. — Used in 0.8 (convex functions, Jensen, first/second-order conditions). [stanford.edu/~boyd/cvxbook](https://web.stanford.edu/~boyd/cvxbook/)
+- **Cover, T. M., & Thomas, J. A.** (2006). *Elements of Information Theory* (2nd ed.). Wiley. — Used in 0.6 (entropy, KL divergence) and 0.7 (cross-entropy as MLE).
+- **Magnus, J. R., & Neudecker, H.** (2019). *Matrix Differential Calculus with Applications in Statistics and Econometrics* (3rd ed.). Wiley. — Standard reference for the numerator-convention matrix calculus of 0.2.
+- **Higham, N. J.** (2002). *Accuracy and Stability of Numerical Algorithms* (2nd ed.). SIAM. — Numerical-stability material in 0.10 (overflow, underflow, log-sum-exp).
+
+**Historical notes / theorems cited.**
+
+- **Rademacher, H.** (1919). "Über partielle und totale Differenzierbarkeit von Funktionen mehrerer Variabeln und über die Transformation der Doppelintegrale". *Math. Annalen*, 79, 340–359. — The almost-everywhere differentiability theorem stated in 0.9.
+- **Jensen, J. L. W. V.** (1906). "Sur les fonctions convexes et les inégalités entre les valeurs moyennes". *Acta Math.*, 30, 175–193. — Jensen's inequality (0.8).
+
+**Online resources.**
+
+- **bfloat16 specification.** Wang & Kanwar (2019), "BFloat16: The secret to high performance on Cloud TPUs". [cloud.google.com](https://cloud.google.com/blog/products/ai-machine-learning/bfloat16-the-secret-to-high-performance-on-cloud-tpus) — Used in 0.10.
+
+---
+
+## Chapter 1 — Linear models and the perceptron
+
+**Textbooks.**
+
+- **Bishop, C. M.** (2006). *Pattern Recognition and Machine Learning.* Springer. — Linear regression (1.1), logistic regression (1.2–1.3), softmax (1.7), MAP / Gaussian priors.
+- **Hastie, T., Tibshirani, R., & Friedman, J.** (2009). *The Elements of Statistical Learning* (2nd ed.). Springer. — Logistic regression, linear methods.
+
+**Primary papers.**
+
+- **Rosenblatt, F.** (1958). "The perceptron: A probabilistic model for information storage and organization in the brain". *Psychological Review*, 65, 386–408. — Perceptron model (1.5).
+- **Novikoff, A. B. J.** (1962). "On convergence proofs on perceptrons". *Symposium on the Mathematical Theory of Automata*, 12, 615–622. — Mistake bound for the perceptron (1.5).
+- **Minsky, M., & Papert, S.** (1969). *Perceptrons: An Introduction to Computational Geometry.* MIT Press. — The XOR impossibility result (1.6).
+
+**Connection to dissertation.** Moura, L. M. (2019). *Convolutional neural networks for Raman-spectrum classification*. MSc dissertation, UFC. Appendix C, pp. 155–175 — derivations of logistic regression with cross-entropy, perceptron with step activation, XOR via composition, softmax with multi-class cross-entropy.
+
+---
+
+## Chapter 2 — MLPs and backpropagation
+
+**Textbooks.**
+
+- **Goodfellow, I., Bengio, Y., & Courville, A.** (2016). *Deep Learning.* MIT Press. — General reference for Chapter 2; specifically §6 (deep feed-forward networks), §8 (optimization), §6.4 (UAT). [deeplearningbook.org](https://www.deeplearningbook.org/)
+- **Griewank, A., & Walther, A.** (2008). *Evaluating Derivatives: Principles and Techniques of Algorithmic Differentiation* (2nd ed.). SIAM. — Canonical AD reference (2.11).
+
+**Primary papers.**
+
+- **Cybenko, G.** (1989). "Approximation by superpositions of a sigmoidal function". *Mathematics of Control, Signals, and Systems*, 2(4), 303–314. — UAT for sigmoidal activations (2.2).
+- **Hornik, K.** (1991). "Approximation capabilities of multilayer feedforward networks". *Neural Networks*, 4(2), 251–257. — UAT for general non-polynomial activations (2.2).
+- **Telgarsky, M.** (2016). "Benefits of depth in neural networks". *COLT*. [arXiv:1602.04485](https://arxiv.org/abs/1602.04485) — Depth-vs-width separation (2.2).
+- **Eldan, R., & Shamir, O.** (2016). "The power of depth for feedforward neural networks". *COLT*. [arXiv:1512.03965](https://arxiv.org/abs/1512.03965) — Depth-2 vs depth-3 separation (2.2).
+- **Rumelhart, D. E., Hinton, G. E., & Williams, R. J.** (1986). "Learning representations by back-propagating errors". *Nature*, 323(6088), 533–536. — Backpropagation (2.5–2.7).
+- **Baur, W., & Strassen, V.** (1983). "The complexity of partial derivatives". *Theoretical Computer Science*, 22(3), 317–330. — Cost-of-gradient = cost-of-function theorem (2.11).
+- **Hochreiter, S.** (1991). *Untersuchungen zu dynamischen neuronalen Netzen.* Diploma thesis, TU Munich. — First vanishing-gradient analysis in RNNs (2.9).
+- **Bengio, Y., Simard, P., & Frasconi, P.** (1994). "Learning long-term dependencies with gradient descent is difficult". *IEEE Transactions on Neural Networks*, 5(2), 157–166. — Formal vanishing-gradient analysis (2.9).
+- **Glorot, X., & Bengio, Y.** (2010). "Understanding the difficulty of training deep feedforward neural networks". *AISTATS*. — Xavier/Glorot initialisation (2.10).
+- **He, K., Zhang, X., Ren, S., & Sun, J.** (2015). "Delving deep into rectifiers: Surpassing human-level performance on ImageNet classification". *ICCV*. [arXiv:1502.01852](https://arxiv.org/abs/1502.01852) — He / Kaiming initialisation (2.10).
+- **Krizhevsky, A., Sutskever, I., & Hinton, G. E.** (2012). "ImageNet classification with deep convolutional neural networks". *NeurIPS*. — AlexNet; popularised ReLU at scale (2.3).
+- **Hendrycks, D., & Gimpel, K.** (2016). "Gaussian Error Linear Units (GELUs)". [arXiv:1606.08415](https://arxiv.org/abs/1606.08415) — GELU activation (2.3).
+- **Ramachandran, P., Zoph, B., & Le, Q. V.** (2017). "Searching for activation functions". [arXiv:1710.05941](https://arxiv.org/abs/1710.05941) — Swish / SiLU (2.3).
+- **Shazeer, N.** (2020). "GLU variants improve Transformer". [arXiv:2002.05202](https://arxiv.org/abs/2002.05202) — SwiGLU, GeGLU (2.3, will reappear in Cap 8).
+
+**Implementation references.**
+
+- **Karpathy, A.** "Neural Networks: Zero to Hero" lecture series, especially *micrograd* (Lecture 1). [karpathy.ai/zero-to-hero](https://karpathy.ai/zero-to-hero.html) — Used as resource in 2.12.
+
+---
+
+## Chapter 3 — Optimization and regularization
+
+**Primary papers — optimisers.**
+
+- **Polyak, B. T.** (1964). "Some methods of speeding up the convergence of iteration methods". *USSR Comp. Math.*, 4(5), 1–17. — Heavy-ball momentum (3.3).
+- **Nesterov, Y.** (1983). "A method for solving the convex programming problem with convergence rate $O(1/k^2)$". *Soviet Math. Dokl.*, 27, 372–376. — Nesterov accelerated gradient (3.3).
+- **Duchi, J., Hazan, E., & Singer, Y.** (2011). "Adaptive subgradient methods for online learning and stochastic optimization". *JMLR*, 12, 2121–2159. — AdaGrad (3.4).
+- **Hinton, G.** (2012). "Lecture 6e: rmsprop — divide the gradient by a running average of its recent magnitude". *Coursera: Neural Networks for Machine Learning.* — RMSProp; never published as a paper, the slides are the canonical reference (3.4).
+- **Kingma, D. P., & Ba, J.** (2014). "Adam: A method for stochastic optimization". [arXiv:1412.6980](https://arxiv.org/abs/1412.6980) — Adam optimiser (3.5).
+- **Loshchilov, I., & Hutter, F.** (2019). "Decoupled weight decay regularization". *ICLR*. [arXiv:1711.05101](https://arxiv.org/abs/1711.05101) — AdamW (3.6).
+
+**Primary papers — LR schedules and gradient clipping.**
+
+- **Loshchilov, I., & Hutter, F.** (2017). "SGDR: Stochastic gradient descent with warm restarts". *ICLR*. [arXiv:1608.03983](https://arxiv.org/abs/1608.03983) — Cosine schedule (3.7).
+- **Pascanu, R., Mikolov, T., & Bengio, Y.** (2013). "On the difficulty of training recurrent neural networks". *ICML*. [arXiv:1211.5063](https://arxiv.org/abs/1211.5063) — Gradient clipping by global norm (3.7).
+- **Hu, S., Tu, Y., Han, X., et al.** (2024). "MiniCPM: Unveiling the potential of small language models with scalable training strategies". [arXiv:2404.06395](https://arxiv.org/abs/2404.06395) — WSD schedule (3.7).
+- **Liu, L., Jiang, H., He, P., et al.** (2020). "On the variance of the adaptive learning rate and beyond". *ICLR*. [arXiv:1908.03265](https://arxiv.org/abs/1908.03265) — Variance analysis of warmup (3.7).
+- **Brown, T., Mann, B., Ryder, N., et al.** (2020). "Language models are few-shot learners". *NeurIPS*. [arXiv:2005.14165](https://arxiv.org/abs/2005.14165) — GPT-3 training schedule; referenced in 3.7.
+- **Hoffmann, J., Borgeaud, S., Mensch, A., et al.** (2022). "Training compute-optimal large language models". [arXiv:2203.15556](https://arxiv.org/abs/2203.15556) — Chinchilla schedule recipe (3.7).
+
+**Primary papers — normalisation.**
+
+- **Ba, J. L., Kiros, J. R., & Hinton, G. E.** (2016). "Layer normalization". [arXiv:1607.06450](https://arxiv.org/abs/1607.06450) — LayerNorm (3.8).
+- **Zhang, B., & Sennrich, R.** (2019). "Root mean square layer normalization". *NeurIPS*. [arXiv:1910.07467](https://arxiv.org/abs/1910.07467) — RMSNorm (3.8).
+- **Ioffe, S., & Szegedy, C.** (2015). "Batch normalization: Accelerating deep network training by reducing internal covariate shift". *ICML*. [arXiv:1502.03167](https://arxiv.org/abs/1502.03167) — BatchNorm (Appendix 3.C).
+- **Wu, Y., & He, K.** (2018). "Group normalization". *ECCV*. [arXiv:1803.08494](https://arxiv.org/abs/1803.08494) — GroupNorm (mentioned in 3.8).
+
+**Primary papers — regularisation (Cap 3 appendices).**
+
+- **Srivastava, N., Hinton, G., Krizhevsky, A., Sutskever, I., & Salakhutdinov, R.** (2014). "Dropout: A simple way to prevent neural networks from overfitting". *JMLR*, 15, 1929–1958. — Dropout (Appendix 3.B).
+- **Bishop, C. M.** (2006). *Pattern Recognition and Machine Learning,* §3.4 and §5.5. — L2 as Gaussian prior / MAP (Appendix 3.A).
+
+**Modern alternative optimisers (mentioned in asides).**
+
+- **Chen, X., Liang, C., Huang, D., et al.** (2023). "Symbolic discovery of optimization algorithms" (Lion). [arXiv:2302.06675](https://arxiv.org/abs/2302.06675) — Lion (3.6 aside).
+- **Liu, H., Li, Z., Hall, D., et al.** (2023). "Sophia: A scalable stochastic second-order optimizer for language model pre-training". [arXiv:2305.14342](https://arxiv.org/abs/2305.14342) — Sophia (3.6 aside).
+- **Jordan, K., et al.** (2024). "Muon: An optimizer for hidden layers in neural networks". [keller-jordan.github.io](https://kellerjordan.github.io/posts/muon/) — Muon (3.6 aside).
+
+---
+
+## Chapters 4–12
+
+*To be populated as those chapters are written. The convention is to list, for each chapter, the textbooks used, primary papers cited, lecture series referenced, and any online resources that the chapter draws from.*
+
+---
+
+## Citation conventions used in this course
+
+- **Inline citations** use author–year format, e.g. *(Vaswani et al., 2017)*.
+- **arXiv references** are linked directly to the abstract page.
+- **Books** are cited by author, year, title, and edition; chapter references where relevant.
+- **Lecture series** include the lecturer, course name, and a stable URL.
+- **Anthropic / OpenAI / Google AI blog posts** are cited with author (or "Anthropic", etc.), title, year, and URL.
+
+This bibliography is the source of truth — if a session body cites a paper inline, that paper is listed here. If you find a citation that's missing from this page, file a fix.

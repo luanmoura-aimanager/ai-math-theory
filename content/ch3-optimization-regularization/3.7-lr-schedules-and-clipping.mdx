@@ -1,0 +1,196 @@
+---
+title: "3.7 — LR schedules and gradient clipping"
+chapter: 3
+order: 7
+estimatedMinutes: 24
+goal: "Sketch the warmup-then-cosine schedule used by GPT-3 / Chinchilla, the more recent WSD schedule, and the global-norm gradient clipping that keeps LLM training stable."
+prerequisites: ["ch3-optimization-regularization/3.5-adam", "ch3-optimization-regularization/3.6-adamw", "ch2-mlps-backprop/2.9-vanishing-exploding-gradients"]
+---
+
+## 1. Why this session exists
+
+A modern LLM training run does not use a constant learning rate. It uses a *schedule*: a function $\alpha(t)$ that varies over the course of training. The canonical recipe — used by GPT-3, Chinchilla, LLaMA, Mistral, and basically everything since 2020 — has three phases:
+
+1. **Linear warmup** from $0$ to peak $\alpha_{\max}$ over the first $T_w$ steps.
+2. **Cosine decay** from $\alpha_{\max}$ down to a small floor $\alpha_{\min}$ over the next $T_d$ steps.
+3. (Optional) **Hold** at $\alpha_{\min}$ for any remaining steps.
+
+Each phase exists for a reason. We write each one down, derive the formula, and explain the empirical motivation.
+
+---
+
+## 2. Warmup: why start small
+
+The first few steps of training are special. At $t = 1$:
+
+- The Adam EMAs $m_t, v_t$ have just been initialised at zero. Bias correction *partially* fixes that (3.2), but $\hat v_1 = g_1^2$ exactly — the variance estimate has effectively one sample and is very noisy.
+- The model weights are still at the random init. The classifier head in particular often produces large gradients before settling.
+- Layer norm and residual streams have not yet calibrated.
+
+Stepping at full $\alpha_{\max}$ at $t = 1$ can blow up the optimisation: one bad batch produces a giant step, which produces a bad next gradient, which feeds back through $v_t$ before bias correction stabilises. Empirically this is the dominant failure mode of LLM training without warmup.
+
+The fix is to ramp $\alpha$ up gradually:
+
+$$
+\boxed{\ \alpha_{\text{warmup}}(t) = \alpha_{\max} \cdot \frac{t}{T_w}, \qquad t = 1, \dots, T_w.\ }
+$$
+
+A linear ramp from $0$ to $\alpha_{\max}$ over $T_w$ steps. Typical $T_w$: 1–5% of total training steps, or a fixed 2000–10000 steps regardless of total length.
+
+<Aside type="note">
+"Warmup is needed because Adam's $v_t$ is uncalibrated" is the most common explanation. A finer-grained one (Liu et al., 2020 "On the Variance of the Adaptive Learning Rate", Liyuan Liu's RAdam paper): the second-moment estimate has high *variance* in early steps, which translates to a high-variance effective learning rate $\alpha / \sqrt{\hat v_t}$. Warmup linearly damps that variance until the EMA settles. RAdam corrects this analytically and removes the need for hand-tuned warmup; it has not replaced linear warmup in mainstream practice, but the analysis is right.
+</Aside>
+
+---
+
+## 3. Cosine decay: why fade out
+
+After warmup, the natural next question is: should $\alpha$ stay at $\alpha_{\max}$ forever?
+
+No. Several reasons:
+
+- **Convergence theory.** For convex stochastic optimisation, the optimal rate requires $\alpha(t) \to 0$ (e.g., $\alpha_t \propto 1/\sqrt{t}$). Constant LR converges only to a *noise ball* of radius $\propto \alpha \cdot \sqrt{\sigma^2}$ around the optimum; you must shrink $\alpha$ to refine within that ball.
+- **Loss-landscape flattening.** Late in training the loss surface is near-flat near the solution; large steps wash out the small remaining gradient signal as noise. Smaller $\alpha$ extracts the last bits of useful gradient.
+- **Empirics.** Across many training runs, accuracy improves measurably in the last $\sim 20\%$ of training if you decay the LR aggressively in that window.
+
+The cosine schedule (Loshchilov & Hutter, 2017, *SGDR*) is the empirically dominant choice:
+
+$$
+\boxed{\ \alpha_{\text{cos}}(t) = \alpha_{\min} + \frac{1}{2}(\alpha_{\max} - \alpha_{\min})\left(1 + \cos\!\left(\pi \cdot \frac{t - T_w}{T_d}\right)\right), \quad t \in [T_w, T_w + T_d].\ }
+$$
+
+Read off the endpoints: at $t = T_w$ the cosine argument is $0$, $\cos(0) = 1$, so $\alpha = \alpha_{\max}$. At $t = T_w + T_d$ the argument is $\pi$, $\cos(\pi) = -1$, so $\alpha = \alpha_{\min}$. In between it traces out a smooth half-period of cosine — fast initially, slow near the end. The shape is the inverse of an S-curve: it spends a long time near the peak (where gradients are still informative) and a long time near the floor (where fine-tuning helps).
+
+GPT-3 uses $\alpha_{\min} = 0.1 \cdot \alpha_{\max}$. Chinchilla uses $\alpha_{\min} = \alpha_{\max} / 10$. The floor is rarely zero — full decay to zero turns out to slightly *underfit* the last epoch.
+
+---
+
+## 4. Linear decay: a simpler alternative
+
+Some papers use **linear decay** after warmup instead of cosine:
+
+$$
+\alpha_{\text{linear}}(t) = \alpha_{\max} \cdot \left(1 - \frac{t - T_w}{T_d}\right) + \alpha_{\min} \cdot \frac{t - T_w}{T_d}.
+$$
+
+Same endpoints, straight line in between. Empirically very close to cosine; some recent work (e.g., Hoffmann et al.'s Chinchilla) finds linear marginally better than cosine when total steps are matched. The difference is small enough that hyperparameter tuning matters more than the choice.
+
+A useful comparison: cosine spends *more* total time near the peak than linear and *more* total time near the floor — the middle transition is faster. Linear is uniform. Which is preferable is empirical.
+
+---
+
+## 5. Why the schedule matters more than you think
+
+A scaling experiment: train a model with constant LR $\alpha_{\max}$ for $T$ steps. Then re-train for $T$ steps with the warmup + cosine schedule peaking at $\alpha_{\max}$. The second run typically reaches a loss $\sim 5\%$ lower. Same compute, same model, same data. The schedule alone is worth a non-trivial slice of training quality.
+
+Two effects compound:
+
+1. **Without warmup**, the first few hundred steps would damage initialisation; the schedule sidesteps that.
+2. **Without decay**, the last fraction of training is wasted hopping around the basin.
+
+Modern training scripts therefore *always* schedule. The Hugging Face `transformers` and `accelerate` libraries ship `get_cosine_schedule_with_warmup` as the default; PyTorch ships `LambdaLR` and `CosineAnnealingLR` to roll your own.
+
+---
+
+## 6. The Chinchilla schedule, written out
+
+The Chinchilla paper (Hoffmann et al., 2022) trains models from 70M to 70B parameters on 1.4T tokens. Their schedule is the now-standard recipe:
+
+- **Warmup:** linear, over the first $\sim 1.5\%$ of tokens.
+- **Decay:** cosine over the remaining tokens, ending at $\alpha_{\min} = 0.1 \cdot \alpha_{\max}$.
+- **Peak LR $\alpha_{\max}$:** scaled with model size. Smaller models get larger peak LR. Their fit: $\alpha_{\max} \approx 4 \times 10^{-4}$ for 1B params, $\approx 2 \times 10^{-4}$ for 10B, $\approx 10^{-4}$ for 70B.
+- **AdamW** with $\beta_1 = 0.9, \beta_2 = 0.95$, weight decay $0.1$ (excluding biases and LN).
+
+This combination, more than any architectural choice, is what made Chinchilla a calibration result for the entire field.
+
+<Aside type="history">
+A subtle Chinchilla finding: *the cosine schedule should match the total training horizon*. If you set $T_d$ too long (you plan to train 1T tokens, but cosine is set for 2T), you decay too slowly and end up at higher loss than optimal. If you set $T_d$ too short, you spend the last fraction of compute at the floor LR doing little. The take-away: the schedule is part of the *training plan*, not a per-step hyperparameter.
+</Aside>
+
+---
+
+## 7. WSD: warmup–stable–decay (the 2024 alternative)
+
+The cosine schedule has one practical drawback: once you commit to a target $T_d$, you cannot easily *extend* the run. The decayed checkpoints near the end of the schedule are at a much smaller $\alpha$ than the middle of the run, so resuming training on them gives a low-momentum start that needs a fresh warmup.
+
+**WSD** (warmup–stable–decay) — popularised by **MiniCPM** (Hu et al., 2024) and used in several recent LLMs (DeepSeek-V2/V3, parts of Llama 3, MAP-Neo) — addresses this by spending most of the run at a **constant** peak LR, with the decay compressed into the last $\sim 10$–$20\%$ of steps:
+
+$$
+\alpha_{\text{WSD}}(t) = \begin{cases}
+\alpha_{\max} \cdot t / T_w, & 0 \le t < T_w \quad\text{(warmup)} \\
+\alpha_{\max}, & T_w \le t < T_w + T_s \quad\text{(stable)} \\
+\alpha_{\max} \cdot \bigl(1 - \tfrac{t - T_w - T_s}{T_d}\bigr) + \alpha_{\min} \cdot \tfrac{t - T_w - T_s}{T_d}, & \text{(decay)}
+\end{cases}
+$$
+
+The key trick: **mid-stable-phase checkpoints are usable as warm starts** for follow-up training. You can take a $1$T-token stable checkpoint, decay it for $100$B tokens to get a deployable model, *and* take the same stable checkpoint and continue training for another $1$T tokens — both branches start cleanly. Cosine doesn't permit this without re-warming.
+
+Empirically WSD matches cosine on final loss for a fixed compute budget, while gaining the "extendability" property. As of 2025–2026 it's the recipe of choice for production LLM teams that plan to continue-pretrain or release a family of models from a single base.
+
+---
+
+## 8. Other schedules you'll see
+
+- **Inverse-square-root decay.** $\alpha(t) = \alpha_{\max} \cdot \sqrt{T_w / \max(t, T_w)}$. Used in the original Transformer paper (AIAYN, 2017). Smooth, no $\alpha_{\min}$, never goes to zero. Largely replaced by cosine for autoregressive LMs.
+- **Step decay.** Drop by a factor (typically $0.1$) at hand-picked epoch boundaries. Common in vision (ResNet on ImageNet). Brittle, requires tuning. Replaced by cosine in most pipelines.
+- **One-cycle (Smith).** Warmup up to a *very* high $\alpha$, then decay below the starting point. Aggressive; sometimes used for fast fine-tuning.
+
+For LLM pre-training, you can essentially ignore these and use warmup + cosine (canonical) or WSD (modern, extendable).
+
+---
+
+## 9. Gradient clipping by global norm
+
+Session 2.9 introduced gradient clipping as a fix for the exploding side of the chain. In LLM training it is not optional — every reference training script for GPT-2, GPT-3, LLaMA, Mistral, Chinchilla applies global-norm clipping to *every* parameter update, every step.
+
+**Definition.** Concatenate every parameter's gradient into a single vector $g \in \mathbb{R}^N$ and compute its $\ell_2$ norm $\lVert g \rVert$. If it exceeds a fixed threshold $c$, rescale the *entire* gradient vector down to norm $c$:
+
+$$
+\boxed{\ g \leftarrow g \cdot \min\!\left(1,\ \frac{c}{\lVert g \rVert}\right). \ }
+$$
+
+If $\lVert g \rVert \le c$, do nothing. The direction $g / \lVert g \rVert$ is preserved; only the magnitude is capped.
+
+**Typical threshold.** $c = 1.0$ for LLM pre-training. This is small enough to catch genuine spikes (which are typically $\gg 10$ in $\ell_2$ norm) and large enough to almost never bind during normal steps — most steps have $\lVert g \rVert \approx 0.1$–$0.5$ after the first warmup epoch. PyTorch's `torch.nn.utils.clip_grad_norm_` is the canonical implementation.
+
+**Why global norm (not per-parameter clipping).** Per-parameter clipping caps each weight tensor independently, which can dramatically distort the overall update direction (one tensor clips, another doesn't, the relative balance changes). Global-norm clipping is a uniform scaling: it preserves the *direction* in the full parameter vector and only scales the magnitude. Empirically far more stable.
+
+**When clipping fires.** Three common situations during a healthy LLM training run:
+
+1. The first 50–200 steps, before warmup has stabilised activations.
+2. A bad batch — a particularly long or pathological sequence.
+3. A hardware-glitch step (a corrupted gradient from a flaky GPU).
+
+In a well-behaved training run, the *rate* of clipping events drops to near zero after the warmup phase. Continued high clip rates (say, $> 5\%$ of steps clipping) is a signal that something is wrong — usually peak LR too high or warmup too short.
+
+<Aside type="note">
+Clipping is sometimes confused with **gradient scaling** for fp16/bf16 training (the `GradScaler` from 0.10). They're different. Scaling multiplies the loss before backward to lift gradients out of fp16 underflow; clipping caps the norm of the resulting gradient to prevent exploding updates. Both are applied in a typical training loop, in this order: backward → unscale (if fp16) → clip → optimiser step.
+</Aside>
+
+---
+
+## 10. Takeaways
+
+- A modern training run schedules LR; constant LR is almost never optimal.
+- Phase 1: **linear warmup** to stabilise Adam's $\hat v_t$ before taking full steps.
+- Phase 2: **cosine decay** (or linear) from $\alpha_{\max}$ to $\alpha_{\min} \approx 0.1 \cdot \alpha_{\max}$ over the rest of training.
+- **WSD** (warmup–stable–decay) is the modern alternative when extendability matters: long stable phase at $\alpha_{\max}$, short final decay.
+- The total decay horizon must match the actual number of training steps you plan to run.
+- **Global-norm gradient clipping** at $c = 1.0$ is mandatory in LLM training — preserves direction, caps magnitude.
+- Chinchilla's recipe: 1.5% linear warmup, cosine decay to $0.1 \alpha_{\max}$, AdamW $(\beta_1, \beta_2) = (0.9, 0.95)$, $\lambda = 0.1$, grad-clip $c = 1.0$.
+
+---
+
+<SelfTest>
+
+**(a)** A 7B model is to be trained for $T = 200\,000$ Adam steps with peak LR $\alpha_{\max} = 2 \times 10^{-4}$ and floor $\alpha_{\min} = 2 \times 10^{-5}$. Warmup is $1\%$ of total steps. Write the explicit formulas for $\alpha(t)$ in each phase under the cosine recipe and plot the rough shape.
+
+**(b)** A practitioner reports: "I trained with peak $\alpha = 10^{-3}$, no warmup, and the loss diverged after 50 steps." Explain in terms of the $v_t$ EMA why warmup would have prevented this.
+
+**(c)** Show that the cosine schedule (with $\alpha_{\min} = 0$) spends roughly $1/4$ of $T_d$ above $0.85 \alpha_{\max}$ and roughly $1/4$ of $T_d$ below $0.15 \alpha_{\max}$. (Hint: $\cos$ symmetry.)
+
+**(d)** Argue why "extending the schedule" — keeping the same $\alpha_{\max}$ but doubling $T_d$ — is *not* the same as training for $2T$ steps with the original schedule. Which gives lower final loss, and why? How does WSD sidestep this problem?
+
+**(e)** During a training run you see $\lVert g \rVert = 12.4$ on step 73 and the configured clip threshold is $c = 1.0$. By what factor is the gradient rescaled before the optimiser step? Argue why preserving direction matters here.
+
+</SelfTest>
