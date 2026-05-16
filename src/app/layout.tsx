@@ -7,9 +7,9 @@ import { Sidebar } from "@/components/Sidebar";
 import { Header } from "@/components/Header";
 
 export const metadata: Metadata = {
-  title: "AI / ML Theory — Do perceptron aos LLMs",
+  title: "AI / ML Theory — From the Perceptron to LLMs",
   description:
-    "Curso de fundamentos matemáticos rigorosos para deep learning e LLMs.",
+    "A rigorous, math-first walk-through of deep learning, from linear models up to modern large language models.",
 };
 
 export default function RootLayout({
@@ -23,7 +23,7 @@ export default function RootLayout({
   const chapters = getChapterTree();
 
   return (
-    <html lang="pt-BR" className="h-full antialiased">
+    <html lang="en" className="h-full antialiased">
       <body className="min-h-full flex flex-col">
         <ProgressProvider>
           <Header />

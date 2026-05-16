@@ -1,38 +1,39 @@
 ---
-title: "0.2 — Cálculo matricial: derivadas que importam para backprop"
+title: "0.2 — Matrix calculus: derivatives that matter for backprop"
 chapter: 0
 order: 2
 estimatedMinutes: 22
-goal: "Derivar ∂(Wx+b)/∂x e ∂(Wx+b)/∂W com convenção de denominador, sem 'segue que'."
+goal: "Derive ∂(Wx+b)/∂x and ∂(Wx+b)/∂W with numerator convention, no 'it follows that'."
 prerequisites: ["ch0-math-foundations/0.1-vector-spaces"]
 ---
 
-## 1. Convenção: numerador vs. denominador
+## 1. Convention: numerator vs. denominator
 
-Antes de qualquer derivada, fixe a convenção. Para $f : \mathbb{R}^n \to
-\mathbb{R}^m$ definida por $y = f(x)$, a *convenção de numerador* declara
+Before any derivative, fix the convention. For $f : \mathbb{R}^n \to
+\mathbb{R}^m$ given by $y = f(x)$, *numerator layout* declares
 
 $$
 \frac{\partial y}{\partial x} \in \mathbb{R}^{m \times n}, \qquad
 \Big(\frac{\partial y}{\partial x}\Big)_{ij} = \frac{\partial y_i}{\partial x_j}.
 $$
 
-A *convenção de denominador* faz o oposto: $\partial y / \partial x \in
-\mathbb{R}^{n \times m}$. Escolho numerador porque ele faz a regra da cadeia
-empilhar matrizes na ordem natural de multiplicação. **Toda derivação deste
-texto usa numerador.** Quem mistura sofre.
+*Denominator layout* flips it: $\partial y / \partial x \in
+\mathbb{R}^{n \times m}$. I pick numerator because it makes the chain
+rule stack matrices in the natural multiplication order. **Every
+derivation in this course uses numerator layout.** Mix them and you
+suffer.
 
-## 2. Derivada de $Wx + b$ em relação a $x$
+## 2. Derivative of $Wx + b$ with respect to $x$
 
-Seja $f(x) = Wx + b$ com $W \in \mathbb{R}^{m\times n}$, $b \in
-\mathbb{R}^m$. Componente a componente,
+Let $f(x) = Wx + b$ with $W \in \mathbb{R}^{m\times n}$, $b \in
+\mathbb{R}^m$. Component-wise,
 
 $$
 y_i = \sum_{k=1}^{n} W_{ik}\, x_k + b_i.
 $$
 
-Diferenciando $y_i$ em relação a $x_j$, todos os termos com $k \neq j$
-desaparecem:
+Differentiating $y_i$ with respect to $x_j$, every term with $k \neq j$
+vanishes:
 
 $$
 \frac{\partial y_i}{\partial x_j}
@@ -41,21 +42,21 @@ $$
 = W_{ij}.
 $$
 
-Empilhando para todo par $(i, j)$,
+Stacking over every $(i, j)$ pair,
 
 $$
 \boxed{\;\frac{\partial (Wx + b)}{\partial x} = W \;\in \mathbb{R}^{m\times n}.\;}
 $$
 
-A intuição: derivar uma transformação afim em relação à entrada devolve a
-parte linear, ponto.
+Intuition: differentiating an affine map with respect to its input
+returns the linear part — period.
 
-## 3. Derivada em relação a $W$ — o ponto onde a maioria escorrega
+## 3. Derivative with respect to $W$ — the slippery point
 
-Aqui $W$ é uma matriz, então $\partial y / \partial W$ é a princípio um
-*tensor de ordem 3*: tem índices $(i, j, k)$ com $i$ percorrendo $y$, $(j, k)$
-percorrendo $W$. Vamos calcular elemento a elemento e só depois decidir como
-guardar.
+Here $W$ is a matrix, so $\partial y / \partial W$ is in principle a
+*rank-3 tensor*: it has indices $(i, j, k)$ with $i$ ranging over $y$ and
+$(j, k)$ ranging over $W$. Let's compute element-wise and only afterwards
+decide how to store it.
 
 $$
 \frac{\partial y_i}{\partial W_{jk}}
@@ -64,14 +65,14 @@ $$
 = \delta_{ij}\, x_k.
 $$
 
-Note o $\delta_{ij}$: a derivada da $i$-ésima saída em relação ao elemento
-$W_{jk}$ só é não-nula quando $j = i$. Em outras palavras, o peso $W_{jk}$
-afeta apenas a saída $y_j$.
+Note the $\delta_{ij}$: the derivative of the $i$-th output with respect
+to the element $W_{jk}$ is non-zero only when $j = i$. In other words,
+the weight $W_{jk}$ affects only the output $y_j$.
 
-## 4. Por que isso aparece como produto externo no backprop
+## 4. Why this shows up as an outer product in backprop
 
-Em treinamento, o que precisamos não é o tensor inteiro, mas o gradiente da
-função de perda escalar $L$ em relação a $W$. Aplicando a regra da cadeia:
+At training time, what we need is not the full tensor but the gradient
+of a scalar loss $L$ with respect to $W$. By the chain rule:
 
 $$
 \frac{\partial L}{\partial W_{jk}}
@@ -80,22 +81,22 @@ $$
 = \frac{\partial L}{\partial y_j}\, x_k.
 $$
 
-Defina $\delta := \partial L / \partial y \in \mathbb{R}^{m}$. Em forma
-matricial, $\partial L / \partial W$ é a matriz $m \times n$ cujo elemento
-$(j,k)$ é $\delta_j\, x_k$ — exatamente o produto externo:
+Define $\delta := \partial L / \partial y \in \mathbb{R}^{m}$. In matrix
+form, $\partial L / \partial W$ is the $m \times n$ matrix whose $(j,k)$
+entry is $\delta_j\, x_k$ — exactly the outer product:
 
 $$
 \boxed{\;\frac{\partial L}{\partial W} = \delta\, x^\top \;\in \mathbb{R}^{m\times n}.\;}
 $$
 
-E para o viés, $\partial L/\partial b = \delta$ (cada $b_i$ contribui com $1$
-para $y_i$). Isso completa a *regra de atualização local* de uma camada
-linear; encadeada por todas as camadas, é literalmente o `backward()` do
-PyTorch.
+And for the bias, $\partial L/\partial b = \delta$ (each $b_i$ contributes
+$1$ to $y_i$). This completes the *local update rule* of a linear layer;
+chained across all layers, it is literally PyTorch's `backward()`.
 
-## 5. Checagem rápida (faça com caneta)
+## 5. Quick check (do it with a pen)
 
-Para $W = \begin{pmatrix} 1 & 2 \\ 3 & 4 \end{pmatrix}$ e $x = (5, 6)^\top$,
-compute $y = Wx$, depois $\partial y / \partial x$, e finalmente — supondo
-$L = \tfrac{1}{2}\|y\|^2$ — obtenha $\delta$ e o produto externo $\delta\,
-x^\top$. Se sair $W^\top y\, x^\top$ no lugar errado, releia §1.
+For $W = \begin{pmatrix} 1 & 2 \\ 3 & 4 \end{pmatrix}$ and $x = (5,
+6)^\top$, compute $y = Wx$, then $\partial y / \partial x$, and finally
+— assuming $L = \tfrac{1}{2}\|y\|^2$ — obtain $\delta$ and the outer
+product $\delta\, x^\top$. If you end up with $W^\top y\, x^\top$ in the
+wrong place, re-read §1.

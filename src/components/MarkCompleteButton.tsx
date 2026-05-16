@@ -27,7 +27,7 @@ export function MarkCompleteButton({ slug }: { slug: string }) {
       aria-pressed={done}
     >
       <span aria-hidden="true">{done ? "✓" : "○"}</span>
-      <span>{done ? "Sessão concluída" : "Marcar como concluída"}</span>
+      <span>{done ? "Session complete" : "Mark complete"}</span>
     </button>
   );
 }

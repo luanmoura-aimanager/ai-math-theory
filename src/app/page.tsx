@@ -7,31 +7,31 @@ export default function HomePage() {
 
   return (
     <article className="prose-textbook">
-      <h1>Do perceptron aos LLMs</h1>
+      <h1>From the Perceptron to LLMs</h1>
 
       <p>
-        Curso de fundamentos matemáticos rigorosos para deep learning e modelos
-        de linguagem de larga escala. As sessões são curtas, verbosas em
-        derivações, e desenhadas para serem acompanhadas com caneta na mão.
+        A rigorous, math-first course on deep learning, from linear models up
+        to modern large language models. Sessions are short, dense in
+        derivations, and meant to be followed with a pen in hand.
       </p>
 
       <p>
-        O leitor-alvo é um pós-graduando STEM (física, EE, matemática aplicada,
-        CS) com cálculo multivariável e álgebra linear no banco. Cada sessão
-        mostra todo passo algébrico — sem &ldquo;decorre que&rdquo;, sem
-        &ldquo;é fácil ver&rdquo;.
+        The intended reader is a STEM graduate (physics, EE, applied math, CS)
+        with multivariable calculus and linear algebra in the bank. Every
+        algebraic step is shown — no &ldquo;it follows that&rdquo;, no
+        &ldquo;it is easy to see&rdquo;.
       </p>
 
-      <h2>Como começar</h2>
+      <h2>How to start</h2>
       <p>
-        Use a barra lateral à esquerda para navegar pelos capítulos. Marque
-        sessões como concluídas e o ✓ aparece no índice.
+        Use the sidebar on the left to navigate the chapters. Mark sessions
+        as complete and a ✓ appears in the index.
       </p>
 
       {firstSession && (
         <p>
           <Link href={`/session/${firstSession.slug}`}>
-            Começar pela primeira sessão →
+            Start with the first session →
           </Link>
         </p>
       )}
@@ -40,8 +40,10 @@ export default function HomePage() {
 
       <p>
         <em>
-          Demo MVP. Login Google, persistência cross-device e sandbox de código
-          chegam nas próximas fases (ver <code>website_plan.md</code>).
+          MVP demo. Progress is stored in your browser&apos;s
+          <code>localStorage</code> — clearing site data resets the
+          checkmarks. Cross-device sync via Google login is planned for a
+          later phase (see <code>website_plan.md</code>).
         </em>
       </p>
     </article>

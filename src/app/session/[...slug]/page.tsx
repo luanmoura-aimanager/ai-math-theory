@@ -25,7 +25,7 @@ export function generateStaticParams() {
 export async function generateMetadata({ params }: { params: Promise<Params> }) {
   const { slug } = await params;
   const session = getSessionBySlug(slug.join("/"));
-  if (!session) return { title: "Sessão não encontrada" };
+  if (!session) return { title: "Session not found" };
   return { title: `${session.title} — AI / ML Theory` };
 }
 
@@ -50,7 +50,7 @@ export default async function SessionPage({ params }: { params: Promise<Params> 
     <article className="prose-textbook">
       <header className="not-prose mb-8">
         <div className="text-[12px] uppercase tracking-[0.14em] text-[var(--muted)]">
-          {session.chapterSlug.replace(/^ch/, "Capítulo ").split("-")[0]}
+          {session.chapterSlug.replace(/^ch/, "Chapter ").split("-")[0]}
           {session.estimatedMinutes ? ` · ${session.estimatedMinutes} min` : ""}
         </div>
         <h1 className="mt-2 text-[2rem] leading-tight font-semibold tracking-tight">
@@ -59,7 +59,7 @@ export default async function SessionPage({ params }: { params: Promise<Params> 
         {session.goal && (
           <p className="mt-3 text-[15px] text-[var(--muted)] italic max-w-[60ch]">
             <strong className="not-italic font-medium text-[var(--foreground)]">
-              Objetivo:
+              Goal:
             </strong>{" "}
             {session.goal}
           </p>

@@ -23,7 +23,8 @@ Reader-product: chapters on the left, math-rendered MDX in the centre, a
   does not want hand-waving.
 - Web-dev beginner. Comfortable in a terminal but new to React/Next/Auth.js.
   When you make a non-obvious choice, leave a one-line comment saying *why*.
-- Native Portuguese speaker. UI strings and `.mdx` content are in pt-BR. Code,
+- Native Portuguese speaker, but the site currently ships in English (UI
+  strings + `.mdx` content). An EN/PT toggle is on the backlog. Code,
   comments, and this CLAUDE.md stay in English.
 - Prefers terse, dense answers with specifics over hedged generalities.
 - Companion documents: `../llm_study_roadmap.md` is the source-of-truth for

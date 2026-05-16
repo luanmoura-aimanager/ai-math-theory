@@ -1,38 +1,38 @@
 ---
-title: "0.1 — Espaços vetoriais e produto interno, a visão de ML"
+title: "0.1 — Vector spaces and inner products, the ML view"
 chapter: 0
 order: 1
 estimatedMinutes: 18
-goal: "Reobter ⟨x,y⟩ = xᵀy passo a passo e convencer-se de que uma camada linear é uma transformação afim."
+goal: "Re-derive ⟨x,y⟩ = xᵀy and convince yourself a linear layer is an affine map."
 prerequisites: []
 ---
 
-## 1. Onde os dados vivem
+## 1. Where the data lives
 
-Em ML, o objeto subjacente de qualquer ponto de dado é um vetor em um espaço
-vetorial real de dimensão finita $V = \mathbb{R}^d$. Uma imagem $28\times 28$
-em escala de cinza vira um vetor com $d = 784$ componentes; uma sequência de
-$T$ tokens em um modelo de linguagem, depois de embedados, vira uma matriz em
-$\mathbb{R}^{T\times d_\text{model}}$, mas cada linha é um vetor em
+In ML, the underlying object of any data point is a vector in a
+finite-dimensional real vector space $V = \mathbb{R}^d$. A 28×28
+grayscale image becomes a vector with $d = 784$ components; a sequence
+of $T$ tokens in a language model, once embedded, becomes a matrix in
+$\mathbb{R}^{T\times d_\text{model}}$, but each row is a vector in
 $\mathbb{R}^{d_\text{model}}$.
 
-A escolha de $\mathbb{R}^d$ não é inocente — ela traz três compromissos
-imediatos: a estrutura aditiva ($x + y \in V$), a multiplicação por escalar
-($\lambda x \in V$) e a existência de um produto interno canônico que vamos
-deduzir agora.
+The choice of $\mathbb{R}^d$ is not innocent — it commits us to three
+things at once: additive structure ($x + y \in V$), scalar multiplication
+($\lambda x \in V$), and the existence of a canonical inner product, which
+we'll now derive.
 
-## 2. Produto interno via combinações de base
+## 2. Inner product via basis expansions
 
-Fixe uma base $\{e_1, \dots, e_d\}$ de $V$. Todo vetor se escreve de forma
-única como
+Fix a basis $\{e_1, \dots, e_d\}$ of $V$. Every vector has a unique
+expansion
 
 $$
 x = \sum_{i=1}^{d} x_i \, e_i, \qquad x_i \in \mathbb{R}.
 $$
 
-Suponha que $V$ esteja munido de uma forma bilinear simétrica positiva
-definida $\langle \cdot, \cdot \rangle : V \times V \to \mathbb{R}$. Por
-bilinearidade, dado $y = \sum_j y_j e_j$,
+Suppose $V$ is equipped with a symmetric positive-definite bilinear form
+$\langle \cdot, \cdot \rangle : V \times V \to \mathbb{R}$. By
+bilinearity, for $y = \sum_j y_j e_j$,
 
 $$
 \langle x, y \rangle
@@ -40,51 +40,52 @@ $$
 = \sum_{i,j} x_i\, y_j\, \langle e_i, e_j \rangle.
 $$
 
-Quando a base é ortonormal, $\langle e_i, e_j \rangle = \delta_{ij}$, e a
-soma dupla colapsa:
+When the basis is orthonormal, $\langle e_i, e_j \rangle = \delta_{ij}$,
+and the double sum collapses:
 
 $$
 \boxed{\;\langle x, y \rangle = \sum_i x_i y_i = x^\top y.\;}
 $$
 
-Esta é a forma que aparece em toda derivação de ML: produto interno é
-multiplicação linha-coluna.
+This is the form that shows up in every ML derivation: inner product is
+row-times-column multiplication.
 
-## 3. Norma induzida e ângulo
+## 3. Induced norm and angle
 
-A norma induzida pelo produto interno é
+The norm induced by the inner product is
 
 $$
 \|x\| = \sqrt{\langle x, x \rangle} = \Big( \sum_i x_i^2 \Big)^{1/2}.
 $$
 
-E o ângulo $\theta$ entre $x$ e $y$ é definido implicitamente por
+And the angle $\theta$ between $x$ and $y$ is defined implicitly by
 
 $$
 \cos\theta = \frac{\langle x, y \rangle}{\|x\|\, \|y\|}.
 $$
 
-A *similaridade de cossenos* usada em busca semântica e em normalização de
-embeddings é exatamente esta razão. Quando os vetores estão pré-normalizados a
-norma unitária, $\cos\theta = x^\top y$ — ponto.
+The *cosine similarity* used in semantic search and embedding
+normalisation is exactly this ratio. When vectors are pre-normalised to
+unit norm, $\cos\theta = x^\top y$ — that's it.
 
-## 4. Camada linear é transformação afim
+## 4. A linear layer is an affine map
 
-Uma camada totalmente conectada com pesos $W \in \mathbb{R}^{m\times d}$ e
-viés $b \in \mathbb{R}^m$ implementa o mapa
+A fully connected layer with weights $W \in \mathbb{R}^{m\times d}$ and
+bias $b \in \mathbb{R}^m$ implements the map
 
 $$
 f : \mathbb{R}^d \to \mathbb{R}^m, \qquad f(x) = Wx + b.
 $$
 
-Esta é a definição clássica de transformação afim: linear ($x \mapsto Wx$)
-mais translação ($+\,b$). A *bias trick* — concatenar um $1$ ao final de $x$ e
-empilhar $b$ como última coluna de $W$ — converte uma transformação afim em
-puramente linear num espaço aumentado $\mathbb{R}^{d+1}$. Isto simplifica
-provas, mas em código mantém-se $b$ separado por eficiência (broadcast).
+This is the classical definition of an affine transformation: linear
+($x \mapsto Wx$) plus translation ($+\,b$). The *bias trick* — appending
+a $1$ to the end of $x$ and stacking $b$ as the last column of $W$ —
+turns an affine map into a purely linear one in the augmented space
+$\mathbb{R}^{d+1}$. This simplifies proofs, but in code we keep $b$
+separate for efficiency (it broadcasts).
 
-## 5. Onde isso vai
+## 5. Where this is going
 
-Toda a álgebra que vem a seguir — *attention*, *softmax*, normalização de
-camadas — repousa sobre estes três fatos: existe uma base, existe um produto
-interno, e camadas são afins. Internalize-os; não há atalho.
+All the algebra to come — attention, softmax, layer normalisation — rests
+on these three facts: there is a basis, there is an inner product, and
+layers are affine. Internalise them; there's no shortcut.

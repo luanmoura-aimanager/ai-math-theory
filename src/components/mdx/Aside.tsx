@@ -3,9 +3,9 @@ import type { ReactNode } from "react";
 type AsideType = "note" | "warning" | "history";
 
 const labels: Record<AsideType, string> = {
-  note: "Nota",
-  warning: "Atenção",
-  history: "Contexto histórico",
+  note: "Note",
+  warning: "Warning",
+  history: "Historical context",
 };
 
 export function Aside({

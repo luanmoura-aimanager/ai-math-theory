@@ -19,16 +19,16 @@ export function Sidebar({ chapters }: { chapters: ChapterMeta[] }) {
 
   return (
     <nav
-      aria-label="Conteúdo do curso"
+      aria-label="Course contents"
       className="h-full w-72 shrink-0 border-r border-[var(--rule)] bg-[var(--background-elev)] overflow-y-auto"
     >
       <div className="px-5 py-5 border-b border-[var(--rule)]">
         <Link href="/" className="block">
           <div className="text-[11px] uppercase tracking-[0.14em] text-[var(--muted)]">
-            Curso
+            Course
           </div>
           <div className="mt-1 text-[15px] font-semibold text-[var(--foreground)] leading-snug">
-            Do perceptron aos LLMs
+            From the Perceptron to LLMs
           </div>
         </Link>
       </div>
