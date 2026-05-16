@@ -160,6 +160,25 @@ checkmarks and they "pop in" on hydrate. Acceptable for MVP. If this becomes
 visually distracting, hide the checkmark column with `opacity-0` until the
 provider sets a `mounted` flag — don't try to read storage during SSR.
 
+### 7.5 MDX frontmatter must be stripped via `remark-frontmatter`
+
+The `.mdx` files in `content/` start with a YAML `--- ... ---` block.
+`gray-matter` reads it server-side in `src/lib/content.ts` for sidebar
+metadata, but `@next/mdx` itself does not know that YAML is metadata — left
+unhandled, the literal `title: "..."` etc. renders as a paragraph at the
+top of each session. `remark-frontmatter` (configured in `next.config.ts`)
+parses and discards the block before MDX hands content to React. Don't
+remove it from `remarkPlugins`. If you ever add `remark-mdx-frontmatter`
+on top, that exposes frontmatter as JS exports — we don't need that yet.
+
+### 7.6 Inline KaTeX must be visually loud
+
+Default KaTeX inline math at the surrounding text's font-size renders too
+small against 17px prose (`\mathbb{R}^n`, subscripts, fractions all
+compress). The override in `globals.css` bumps inline `.katex` to 1.12em
+and display `.katex` to 1.18em, and forces `color: inherit` so dark mode
+doesn't dim math relative to surrounding prose. Don't revert.
+
 ## 8. Future expansion (when DB+auth come back)
 
 **Trigger:** the moment Luan asks for "cross-device sync" or "I want my

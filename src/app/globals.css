@@ -226,17 +226,23 @@ body {
 
 /* ----- KaTeX overrides ---------------------------------------------------- */
 /*
- * Default KaTeX font-size matches surrounding text exactly; we bump display
- * math slightly so the reader's eye lands on it. We also center display math
- * and add breathing room so derivations feel paced, not crammed.
+ * Inline math at 1.04em was too timid against the 17px prose — superscripts
+ * and \mathbb{R} symbols shrank below comfortable reading size. 1.12em
+ * matches inline math weight to surrounding text without overwhelming it.
+ * `color: inherit` forces KaTeX to use the foreground token instead of the
+ * browser default black, which mattered in dark mode where math previously
+ * looked dimmer than the prose around it.
  */
-.prose-textbook .katex { font-size: 1.04em; }
+.prose-textbook .katex {
+  font-size: 1.12em;
+  color: inherit;
+}
 .prose-textbook .katex-display {
   margin: 1.4em 0;
   overflow-x: auto;
   overflow-y: hidden;
 }
 .prose-textbook .katex-display > .katex {
-  font-size: 1.12em;
+  font-size: 1.18em;
   display: inline-block;
 }
