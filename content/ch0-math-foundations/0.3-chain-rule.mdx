@@ -1,0 +1,292 @@
+---
+title: "0.3 — Regra da cadeia e grafos computacionais"
+chapter: 0
+order: 3
+estimatedMinutes: 22
+goal: "Escrever a regra da cadeia multivariada como soma sobre caminhos num DAG e computar ∂f/∂x de f(x) = sin(x²)·exp(x) à mão em modo reverso."
+prerequisites: ["ch0-math-foundations/0.2-matrix-calculus"]
+---
+
+## 1. Por que esta sessão existe
+
+Toda a maquinaria de *backpropagation* é exatamente uma coisa: a regra da
+cadeia aplicada a um grafo dirigido acíclico (DAG). Se você sair desta
+sessão sabendo escrever a regra da cadeia como uma *soma sobre caminhos no
+grafo*, todo o Capítulo 2 (MLPs e backprop) vira contabilidade, não mistério.
+
+A versão escalar você já conhece desde Cálculo I. O que vamos fazer aqui é
+levantá-la primeiro para o caso de várias variáveis intermediárias, depois
+para DAGs gerais, e por fim percorrer o exemplo canônico com caneta na mão.
+
+## 2. Refresher: a regra da cadeia escalar
+
+Se $y = f(g(x))$ e definimos $u = g(x)$, então $y = f(u)$ e
+
+$$
+\frac{dy}{dx} = \frac{dy}{du}\,\frac{du}{dx}.
+$$
+
+Conceitualmente, uma pequena perturbação $\Delta x$ produz $\Delta u \approx
+g'(x)\,\Delta x$, que por sua vez produz $\Delta y \approx f'(u)\,\Delta u
+= f'(u)\,g'(x)\,\Delta x$. No limite, a razão $\Delta y/\Delta x$ é o
+produto das duas derivadas locais.
+
+Exemplo de aquecimento: $y = \sin(x^2)$ com $u = x^2$, $y = \sin(u)$, dá
+
+$$
+\frac{dy}{dx} = \cos(u) \cdot 2x = 2x\cos(x^2).
+$$
+
+Nada novo. Mas observe a estrutura: *multiplicamos a derivada local em
+cada elo da cadeia*. Essa estrutura é a única coisa que sobrevive na
+generalização.
+
+## 3. Multivariada com uma entrada escalar
+
+Suponha agora que $y$ dependa de $n$ variáveis intermediárias
+$u_1, \dots, u_n$, e que cada $u_i$ dependa de $x$:
+
+$$
+y = h(u_1, u_2, \dots, u_n), \qquad u_i = g_i(x).
+$$
+
+Uma perturbação $\Delta x$ agora se propaga por $n$ caminhos paralelos —
+um para cada $u_i$ — e os efeitos se somam linearmente em primeira ordem:
+
+$$
+\Delta y \approx \sum_{i=1}^{n}
+\frac{\partial h}{\partial u_i}(u)\,\Delta u_i
+= \sum_{i=1}^{n}
+\frac{\partial h}{\partial u_i}(u)\,g_i'(x)\,\Delta x.
+$$
+
+Dividindo por $\Delta x$ e tomando o limite,
+
+$$
+\boxed{\;\frac{dy}{dx} = \sum_{i=1}^{n}
+\frac{\partial y}{\partial u_i}\,\frac{du_i}{dx}.\;}
+$$
+
+Essa é a *regra da cadeia multivariável com uma entrada*. Note que ela tem
+a forma de uma soma sobre os elos — e cada elo carrega o produto das
+derivadas locais ao longo dele. Isto é mais do que coincidência; é o caso
+particular de uma identidade muito mais geral, que vem a seguir.
+
+## 4. DAGs e a soma sobre caminhos
+
+Em um modelo qualquer de deep learning, a saída $L$ (digamos, a perda) é
+calculada a partir de uma entrada $x$ por uma sequência potencialmente
+complicada de operações intermediárias. Representamos essa computação como
+um *grafo dirigido acíclico*: cada nó é uma variável (escalar, vetor ou
+tensor), e cada aresta dirigida $u \to v$ indica que $v$ é função direta
+de $u$ (e possivelmente de outras variáveis).
+
+A pergunta é: como $L$ depende de $x$ ao final? A resposta, no caso
+escalar, é a *soma sobre caminhos*:
+
+$$
+\boxed{\;\frac{\partial L}{\partial x}
+= \sum_{\substack{\text{caminhos dirigidos} \\ p:\, x \to L}}
+\;\prod_{\text{aresta } u \to v \,\in\, p}
+\frac{\partial v}{\partial u}.\;}
+$$
+
+Em palavras: para descobrir como $L$ responde a $x$, percorra *todos* os
+caminhos dirigidos no DAG que saem de $x$ e chegam em $L$; em cada caminho,
+multiplique as derivadas parciais locais ao longo das arestas; some os
+resultados.
+
+A prova é uma indução fácil sobre a profundidade do grafo. Para um nó $v$
+diretamente alimentado por $u_1, \dots, u_k$,
+
+$$
+\frac{\partial v}{\partial x}
+= \sum_{i=1}^{k}
+\frac{\partial v}{\partial u_i}\,\frac{\partial u_i}{\partial x},
+$$
+
+e expandindo cada $\partial u_i/\partial x$ recursivamente até chegar em
+$x$, cada termo da expansão final corresponde a um caminho $x \to \cdots
+\to v$. Aplicando isto com $v = L$ obtemos a identidade.
+
+<Aside type="note">
+A soma sobre caminhos é a forma *declarativa* da regra da cadeia: ela diz
+"o resultado é isto" sem prescrever uma ordem de cálculo. *Modo direto* e
+*modo reverso* são duas estratégias diferentes de organizar essa soma para
+computá-la com eficiência — modo reverso é o que o `backward()` do PyTorch
+implementa, e é assintoticamente mais barato quando a saída é escalar
+(perda) e a entrada é um vetor de muitos parâmetros. Voltamos a isso no
+Capítulo 2.
+</Aside>
+
+<Aside type="history">
+A "soma sobre caminhos no grafo, com produto sobre arestas" deve soar
+familiar a quem viu a integral de caminho de Feynman: lá, a amplitude
+quântica de ir de $A$ a $B$ é uma soma sobre todas as trajetórias possíveis,
+cada uma ponderada por $e^{iS/\hbar}$. Aqui, o "peso" de cada caminho é o
+produto das derivadas locais. A analogia não é cosmética: ambas refletem a
+mesma estrutura combinatória da linearização de composições.
+</Aside>
+
+## 5. O grafo computacional como estrutura de dados
+
+Na prática, um framework de deep learning constrói o DAG em dois momentos:
+
+1. **Forward pass.** Avalia cada nó na ordem topológica, da entrada $x$
+   até a saída $L$, guardando os valores intermediários $u_i$ (porque
+   eles vão aparecer nas derivadas locais).
+2. **Backward pass.** Percorre o grafo na ordem topológica reversa,
+   acumulando $\partial L/\partial u_i$ em cada nó pela soma sobre os
+   filhos. Quando chega em $x$, tem $\partial L/\partial x$ pronto.
+
+Cada aresta carrega *uma derivada parcial local* (escalar, vetor ou
+matriz, conforme o tipo dos nós); cada nó é responsável por somar as
+contribuições que chegam dos seus filhos. Nada mais.
+
+A vantagem do framing-grafo sobre "decorar fórmulas de chain rule" é que
+ele escala: o mesmo algoritmo trata cadeias lineares, ramificações,
+convergências (vários caminhos chegando no mesmo nó) e qualquer DAG, sem
+caso especial.
+
+## 6. Exemplo trabalhado: $f(x) = \sin(x^2)\cdot e^{x}$
+
+Vamos calcular $\partial f/\partial x$ de duas maneiras: (a) pela regra da
+cadeia escalar direta, como check, e (b) pela soma sobre caminhos no DAG,
+para internalizar o método que vai escalar para redes profundas.
+
+### 6.1 Identificando os nós intermediários
+
+Decomponha a função em operações elementares:
+
+$$
+\begin{aligned}
+a &= x^2, \\
+b &= \sin(a), \\
+c &= e^{x}, \\
+f &= b\cdot c.
+\end{aligned}
+$$
+
+Note que $x$ aparece em *dois* lugares na fórmula original — uma vez dentro
+de $\sin(x^2)$ e uma vez em $e^x$. Isso vai virar uma ramificação no DAG.
+
+### 6.2 O DAG
+
+<Figure
+  src="/diagrams/0.3-dag.svg"
+  alt="Grafo dirigido acíclico para f(x) = sin(x²)·exp(x). Nó x à esquerda alimenta dois nós: a = x² (acima) e c = eˣ (abaixo). a alimenta b = sin(a), que junto com c alimenta o nó terminal f = b·c à direita."
+  caption="DAG da computação de f(x) = sin(x²)·exp(x). O nó x tem duas arestas de saída, refletindo as duas ocorrências de x na fórmula original. Há exatamente dois caminhos dirigidos de x até f."
+/>
+
+### 6.3 Derivadas locais (uma por aresta)
+
+Para cada aresta $u \to v$ do DAG, calculamos $\partial v/\partial u$
+sozinha, tratando os outros pais de $v$ como constantes:
+
+$$
+\begin{aligned}
+\frac{\partial a}{\partial x} &= 2x, &
+\frac{\partial b}{\partial a} &= \cos(a), \\[2pt]
+\frac{\partial c}{\partial x} &= e^{x}, &
+\frac{\partial f}{\partial b} &= c, \\[2pt]
+\frac{\partial f}{\partial c} &= b. & &
+\end{aligned}
+$$
+
+Cinco derivadas locais, uma para cada aresta. Cada uma é trivial em
+isolamento — é por isso que o método escala.
+
+### 6.4 Os caminhos de $x$ até $f$
+
+Inspecionando o DAG, há exatamente dois caminhos dirigidos:
+
+$$
+\begin{aligned}
+\textbf{Caminho 1:}\quad & x \to a \to b \to f, \\
+\textbf{Caminho 2:}\quad & x \to c \to f.
+\end{aligned}
+$$
+
+### 6.5 Contribuição de cada caminho
+
+A regra: multiplicar as derivadas locais ao longo das arestas do caminho.
+
+Caminho 1:
+
+$$
+\Big(\frac{\partial a}{\partial x}\Big)
+\Big(\frac{\partial b}{\partial a}\Big)
+\Big(\frac{\partial f}{\partial b}\Big)
+= (2x)\,\big(\cos(a)\big)\,(c)
+= 2x\,\cos(x^2)\,e^{x}.
+$$
+
+Caminho 2:
+
+$$
+\Big(\frac{\partial c}{\partial x}\Big)
+\Big(\frac{\partial f}{\partial c}\Big)
+= (e^{x})\,(b)
+= e^{x}\,\sin(x^2).
+$$
+
+### 6.6 Soma final
+
+$$
+\boxed{\;\frac{\partial f}{\partial x}
+= 2x\,\cos(x^2)\,e^{x} \;+\; \sin(x^2)\,e^{x}
+= e^{x}\big[\,2x\cos(x^2) + \sin(x^2)\,\big].\;}
+$$
+
+### 6.7 Conferência pela cadeia escalar direta
+
+Para validar, derivamos pelo produto e pela cadeia clássica. Com $f(x) =
+\sin(x^2)\cdot e^{x}$ e regra do produto $(uv)' = u'v + uv'$:
+
+$$
+\begin{aligned}
+\frac{df}{dx}
+&= \frac{d}{dx}[\sin(x^2)] \cdot e^{x}
+  \;+\; \sin(x^2) \cdot \frac{d}{dx}[e^{x}] \\
+&= 2x\cos(x^2) \cdot e^{x} \;+\; \sin(x^2)\cdot e^{x} \\
+&= e^{x}\big[\,2x\cos(x^2) + \sin(x^2)\,\big].
+\end{aligned}
+$$
+
+Idêntico. A soma sobre caminhos não é uma técnica diferente — é a *mesma*
+regra da cadeia, reorganizada de modo a tornar evidente a estrutura
+combinatória que existe quando uma variável aparece em vários lugares.
+
+## 7. Por que isso já é (quase) backprop
+
+Olhe novamente para o §6.5. Para computar a contribuição do Caminho 1,
+percorremos as arestas *no sentido $x \to f$* (modo direto). Mas note que
+poderíamos ter percorrido *no sentido $f \to x$* (modo reverso) e obtido o
+mesmo produto — a multiplicação é comutativa. O que muda é a *ordem em que
+os produtos parciais são acumulados*.
+
+Em modo reverso, começamos com $\partial f/\partial f = 1$ no nó terminal e
+caminhamos para trás, multiplicando por cada derivada local de aresta e
+*acumulando a soma* nos nós onde caminhos se encontram. O resultado em $x$
+é exatamente $\partial f/\partial x$.
+
+Vantagem do modo reverso quando há muitas entradas e uma saída (que é o
+caso de toda função de perda em ML): um único passo backward computa
+$\partial L/\partial \theta_j$ para *todos* os parâmetros $\theta_j$
+simultaneamente. O custo é proporcional ao número de arestas, não ao número
+de parâmetros. Esse é o ganho assintótico que torna o treinamento de
+redes com bilhões de parâmetros viável.
+
+Vamos formalizar o algoritmo no Capítulo 2. Por enquanto, basta saber que
+*backprop é soma sobre caminhos, computada da saída para a entrada*.
+
+<SelfTest>
+Seja $g(x, y) = (x + y)\cdot\sin(xy)$.
+
+1. Identifique os nós intermediários (sugestão: $u = x+y$, $v = xy$, $w =
+   \sin(v)$, $g = u\cdot w$) e desenhe o DAG.
+2. Liste todas as arestas e suas derivadas locais.
+3. Quantos caminhos dirigidos existem de $x$ até $g$? E de $y$ até $g$?
+4. Use a soma sobre caminhos para calcular $\partial g/\partial x$ e
+   $\partial g/\partial y$. Confira pelo cálculo direto via regra do produto.
+</SelfTest>
