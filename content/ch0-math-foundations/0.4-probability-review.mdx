@@ -1,0 +1,172 @@
+---
+title: "0.4 — Probability refresher: random variables, expectation, variance"
+chapter: 0
+order: 4
+estimatedMinutes: 18
+goal: "State E[X], Var[X], and the law of total expectation in both discrete and continuous forms, and apply each to a one-line ML example."
+prerequisites: ["ch0-math-foundations/0.3-chain-rule"]
+---
+
+## 1. The minimum vocabulary
+
+A *random variable* $X$ is a measurable function from a sample space
+$\Omega$ to $\mathbb{R}$ (or $\mathbb{R}^d$). In ML we almost never
+construct $\Omega$ explicitly — what we manipulate are the induced
+distributions $p(x)$. Two kinds matter:
+
+- **Discrete:** $X$ takes values in a countable set; $p(x)$ is a
+  probability mass function with $\sum_x p(x) = 1$.
+- **Continuous:** $X$ takes values in $\mathbb{R}^d$; $p(x)$ is a
+  probability density function with $\int p(x)\,dx = 1$. Density values
+  $p(x)$ are *not* probabilities — only integrals over sets are.
+
+The distinction is fundamental but the formulas to follow have parallel
+shapes; we'll write them side by side.
+
+## 2. Expectation
+
+The expectation of a function $g(X)$ under $p$:
+
+$$
+\mathbb{E}_{p}[g(X)] \;=\;
+\begin{cases}
+\displaystyle\sum_x g(x)\, p(x) & \text{discrete}, \\[6pt]
+\displaystyle\int g(x)\, p(x)\, dx & \text{continuous}.
+\end{cases}
+$$
+
+Three properties that we use without comment from here on:
+
+- **Linearity.** $\mathbb{E}[aX + bY] = a\,\mathbb{E}[X] + b\,\mathbb{E}[Y]$
+  for any $a, b \in \mathbb{R}$, *whether or not $X$ and $Y$ are
+  independent*. Linearity is the single most useful identity in this
+  course.
+- **Constant.** $\mathbb{E}[c] = c$.
+- **Independence ⇒ factorisation.** If $X \perp Y$, then
+  $\mathbb{E}[XY] = \mathbb{E}[X]\,\mathbb{E}[Y]$. The converse is false.
+
+ML example: the *empirical risk* on a training set of size $m$ is
+
+$$
+\hat R(\theta) = \frac{1}{m}\sum_{i=1}^{m} \ell(x_i, y_i; \theta)
+\;=\; \mathbb{E}_{\hat p}[\ell(X, Y; \theta)],
+$$
+
+where $\hat p$ is the empirical distribution placing mass $1/m$ on each
+training point. Expectation under the empirical distribution and "mean
+over the training set" are the *same object*. This will matter when we
+re-derive the cross-entropy loss as a sample-average MLE in §0.7.
+
+## 3. Variance and standard deviation
+
+$$
+\mathrm{Var}[X] \;=\; \mathbb{E}\big[(X - \mathbb{E}[X])^2\big].
+$$
+
+Expanding the square and using linearity gives the formula we'll use
+constantly:
+
+$$
+\boxed{\;\mathrm{Var}[X] = \mathbb{E}[X^2] - (\mathbb{E}[X])^2.\;}
+$$
+
+Derivation, no skipped steps. Let $\mu = \mathbb{E}[X]$. Then
+
+$$
+\begin{aligned}
+\mathrm{Var}[X]
+&= \mathbb{E}[(X-\mu)^2] \\
+&= \mathbb{E}[X^2 - 2\mu X + \mu^2] \\
+&= \mathbb{E}[X^2] - 2\mu\,\mathbb{E}[X] + \mu^2 \\
+&= \mathbb{E}[X^2] - 2\mu^2 + \mu^2 \\
+&= \mathbb{E}[X^2] - \mu^2.
+\end{aligned}
+$$
+
+Standard deviation: $\sigma_X = \sqrt{\mathrm{Var}[X]}$.
+
+Two properties:
+
+- **Scaling.** $\mathrm{Var}[aX + b] = a^2\,\mathrm{Var}[X]$. The shift
+  $b$ drops out (variance is translation-invariant); the scale gets
+  squared (variance scales like length-squared).
+- **Independence ⇒ additivity.** If $X \perp Y$, $\mathrm{Var}[X + Y] =
+  \mathrm{Var}[X] + \mathrm{Var}[Y]$. *Crucial* for understanding why
+  batch-norm and layer-norm work the way they do (Ch. 3).
+
+## 4. Covariance and correlation
+
+For two scalar random variables,
+
+$$
+\mathrm{Cov}(X, Y) \;=\; \mathbb{E}\big[(X - \mathbb{E}[X])(Y - \mathbb{E}[Y])\big]
+\;=\; \mathbb{E}[XY] - \mathbb{E}[X]\,\mathbb{E}[Y].
+$$
+
+Correlation is the unit-free version: $\rho_{XY} = \mathrm{Cov}(X,Y) /
+(\sigma_X \sigma_Y) \in [-1, 1]$.
+
+For a vector random variable $X \in \mathbb{R}^d$ with mean
+$\mu = \mathbb{E}[X]$, the *covariance matrix* is
+
+$$
+\Sigma \;=\; \mathbb{E}\big[(X-\mu)(X-\mu)^\top\big] \;\in\; \mathbb{R}^{d\times d}.
+$$
+
+By construction $\Sigma$ is symmetric positive-semidefinite. The
+diagonal contains the per-component variances; off-diagonals are
+pairwise covariances. This is the object PCA diagonalises and that
+Gaussian likelihoods invert.
+
+## 5. The law of total expectation (tower property)
+
+For any random variables $X, Y$,
+
+$$
+\boxed{\;\mathbb{E}[Y] \;=\; \mathbb{E}_X\!\big[\mathbb{E}[Y \mid X]\big].\;}
+$$
+
+In words: average over $Y$ given $X$, then average that conditional
+expectation over $X$. The two-step average equals the one-step average.
+
+Quick proof (continuous case):
+
+$$
+\begin{aligned}
+\mathbb{E}_X[\mathbb{E}[Y \mid X]]
+&= \int p(x) \left( \int y \, p(y \mid x)\, dy \right) dx \\
+&= \int\!\!\int y \, p(x)\, p(y \mid x)\, dy\, dx \\
+&= \int\!\!\int y \, p(x, y)\, dy\, dx \\
+&= \mathbb{E}[Y].
+\end{aligned}
+$$
+
+ML example: the noise term in a regression model is often given as
+$\mathbb{E}[\varepsilon \mid X] = 0$. The tower property then gives
+$\mathbb{E}[\varepsilon] = 0$ unconditionally — but the converse is not
+true. This distinction is at the heart of why ordinary least squares
+gives an unbiased estimator under the conditional-mean-zero assumption.
+
+## 6. Why this matters going forward
+
+Almost every loss in ML is an expectation. Almost every regularisation
+trick is a variance manipulation. Cross-entropy (§0.7) is an
+expectation. KL divergence (§0.6) is an expectation. Dropout
+(Ch. 3) is a variance argument. Attention scores (Ch. 6) are
+normalised so that they form a probability distribution and have a
+well-defined expectation over values.
+
+Keep linearity of expectation as your reflex move; it solves more
+problems than any other identity in this course.
+
+<SelfTest>
+Let $X$ be a Bernoulli random variable with $\mathbb{P}(X = 1) = p$
+and $\mathbb{P}(X = 0) = 1 - p$.
+
+1. Compute $\mathbb{E}[X]$ and $\mathrm{Var}[X]$ from scratch.
+2. Let $Y = aX + b$. Compute $\mathbb{E}[Y]$ and $\mathrm{Var}[Y]$.
+3. Suppose $X_1, \dots, X_n$ are i.i.d. Bernoulli($p$) and
+   $S = \sum_i X_i$. Use linearity to get $\mathbb{E}[S]$, and
+   independence to get $\mathrm{Var}[S]$. Verify that $\mathrm{Var}[S]
+   = n\,p(1-p)$.
+</SelfTest>

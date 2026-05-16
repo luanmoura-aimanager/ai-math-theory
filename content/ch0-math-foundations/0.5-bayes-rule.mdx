@@ -1,0 +1,172 @@
+---
+title: "0.5 — Joint, marginal, conditional, and Bayes' rule"
+chapter: 0
+order: 5
+estimatedMinutes: 18
+goal: "State Bayes' rule, derive it from the joint, and read off the implicit generative story behind the binary classifier p(y=1|x) = σ(wᵀx)."
+prerequisites: ["ch0-math-foundations/0.4-probability-review"]
+---
+
+## 1. Joints, marginals, and conditionals
+
+Given a joint distribution $p(x, y)$ on a pair $(X, Y)$:
+
+- The **marginal** of $X$ is obtained by summing/integrating $Y$ out:
+  $$
+  p(x) = \sum_y p(x, y) \quad\text{or}\quad \int p(x, y)\, dy.
+  $$
+  Marginalisation is *the* universal operation for getting rid of a
+  variable you don't care about right now.
+
+- The **conditional** of $Y$ given $X = x$ is the joint normalised by
+  the marginal:
+  $$
+  p(y \mid x) = \frac{p(x, y)}{p(x)}, \qquad \text{defined when } p(x) > 0.
+  $$
+  Conditioning is *the* universal operation for asking "what do I know
+  about $Y$ once I've observed $X$?".
+
+These two are dual: marginalising forgets, conditioning updates.
+
+## 2. The product rule (chain rule of probability)
+
+Rearranging the definition of conditional probability gives the *product
+rule*:
+
+$$
+\boxed{\;p(x, y) = p(x)\,p(y \mid x) = p(y)\,p(x \mid y).\;}
+$$
+
+The two factorisations exist because we can condition in either
+direction. The identity itself is trivial — but equating the two
+right-hand sides is exactly Bayes' rule.
+
+## 3. Bayes' rule
+
+Equate the two factorisations of the joint:
+
+$$
+p(x)\,p(y \mid x) = p(y)\,p(x \mid y),
+$$
+
+and solve for the conditional we typically *want* in inference:
+
+$$
+\boxed{\;p(y \mid x) = \frac{p(x \mid y)\, p(y)}{p(x)}.\;}
+$$
+
+The denominator $p(x)$ is just normalisation; expanded via
+marginalisation,
+
+$$
+p(x) = \sum_{y'} p(x \mid y')\, p(y'),
+$$
+
+it is the prior-weighted average likelihood of observing $x$ across all
+hypotheses. The four named pieces:
+
+- $p(y)$ — **prior**, what you believed about $Y$ before seeing data.
+- $p(x \mid y)$ — **likelihood**, the model's probability of generating
+  $x$ given hypothesis $y$.
+- $p(y \mid x)$ — **posterior**, updated belief about $Y$ after
+  observing $x$.
+- $p(x)$ — **evidence** / marginal likelihood, a normaliser.
+
+In ML the model is usually parametrised by $\theta$ and we write
+$p(x \mid \theta)$ for the likelihood; $\theta$ replaces $y$ in the
+formula and prior/posterior become priors/posteriors over parameters.
+
+## 4. The binary classifier $p(y = 1 \mid x) = \sigma(w^\top x)$
+
+This is the model behind logistic regression and behind the output layer
+of every binary deep classifier. The self-test in the roadmap asks: what
+is the implicit generative story?
+
+The answer is *not* "we drew $x$ from some Gaussian and applied a
+deterministic rule". The model is more honest than that: it directly
+specifies the posterior $p(y \mid x)$ and says nothing at all about
+$p(x)$. This is the **discriminative** stance: model
+$p(y \mid x)$ directly; don't bother modelling how $x$ came to be.
+
+Compare with the **generative** stance, which would model $p(x \mid y)$
+and $p(y)$, then derive the posterior by Bayes' rule:
+
+$$
+p(y \mid x) = \frac{p(x \mid y)\, p(y)}{p(x)}.
+$$
+
+For example, if we assumed $X \mid Y = y \sim \mathcal{N}(\mu_y,
+\Sigma)$ (Gaussian class-conditionals with shared covariance) and a
+Bernoulli prior over $Y$, then a few lines of algebra (which we don't
+need today) give
+
+$$
+p(y = 1 \mid x) = \sigma(w^\top x + b)
+$$
+
+for specific $w$ and $b$ derived from $\mu_0, \mu_1, \Sigma$, and the
+prior. The logistic-regression *functional form* is consistent with a
+Gaussian generative story — but logistic regression itself doesn't
+commit to that story.
+
+The point: $p(y \mid x) = \sigma(w^\top x)$ is *the same conditional* as
+the one Bayes' rule would produce from a class-conditional Gaussian
+generative model, but logistic regression learns $w$ directly from the
+data without ever estimating the Gaussian parameters. Discriminative
+training is often more sample-efficient when all you need is the
+decision rule.
+
+<Aside type="note">
+Most of deep learning, including LLMs, is discriminative — even when the
+output looks generative. A language model assigns
+$p(x_{t+1} \mid x_{1:t})$: that's a conditional, learned by maximum
+likelihood on a corpus, with no explicit generative process for $x_{1:t}$
+itself. The chain rule of probability stitches the conditionals into a
+joint, but the joint is *induced* by the conditionals, not directly
+modelled.
+</Aside>
+
+## 5. Independence and conditional independence
+
+$X$ and $Y$ are **independent** ($X \perp Y$) iff
+
+$$
+p(x, y) = p(x)\, p(y) \quad \text{for all } x, y,
+$$
+
+equivalently $p(y \mid x) = p(y)$ for all $x$ with $p(x) > 0$. Observing
+$X$ tells you nothing new about $Y$.
+
+$X$ and $Y$ are **conditionally independent given $Z$**
+($X \perp Y \mid Z$) iff
+
+$$
+p(x, y \mid z) = p(x \mid z)\, p(y \mid z) \quad \text{for all } z.
+$$
+
+Conditional independence is the structural primitive behind graphical
+models, the naive-Bayes classifier (assumes features are independent
+given the label), and the layered structure of probabilistic deep models
+later on. Worth keeping in mind even when you don't draw a graph.
+
+## 6. Where this is going
+
+Bayes' rule is the lens through which we will read MLE, MAP, variational
+inference, and the discriminative-versus-generative distinction that
+runs all the way through the course. Cross-entropy as a loss (§0.7) is
+MLE on a discriminative model. The score function in policy gradient
+(Ch. 9) is the gradient of a log-likelihood. The "likelihood" of an
+LLM output token is the conditional next-token probability. Same
+machinery, used many times.
+
+<SelfTest>
+A test for a rare disease has 99% sensitivity ($p(\text{positive} \mid
+\text{disease}) = 0.99$) and 99% specificity ($p(\text{negative} \mid
+\text{healthy}) = 0.99$). The disease has prevalence $p(\text{disease})
+= 0.001$ in the screened population. A patient tests positive.
+
+1. Identify the prior, likelihood, and what you want (the posterior).
+2. Compute $p(\text{disease} \mid \text{positive})$ using Bayes' rule.
+3. The answer is surprisingly low. Why? Where does the false-positive
+   rate enter?
+</SelfTest>

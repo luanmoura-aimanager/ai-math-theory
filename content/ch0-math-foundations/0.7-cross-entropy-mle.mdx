@@ -1,0 +1,198 @@
+---
+title: "0.7 — Cross-entropy as a loss, and why minimising it is MLE"
+chapter: 0
+order: 7
+estimatedMinutes: 18
+goal: "Show that −Σᵢ log p(yᵢ|xᵢ; θ) is the cross-entropy between the empirical distribution and the model, so MLE and cross-entropy minimisation are the same objective."
+prerequisites: ["ch0-math-foundations/0.6-entropy-kl"]
+---
+
+## 1. The starting point: i.i.d. data and a parametric model
+
+We have a training set $\mathcal{D} = \{(x_i, y_i)\}_{i=1}^{m}$ assumed
+to be i.i.d. draws from some unknown joint $p_{\text{data}}(x, y)$. We
+specify a parametric *conditional* model $q_\theta(y \mid x)$ and want to
+fit $\theta$ to the data.
+
+(I write $q$ instead of $p$ for the model to keep the truth/model
+distinction explicit — same convention as §0.6.)
+
+## 2. The likelihood
+
+Under the i.i.d. assumption, the joint probability the model assigns to
+the labels given the inputs factorises:
+
+$$
+q_\theta(y_1, \dots, y_m \mid x_1, \dots, x_m)
+\;=\; \prod_{i=1}^{m} q_\theta(y_i \mid x_i).
+$$
+
+This is the **conditional likelihood** of the labels under the model. As
+a function of $\theta$ with the data fixed, it is denoted
+$\mathcal{L}(\theta)$.
+
+## 3. Maximum likelihood estimation (MLE)
+
+Maximum likelihood picks $\theta$ that maximises $\mathcal{L}(\theta)$.
+Products are awful to differentiate, so take the log (which is monotone
+and so doesn't change the argmax):
+
+$$
+\hat\theta_{\text{MLE}}
+\;=\; \arg\max_\theta\; \log\prod_{i=1}^{m} q_\theta(y_i \mid x_i)
+\;=\; \arg\max_\theta\; \sum_{i=1}^{m} \log q_\theta(y_i \mid x_i).
+$$
+
+Flip the sign to turn maximisation into minimisation (the convention in
+optimisation):
+
+$$
+\boxed{\;\hat\theta_{\text{MLE}}
+= \arg\min_\theta\; -\sum_{i=1}^{m} \log q_\theta(y_i \mid x_i).\;}
+$$
+
+This is the **negative log-likelihood** (NLL). Divide by $m$ to get the
+per-sample version (gradients are then unitless in batch size):
+
+$$
+\hat\theta_{\text{MLE}}
+= \arg\min_\theta\; -\frac{1}{m}\sum_{i=1}^{m} \log q_\theta(y_i \mid x_i).
+$$
+
+## 4. The empirical distribution
+
+Define the empirical distribution as the discrete measure that puts mass
+$1/m$ on each training point:
+
+$$
+\hat p(x, y) \;=\; \frac{1}{m}\sum_{i=1}^{m} \mathbb{1}\{x = x_i,\, y = y_i\}.
+$$
+
+Expectation under $\hat p$ is exactly "average over the training set",
+which we already noted in §0.4:
+
+$$
+\mathbb{E}_{(X, Y)\sim \hat p}[f(X, Y)] \;=\; \frac{1}{m}\sum_{i=1}^{m} f(x_i, y_i).
+$$
+
+## 5. NLL is cross-entropy
+
+Apply this to $f(x, y) = -\log q_\theta(y \mid x)$:
+
+$$
+\begin{aligned}
+-\frac{1}{m}\sum_{i=1}^{m} \log q_\theta(y_i \mid x_i)
+&= \mathbb{E}_{(X, Y)\sim \hat p}\!\left[-\log q_\theta(Y \mid X)\right] \\
+&= -\sum_{(x, y)} \hat p(x, y)\, \log q_\theta(y \mid x).
+\end{aligned}
+$$
+
+That last line is the cross-entropy between $\hat p$ and the
+conditional model $q_\theta$, written with the joint factored as
+$\hat p(x, y) = \hat p(x)\,\hat p(y \mid x)$:
+
+$$
+\begin{aligned}
+-\sum_{x, y} \hat p(x, y) \log q_\theta(y \mid x)
+&= -\sum_x \hat p(x) \sum_y \hat p(y \mid x) \log q_\theta(y \mid x) \\
+&= \mathbb{E}_{X \sim \hat p}\!\left[ H[\hat p(\cdot \mid X),\,
+   q_\theta(\cdot \mid X)] \right],
+\end{aligned}
+$$
+
+i.e. the input-averaged cross-entropy between the empirical conditional
+$\hat p(y \mid x)$ and the model conditional $q_\theta(y \mid x)$.
+
+Putting it together:
+
+$$
+\boxed{\;\hat\theta_{\text{MLE}}
+\;=\; \arg\min_\theta\;
+\mathbb{E}_{X \sim \hat p}\!\left[ H[\hat p(\cdot \mid X),\,
+q_\theta(\cdot \mid X)] \right].\;}
+$$
+
+**MLE on a discriminative model is exactly cross-entropy minimisation
+on the empirical distribution.** The two names refer to the same
+gradient.
+
+## 6. Why the model's "missing" entropy term doesn't matter for gradients
+
+Recall from §0.6 that $H[\hat p, q_\theta] = H[\hat p] +
+\mathrm{KL}(\hat p\,\|\,q_\theta)$. So minimising cross-entropy over
+$\theta$ is identical to minimising $\mathrm{KL}(\hat p\,\|\,q_\theta)$,
+since $H[\hat p]$ doesn't depend on $\theta$ and drops out of the
+gradient. Three names for the same optimisation:
+
+- MLE (statistics).
+- Cross-entropy minimisation (information theory).
+- Forward KL minimisation against the empirical distribution (Bayesian
+  ML).
+
+## 7. The two cases you'll see daily
+
+**Binary classification** with $y \in \{0, 1\}$ and
+$q_\theta(y = 1 \mid x) = \hat y$ for some predicted probability:
+
+$$
+-\log q_\theta(y \mid x) =
+\begin{cases}
+-\log \hat y & \text{if } y = 1, \\
+-\log (1 - \hat y) & \text{if } y = 0.
+\end{cases}
+$$
+
+These two cases unify into one expression — the **binary cross-entropy**
+loss:
+
+$$
+\boxed{\;\ell(\hat y, y) = -\,y \log \hat y \;-\; (1 - y)\log(1 - \hat y).\;}
+$$
+
+**Multi-class classification** with $y \in \{1, \dots, K\}$ and
+$q_\theta(y = k \mid x) = \hat y_k$ for predicted class probabilities
+summing to 1 (e.g. coming from a softmax — see Ch. 1):
+
+$$
+\boxed{\;\ell(\hat y, y) = -\sum_{k=1}^{K} \mathbb{1}\{y = k\}\, \log \hat y_k
+\;=\; -\log \hat y_y.\;}
+$$
+
+The last form ($-\log \hat y_y$) is what you read in code: take the
+predicted probability of the true class, take its log, negate. That's
+PyTorch's `F.cross_entropy` (modulo the fact that PyTorch's
+`cross_entropy` expects pre-softmax logits and applies the softmax
+internally for numerical stability — more on that in §0.10).
+
+## 8. What we've earned
+
+The same loss object reads three ways depending on the lens. Picking
+the right lens unstrucks problems:
+
+- **Statistical lens (MLE):** what data-generating assumption does my
+  loss implicitly make? E.g. mean-squared error ↔ Gaussian noise (Ch. 1).
+- **Information-theoretic lens (cross-entropy / KL):** how far is my
+  model from the empirical distribution? Variational and distillation
+  methods sit here.
+- **Operational lens (NLL):** what does the gradient look like and how do
+  I implement it? See §0.10 for the stability tricks that make this
+  practical.
+
+For every loss in the rest of the course, ask which of the three views
+makes the calculation easy. Use that one.
+
+<SelfTest>
+A neural network outputs a single logit $z$ (a real number, no
+activation). The label is binary, $y \in \{0, 1\}$.
+
+1. Apply the sigmoid: $\hat y = \sigma(z) = 1/(1 + e^{-z})$. Write the
+   binary cross-entropy $\ell(z, y)$ purely in terms of $z$ and $y$,
+   eliminating $\hat y$.
+2. Compute $\partial \ell / \partial z$. You should get a famously
+   clean expression involving $\sigma(z) - y$. This is the identity
+   that makes logistic regression numerically and didactically pleasant.
+3. Sanity check: at $y = 1$, the gradient is $-(1 - \sigma(z))$; at
+   $y = 0$, it is $\sigma(z)$. Why does this match the intuition that
+   "the loss pushes the logit up when $y = 1$ and down when $y = 0$,
+   proportionally to how wrong we are"?
+</SelfTest>
