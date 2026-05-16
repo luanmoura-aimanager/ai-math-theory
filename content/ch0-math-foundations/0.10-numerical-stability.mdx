@@ -1,0 +1,205 @@
+---
+title: "0.10 — Numerical stability: log-sum-exp, fp16, and bf16"
+chapter: 0
+order: 10
+estimatedMinutes: 26
+goal: "Compute log-sum-exp and softmax in a numerically stable way, and know when to choose fp16 vs bf16 for deep-learning workloads."
+prerequisites: ["ch0-math-foundations/0.7-cross-entropy-mle"]
+---
+
+## 1. Why this session exists
+
+Most of what we've derived so far is mathematically clean and numerically *dangerous*. The cross-entropy of a softmax (0.7), the KL divergence (0.6), the gradient of the log-likelihood (0.7) — every one of them is the composition
+
+$$
+\log \,\Bigl(\sum_i \exp(\text{something})\Bigr),
+$$
+
+which overflows the moment any single logit gets large. We need a small trick (log-sum-exp) and a small amount of floating-point fluency (fp32 vs fp16 vs bf16) to make this work at the scale of a real network.
+
+This is the last session of Chapter 0. After it, every loss we write will use the stable form, and we'll know why training in bf16 became standard.
+
+---
+
+## 2. The two failure modes: overflow and underflow
+
+A floating-point number stores a sign, an exponent, and a mantissa. Two characteristic numbers matter:
+
+- **Max finite value** — anything larger gets clamped to $\pm \infty$.
+- **Min positive normal value** — anything smaller positive underflows (to a subnormal, eventually to $0$).
+
+For our three formats:
+
+- **fp32 (single precision)**: max $\approx 3.4 \times 10^{38}$, min positive normal $\approx 1.2 \times 10^{-38}$, relative precision $\approx 6 \times 10^{-8}$.
+- **fp16 (IEEE half precision)**: max $\approx 65504$, min positive normal $\approx 6.1 \times 10^{-5}$, relative precision $\approx 10^{-3}$.
+- **bf16 (brain float)**: max $\approx 3.4 \times 10^{38}$, min positive normal $\approx 1.2 \times 10^{-38}$, relative precision $\approx 8 \times 10^{-3}$.
+
+So in fp32, $\exp(x)$ overflows for $x > \ln(3.4 \times 10^{38}) \approx 88.7$. In fp16 it overflows already for $x > \ln(65504) \approx 11.09$. Underflow of $\exp(-x)$ happens at $x > 88.7$ in fp32 and $x > 9.7$ in fp16.
+
+Both directions bite during training. A logit of value $20$ inside a classifier — completely ordinary, just a confident prediction — overflows fp16 if you naively exponentiate it.
+
+---
+
+## 3. The log-sum-exp identity
+
+We want to compute
+
+$$
+L(x) = \log \sum_{i=1}^N e^{x_i}, \qquad x \in \mathbb{R}^N,
+$$
+
+robustly. The naive recipe (exponentiate, sum, log) is the dangerous one. The fix is one line of algebra.
+
+Let $m = \max_i x_i$. Then
+
+$$
+\sum_i e^{x_i}
+= \sum_i e^{m + (x_i - m)}
+= e^m \sum_i e^{x_i - m}.
+$$
+
+Taking the log,
+
+$$
+\boxed{\
+\log \sum_i e^{x_i} \;=\; \max_i x_i \;+\; \log \sum_i e^{x_i - \max_i x_i}.
+\ }
+$$
+
+Why this is stable:
+
+- Every shifted exponent $x_i - m$ is $\le 0$, so $e^{x_i - m} \in (0, 1]$ — no overflow.
+- At least one term has $x_i - m = 0$, contributing $e^0 = 1$ to the sum, so the argument of the outer log is $\ge 1$ — no $\log 0$.
+- The only "large" number, the global maximum $m$, is added back outside the log, where it stays in the safe linear regime.
+
+Algebraically this is the same expression we started with. Numerically it is night and day. *Always* compute log-sum-exp this way.
+
+---
+
+## 4. Stable softmax and the fused softmax + cross-entropy
+
+**Softmax.** Defined entry-wise as
+
+$$
+\operatorname{softmax}(x)_i = \frac{e^{x_i}}{\sum_j e^{x_j}}.
+$$
+
+A small but important invariance:
+
+**Lemma (shift invariance).** For any scalar $c$, $\operatorname{softmax}(x + c \mathbf{1}) = \operatorname{softmax}(x)$.
+
+*Proof.* $\dfrac{e^{x_i + c}}{\sum_j e^{x_j + c}} = \dfrac{e^c\, e^{x_i}}{e^c \sum_j e^{x_j}} = \dfrac{e^{x_i}}{\sum_j e^{x_j}}.$ $\blacksquare$
+
+This lets us pick $c = -m$ with $m = \max_i x_i$, giving the **numerically stable softmax**:
+
+$$
+\operatorname{softmax}(x)_i = \frac{e^{x_i - m}}{\sum_j e^{x_j - m}}.
+$$
+
+Now every exponent in numerator and denominator is in $(0, 1]$, and the denominator is $\ge 1$.
+
+**Cross-entropy on logits.** For target class $y$ and logits $x \in \mathbb{R}^N$, the per-example cross-entropy loss is
+
+$$
+\ell(x, y) = -\log \operatorname{softmax}(x)_y = -x_y + \log \sum_j e^{x_j}.
+$$
+
+Substituting log-sum-exp,
+
+$$
+\boxed{\
+\ell(x, y) \;=\; -x_y \;+\; m \;+\; \log \sum_j e^{x_j - m},
+\quad m = \max_j x_j.
+\ }
+$$
+
+This is exactly what `F.cross_entropy(logits, target)` in PyTorch computes — as a **single fused op** that takes logits, not probabilities, and never forms the softmax explicitly. Doing so by hand (probabilities first, then `.log()`) is the most common cause of NaNs in custom losses.
+
+<Aside type="warning">
+Two patterns to avoid:
+
+1. `loss = -log(softmax(x))[y]` — applies log *after* forming probabilities. Any logit large enough to dominate sums of others numerically gives a probability that rounds to $1.0$, and other classes round to $0.0$, then `log(0) = -inf`.
+2. `loss = -log(P)` where `P` was computed with a separate `softmax` call.
+
+Always call the cross-entropy directly on the logits.
+</Aside>
+
+**Gradient sanity check.** From 0.7 we already know
+
+$$
+\frac{\partial \ell}{\partial x_i} = \operatorname{softmax}(x)_i - \mathbb{1}[i = y].
+$$
+
+This expression is itself stable: it's a difference of two values in $[0, 1]$. The implementation simply needs the *stable* softmax above.
+
+---
+
+## 5. Floating-point formats compared
+
+Three formats, all 32 or 16 bits, all IEEE-flavoured but distributed differently.
+
+**fp32.** $1$ sign + $8$ exponent + $23$ mantissa bits. The reliable baseline. Big enough dynamic range that overflow rarely happens at training time; precise enough that accumulating gradients over millions of steps doesn't drift.
+
+**fp16.** $1 + 5 + 10$. Half the bits, but only $5$ exponent bits — so the *range* shrinks dramatically: positive normals lie roughly between $6 \times 10^{-5}$ and $6.5 \times 10^4$. The mantissa is generous ($10$ bits, $\sim 10^{-3}$ relative precision) but the range is the limiting factor. Used heavily for inference; needs **loss scaling** for training.
+
+**bf16 (brain float).** $1 + 8 + 7$. Same exponent layout as fp32, so the same dynamic range. The mantissa is only $7$ bits, giving $\sim 8 \times 10^{-3}$ relative precision — noisier than fp16. But noise the optimiser can average over; underflow it cannot.
+
+A cartoon comparison:
+
+- **fp32**: precise, wide range.
+- **fp16**: precise, narrow range. Underflows aggressively on small gradients.
+- **bf16**: noisy, wide range. Almost a drop-in replacement for fp32 in deep nets.
+
+For training large language models, bf16 is the modern default — TPUs from the start, NVIDIA Ampere (A100) and later, AMD MI200+, etc. The reason is the dynamic range: gradients during pre-training of a Transformer regularly span $10^{-10}$ to $10^{1}$, which fp16 cannot hold.
+
+---
+
+## 6. Mixed-precision training (a forward look)
+
+Modern training rarely uses one precision throughout. The standard recipe ("mixed precision"):
+
+1. Keep a **master copy** of the weights in fp32.
+2. Cast a working copy to **bf16** (or fp16) for the forward and backward passes.
+3. Accumulate the loss in **fp32**.
+4. Cast gradients back to fp32 for the optimiser step.
+
+Memory and bandwidth halve for activations and weights during the forward/backward pass; the precision-sensitive optimiser state stays in fp32.
+
+For fp16, an extra trick is needed: **loss scaling**. Multiply the scalar loss by some $S > 1$ before calling `.backward()`. Every gradient is then $S$ times larger in fp16, lifted out of the underflow region. After backward, divide gradients by $S$ before stepping the optimiser. PyTorch's `torch.cuda.amp.GradScaler` automates this with adaptive scale selection.
+
+bf16 usually does not need loss scaling — its dynamic range already covers what fp32 sees.
+
+<Aside type="history">
+The bfloat16 format was designed at Google for the first generation of TPUs (around 2017). The motivating observation: in deep nets, the *exponent* width matters more than the *mantissa* width because gradients span many orders of magnitude during training. Throwing away mantissa bits to keep the fp32 exponent layout turned out to be a near-free swap — the model just sees a little more quantisation noise, which the optimiser absorbs.
+</Aside>
+
+---
+
+## 7. Takeaways
+
+1. **Never** compute $\log \sum_i e^{x_i}$ naively. Subtract the max first.
+2. **Never** compute cross-entropy as $-\log \operatorname{softmax}(x)_y$ in two steps; use the fused form on logits.
+3. **fp16** for inference and for layers known to live in a small dynamic range. **bf16** for training large models. **fp32** for the optimiser state and the master weights.
+4. Mixed-precision training: fp32 master copy, bf16 (or fp16-with-loss-scaling) compute. Roughly $2\times$ throughput on modern GPUs at essentially the same final accuracy.
+
+With this in hand, Chapter 0 is done. Chapter 1 starts with the perceptron, the linear classifier, and the first end-to-end optimisation problem we'll write down — and we'll use the stable softmax + cross-entropy from §4 the moment we generalise to multi-class.
+
+---
+
+<SelfTest>
+
+**(a)** Let $x = (1000, 1001, 1002)$. Walk through naive `exp(x)`, point out exactly which step overflows in fp32, then compute the stable softmax. Verify the result equals $\operatorname{softmax}\bigl((0, 1, 2)\bigr) = \bigl(\tfrac{1}{1 + e + e^2},\, \tfrac{e}{1 + e + e^2},\, \tfrac{e^2}{1 + e + e^2}\bigr)$.
+
+**(b)** Prove the shift-invariance lemma of §4 directly, and explain how it justifies the $-m$ subtraction *without* changing the value of any downstream loss.
+
+**(c)** Suppose you compute a cross-entropy in fp16 as `log(softmax(x))[y]` (two-step). One logit is $x_i = 20$. Trace what happens: (i) what is $e^{20}$ in fp16, (ii) what does the softmax over $(20, 0, 0)$ become numerically, (iii) what does `log` of the result return? Then redo it using the fused log-sum-exp form and show no overflow occurs.
+
+**(d)** In fp16, the smallest positive normal is $\sim 6 \times 10^{-5}$. If gradient magnitudes during a training step are typically $\sim 10^{-7}$, what fraction of them underflow to zero? Show that scaling the loss by $S = 2^{16} \approx 6.5 \times 10^4$ before backward eliminates the underflow, and that dividing gradients by $S$ before the optimiser step recovers the correct update.
+
+**(e) (Stretch.)** For $x \in \mathbb{R}^N$, prove the identity
+$$
+\nabla_x \log \sum_j e^{x_j} = \operatorname{softmax}(x).
+$$
+Use 0.7 if you'd like, or differentiate the stable form $m + \log \sum_j e^{x_j - m}$ directly and check that the $m$-dependence cancels.
+
+</SelfTest>

@@ -1,0 +1,201 @@
+---
+title: "0.9 — Almost-everywhere differentiability and the ReLU"
+chapter: 0
+order: 9
+estimatedMinutes: 22
+goal: "Understand why ReLU is fine for gradient descent even though it isn't differentiable at zero, via the language of subgradients and 'almost everywhere'."
+prerequisites: ["ch0-math-foundations/0.2-matrix-calculus", "ch0-math-foundations/0.8-convexity-jensen-steepest"]
+---
+
+## 1. Why this session exists
+
+The **ReLU**, $\sigma(x) = \max(0, x)$, is the default nonlinearity in modern deep learning. It has a *kink* at $x = 0$ where the left and right derivatives disagree, so strictly speaking the derivative does not exist there. Yet we train trillion-parameter models full of ReLUs every day with vanilla gradient descent, and nobody loses sleep over this.
+
+This session explains why. Two ingredients:
+
+1. The bad set — points where the derivative fails — is **negligible** in the precise sense of having Lebesgue measure zero. Functions like ReLU are *differentiable almost everywhere*.
+2. For **convex** non-smooth functions there is a clean generalisation of the gradient called the **subgradient**, which exists everywhere in the interior of the domain, is single-valued where $f$ is differentiable, and is multi-valued exactly at the kinks.
+
+Together: with probability one, autograd computes a perfectly good gradient; at the measure-zero anomalies, any value in the subdifferential set works.
+
+---
+
+## 2. Differentiability recap (one paragraph)
+
+A function $f : \mathbb{R}^n \to \mathbb{R}$ is **differentiable at** $x$ if there is a row vector $A \in \mathbb{R}^{1 \times n}$ such that
+
+$$
+\lim_{h \to 0} \frac{\bigl|f(x + h) - f(x) - A h\bigr|}{\lVert h \rVert} = 0.
+$$
+
+When the limit holds, the unique such $A$ is the Jacobian $\partial f / \partial x$ from session 0.2 (numerator convention). Differentiability at $x$ implies all directional derivatives exist *and* depend linearly on the direction. Existence of one-sided derivatives that disagree is therefore a failure of differentiability.
+
+---
+
+## 3. The bend at zero
+
+For ReLU,
+
+$$
+\sigma(x) =
+\begin{cases}
+0, & x \le 0, \\
+x, & x \ge 0.
+\end{cases}
+$$
+
+Computing one-sided derivatives at $x = 0$:
+
+$$
+\lim_{h \to 0^+} \frac{\sigma(0+h) - \sigma(0)}{h} = \lim_{h \to 0^+} \frac{h}{h} = 1,
+\qquad
+\lim_{h \to 0^-} \frac{\sigma(0+h) - \sigma(0)}{h} = \lim_{h \to 0^-} \frac{0}{h} = 0.
+$$
+
+These disagree, so $\sigma$ is **not differentiable at** $x = 0$. Everywhere else,
+
+$$
+\sigma'(x) = \begin{cases} 0 & x < 0, \\ 1 & x > 0. \end{cases}
+$$
+
+The exceptional set is the single point $\{0\}$.
+
+---
+
+## 4. "Almost everywhere" — what we need from measure theory
+
+We don't need the full Lebesgue machinery; we just need a robust notion of "negligibly small subset of $\mathbb{R}^n$".
+
+**Definition (measure zero).** A set $N \subseteq \mathbb{R}^n$ has **Lebesgue measure zero** if for every $\varepsilon > 0$ there exists a *countable* collection of open boxes $\{B_k\}$ whose union covers $N$ and whose total volume satisfies $\sum_k \operatorname{vol}(B_k) < \varepsilon$.
+
+**Two facts to internalise.**
+
+1. Any finite or countably infinite set in $\mathbb{R}^n$ has measure zero. (Cover the $k$-th point with a box of volume $\varepsilon / 2^k$.)
+2. Any countable union of measure-zero sets has measure zero.
+
+**Definition (almost everywhere).** A property $P(x)$ holds **almost everywhere** (a.e.) on $\mathbb{R}^n$ if the set $\{x : P(x) \text{ fails}\}$ has measure zero.
+
+ReLU is differentiable a.e. — the failure set is $\{0\}$.
+
+More generally, two deep theorems we'll cite without proof:
+
+- **(Rademacher.)** Every Lipschitz function $f : \mathbb{R}^n \to \mathbb{R}$ is differentiable almost everywhere.
+- **(Convex case.)** Every convex function $f$ on an open convex set $C \subseteq \mathbb{R}^n$ is differentiable a.e. on $C$ and even continuously differentiable on a dense open subset.
+
+ReLU is convex *and* Lipschitz with constant $1$, so it satisfies both. The same is true of $|x|$, max-pooling, and the entire piecewise-linear menagerie used in deep nets.
+
+<Aside type="note">
+"Almost everywhere" is the *measure-theoretic* analogue of "with probability one" under any continuous probability distribution. The two languages agree throughout this course: a measure-zero set is exactly a set that a continuous random variable hits with probability $0$.
+</Aside>
+
+---
+
+## 5. Subgradients: derivatives for convex non-smooth functions
+
+Recall from 0.8 §3 the first-order characterisation of convexity: a differentiable convex $f$ satisfies $f(y) \ge f(x) + \nabla f(x)^\top (y - x)$ for all $y$. The natural generalisation is to drop the assumption of differentiability and *demand* the existence of some vector that plays the role of $\nabla f(x)$.
+
+**Definition.** Let $f : C \to \mathbb{R}$ be convex on an open convex set $C \subseteq \mathbb{R}^n$. A vector $g \in \mathbb{R}^n$ is a **subgradient** of $f$ at $x \in C$ if
+
+$$
+\boxed{\ f(y) \ge f(x) + g^\top (y - x) \quad \text{for all } y \in C.\ }
+$$
+
+The set of all such $g$ is the **subdifferential** of $f$ at $x$, denoted $\partial f(x) \subseteq \mathbb{R}^n$.
+
+Three facts to keep handy.
+
+1. **Reduction to the smooth case.** If $f$ is differentiable at $x$, then $\partial f(x) = \{\nabla f(x)\}$. (The first-order condition forces $g = \nabla f(x)$; uniqueness is from differentiability.)
+2. **Existence.** For convex $f$ on an open convex domain, $\partial f(x) \ne \emptyset$ at every interior $x$. (Proof uses the supporting-hyperplane theorem for the epigraph; we won't reprove it here.)
+3. **Shape.** $\partial f(x)$ is always a closed convex set.
+
+The intuition: at a smooth point, exactly one tangent line lower-bounds the graph; at a kink, an entire fan of lines can be wedged underneath.
+
+---
+
+## 6. The subdifferential of ReLU
+
+We compute $\partial \sigma(x)$ at every $x \in \mathbb{R}$.
+
+**Case $x > 0$.** $\sigma$ is differentiable in a neighbourhood with $\sigma'(x) = 1$, so $\partial \sigma(x) = \{1\}$.
+
+**Case $x < 0$.** Symmetrically, $\partial \sigma(x) = \{0\}$.
+
+**Case $x = 0$.** We need every $g \in \mathbb{R}$ such that $\sigma(y) \ge \sigma(0) + g\,(y - 0)$, i.e.
+
+$$
+\max(0, y) \ge g\, y \quad \text{for all } y \in \mathbb{R}.
+$$
+
+Split by sign of $y$:
+
+- $y > 0$: the inequality reads $y \ge g\, y$, equivalently $g \le 1$.
+- $y < 0$: the inequality reads $0 \ge g\, y$. Since $y < 0$, this requires $g \ge 0$.
+- $y = 0$: trivial $0 \ge 0$.
+
+Both constraints together give $g \in [0, 1]$. Hence
+
+$$
+\boxed{\
+\partial \sigma(x) =
+\begin{cases}
+\{0\}, & x < 0, \\
+[0, 1], & x = 0, \\
+\{1\}, & x > 0.
+\end{cases}
+\ }
+$$
+
+The subdifferential is a singleton off the kink and the interval $[0, 1]$ at the kink — the linear interpolation between the two one-sided slopes.
+
+---
+
+## 7. SGD doesn't actually visit the kink (and the framework convention)
+
+Consider a single ReLU unit inside a network: pre-activation $z = w^\top x + b$, output $\sigma(z)$. The kink matters only at $z = 0$, i.e. on the hyperplane $\{(w, b) : w^\top x + b = 0\}$ in parameter space (or, for fixed parameters, the hyperplane $\{x : w^\top x + b = 0\}$ in input space).
+
+A hyperplane in $\mathbb{R}^{n+1}$ has Lebesgue measure zero. So:
+
+- Under any **continuous initialisation** of weights (Gaussian, Glorot, He, etc.), the event $z = 0$ has probability $0$.
+- Under any **continuous input distribution** $x$, the event $z = 0$ has probability $0$.
+
+Therefore, with probability one over a fresh mini-batch and a fresh init, autograd never has to choose anything at all — $z$ is strictly positive or strictly negative and $\sigma'(z)$ is well defined.
+
+**In finite precision** ($\text{fp16}$, $\text{bf16}$, $\text{fp32}$) the situation is slightly different because the floating-point grid is discrete, so $z$ can actually equal $0$. Frameworks resolve this by *picking a subgradient*: PyTorch and TensorFlow both define $\sigma'(0) := 0$ in their backward pass. By the boxed result above, any value in $[0, 1]$ would be a valid choice; the literature uses $0$ by convention.
+
+<Aside type="warning">
+The convention $\sigma'(0) = 0$ is silently inherited by every layer downstream. If you ever write a custom autograd function with a kink, decide on a subgradient explicitly and document it. Inconsistent choices across forward and backward break the chain rule numerically.
+</Aside>
+
+---
+
+## 8. Beyond ReLU
+
+The same machinery applies to most non-smooth pieces of modern networks.
+
+- **Leaky ReLU** $\text{LReLU}_\alpha(x) = \max(\alpha x,\, x)$ with $\alpha \in (0, 1)$. Same kink at $0$; subdifferential there is $[\alpha, 1]$.
+- **Absolute value** $|x|$. Differentiable off $0$; $\partial |x|_{x=0} = [-1, 1]$.
+- **Max-pooling** $\max(x_1, \dots, x_k)$. Convex, a.e. differentiable; subgradient is the convex hull $\operatorname{conv}\{e_i : x_i = \max_j x_j\}$ of the *winners*.
+- **GELU**, $x \cdot \Phi(x)$. Fully smooth ($C^\infty$). Trades the piecewise-linearity (and exact zero-firing) of ReLU for everywhere-non-zero gradients. We'll see this comparison in Chapter 5.
+
+---
+
+## 9. Takeaways
+
+1. ReLU fails to be differentiable on the single point $\{0\}$ — a set of Lebesgue measure zero.
+2. For convex non-smooth $f$, the subdifferential $\partial f(x)$ replaces $\nabla f(x)$. It is single-valued where $f$ is differentiable, multi-valued at kinks, and never empty in the interior of the domain.
+3. SGD with continuous inits and continuous data hits a ReLU kink with probability zero in exact arithmetic; in finite precision, frameworks define $\sigma'(0) := 0$ by convention. Any choice in $[0, 1]$ is a valid subgradient.
+4. The gradient-descent story from 0.8 §6 extends to non-smooth convex objectives as the **subgradient method**: at each step pick *any* $g_k \in \partial L(\theta_k)$ and update $\theta_{k+1} = \theta_k - \eta_k g_k$. Convergence is slower than smooth gradient descent ($\mathcal{O}(1/\sqrt{T})$ instead of $\mathcal{O}(1/T)$ for typical step sizes), but it works.
+
+---
+
+<SelfTest>
+
+**(a)** Redo the §6 computation for $|x|$ and show that $\partial |x|_{x=0} = [-1, 1]$.
+
+**(b)** Let $f(x) = \max(0, x) + \tfrac{1}{2} x^2$. Show that $f$ is convex on $\mathbb{R}$, find the unique minimiser, and compute $\partial f(0)$. (Hint: subdifferentials of convex functions add — $\partial(f + g)(x) = \partial f(x) + \partial g(x)$ for finite convex $f, g$ on $\mathbb{R}^n$.)
+
+**(c)** Suppose pre-activation $z = w^\top x + b$ with $w \in \mathbb{R}^n$ drawn from any continuous distribution independent of $x$ and $b$. Argue that $\mathbb{P}(z = 0) = 0$. Why does this *not* immediately let us ignore the kink in finite-precision arithmetic?
+
+**(d)** For Leaky ReLU with slope $\alpha \in (0, 1)$, prove that $\text{LReLU}_\alpha$ is convex on $\mathbb{R}$ and compute $\partial \text{LReLU}_\alpha(0)$.
+
+</SelfTest>

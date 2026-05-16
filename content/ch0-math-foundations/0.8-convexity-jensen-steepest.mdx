@@ -1,0 +1,289 @@
+---
+title: "0.8 — Convex functions, Jensen, and the gradient as steepest direction"
+chapter: 0
+order: 8
+estimatedMinutes: 28
+goal: "Recognise convex functions through three equivalent lenses, apply Jensen's inequality, and prove that the gradient points in the direction of steepest ascent."
+prerequisites: ["ch0-math-foundations/0.2-matrix-calculus", "ch0-math-foundations/0.4-probability-review"]
+---
+
+## 1. Why this session exists
+
+Training a model is, in the end, solving an optimisation problem
+
+$$
+\min_{\theta \in \mathbb{R}^p} L(\theta).
+$$
+
+Two questions decide whether that problem is well-behaved:
+
+1. **Is every local minimum a global minimum?** That is decided by *convexity*.
+2. **Why does moving along $-\nabla L$ help at all?** That is decided by a geometric fact we'll prove in §6: the gradient is the direction of *steepest ascent*.
+
+Along the way we pick up **Jensen's inequality**, the workhorse behind entropy bounds, the ELBO we'll derive in Chapter 9, and several AM–GM-style tricks that will reappear without warning.
+
+---
+
+## 2. Convex sets, convex functions
+
+A set $C \subseteq \mathbb{R}^n$ is **convex** if it contains every line segment between two of its points:
+
+$$
+x, y \in C, \quad \theta \in [0,1] \implies \theta x + (1-\theta) y \in C.
+$$
+
+A function $f : C \to \mathbb{R}$ defined on a convex set $C$ is **convex** if
+
+$$
+f\bigl(\theta x + (1-\theta) y\bigr) \le \theta f(x) + (1-\theta) f(y)
+\quad \text{for all } x, y \in C,\ \theta \in [0,1].
+$$
+
+It is **strictly convex** if the inequality is strict for $x \ne y$ and $\theta \in (0,1)$.
+
+Geometrically: the chord between $\bigl(x, f(x)\bigr)$ and $\bigl(y, f(y)\bigr)$ lies **above** the graph of $f$.
+
+<Aside type="note">
+Convention for the rest of the course: "convex" with no qualifier means convex on a convex domain. "Strictly" lifts $\le$ to $<$ for distinct points and interior weights.
+</Aside>
+
+A first stock of examples to keep in mind:
+
+- $f(x) = x^2$ on $\mathbb{R}$, strictly convex.
+- $f(x) = |x|$ on $\mathbb{R}$, convex but not strictly so.
+- $f(x) = e^x$ on $\mathbb{R}$, strictly convex.
+- $f(x) = -\ln x$ on $(0, \infty)$, strictly convex.
+- $f(x) = \lVert x \rVert$ for any norm, convex (triangle inequality plus positive homogeneity).
+- $f(x) = x^\top A x$ on $\mathbb{R}^n$ with $A \succeq 0$, convex.
+
+---
+
+## 3. First-order condition (the "linear lower bound" picture)
+
+If $f$ is differentiable on an open convex set $C$, then $f$ is convex on $C$ if and only if its graph lies above every tangent hyperplane:
+
+$$
+\boxed{\ f(y) \ge f(x) + \nabla f(x)^\top (y - x) \quad \text{for all } x, y \in C.\ }
+$$
+
+**Proof (⇒).** Assume $f$ is convex. Fix $x, y \in C$ and $\theta \in (0,1]$, and rewrite the convexity inequality at $\theta y + (1-\theta) x = x + \theta(y-x)$:
+
+$$
+f\bigl(x + \theta(y - x)\bigr) \le (1-\theta) f(x) + \theta f(y).
+$$
+
+Subtract $f(x)$ from both sides and divide by $\theta > 0$:
+
+$$
+\frac{f\bigl(x + \theta(y-x)\bigr) - f(x)}{\theta} \le f(y) - f(x).
+$$
+
+Let $\theta \to 0^+$. The left-hand side is, by definition, the directional derivative of $f$ at $x$ in direction $(y-x)$, which equals $\nabla f(x)^\top (y-x)$. Hence
+
+$$
+\nabla f(x)^\top (y-x) \le f(y) - f(x),
+$$
+
+i.e. $f(y) \ge f(x) + \nabla f(x)^\top (y-x)$, as claimed.
+
+**Proof (⇐).** Assume the linear lower bound holds at every base point. Pick $x, y \in C$, $\theta \in [0,1]$, and let $z = \theta x + (1-\theta) y$. Applying the lower bound at $z$ once for $x$ and once for $y$:
+
+$$
+\begin{aligned}
+f(x) &\ge f(z) + \nabla f(z)^\top (x - z), \\
+f(y) &\ge f(z) + \nabla f(z)^\top (y - z).
+\end{aligned}
+$$
+
+Multiply the first by $\theta$, the second by $(1-\theta)$, and add:
+
+$$
+\theta f(x) + (1-\theta) f(y) \ge f(z) + \nabla f(z)^\top \bigl[\theta(x - z) + (1-\theta)(y - z)\bigr].
+$$
+
+The bracketed vector is $\theta x + (1-\theta) y - z = 0$. So
+
+$$
+\theta f(x) + (1-\theta) f(y) \ge f(z),
+$$
+
+which is exactly the convexity inequality. $\blacksquare$
+
+**Immediate consequence.** If $\nabla f(x^*) = 0$ and $f$ is convex, then for every $y \in C$,
+
+$$
+f(y) \ge f(x^*) + 0 = f(x^*).
+$$
+
+That is, $x^*$ is a global minimum. **Stationarity ⇒ global optimality for convex objectives.** This is the single most important reason convex problems are loved in optimisation.
+
+---
+
+## 4. Second-order condition (Hessian ≽ 0)
+
+If $f$ is twice continuously differentiable on an open convex set $C$, then
+
+$$
+\boxed{\ f \text{ convex on } C \iff \nabla^2 f(x) \succeq 0 \text{ for all } x \in C.\ }
+$$
+
+Here "$\succeq 0$" means **positive semidefinite**: $d^\top \nabla^2 f(x)\, d \ge 0$ for every direction $d \in \mathbb{R}^n$. *Strict* convexity follows from $\nabla^2 f(x) \succ 0$ (positive definite), but the converse is not exact (e.g. $f(x) = x^4$ is strictly convex on $\mathbb{R}$ even though $f''(0) = 0$).
+
+**Sketch.** Restrict $f$ to a line. Define $g(t) := f(x + t d)$ for fixed $x \in C$ and $d \in \mathbb{R}^n$. By the chain rule from session 0.3,
+
+$$
+g'(t) = \nabla f(x + t d)^\top d, \qquad g''(t) = d^\top \nabla^2 f(x + t d)\, d.
+$$
+
+Convexity of $f$ on $C$ is equivalent to convexity of $g$ on every line segment lying in $C$, and convexity of a smooth one-dimensional function is equivalent to $g'' \ge 0$. Quantifying over all directions $d$ gives $\nabla^2 f \succeq 0$.
+
+**Worked example — linear regression loss.** Let
+
+$$
+L(\theta) = \tfrac{1}{2} \lVert X\theta - y \rVert^2.
+$$
+
+Then
+
+$$
+\nabla L(\theta) = X^\top (X\theta - y), \qquad \nabla^2 L(\theta) = X^\top X.
+$$
+
+The Gram matrix $X^\top X$ is always $\succeq 0$ because $d^\top X^\top X d = \lVert X d \rVert^2 \ge 0$. So MSE regression is convex in $\theta$. If $X$ has full column rank, $X^\top X \succ 0$ and the problem is *strictly* convex with a unique minimiser given by the normal equations $\theta^* = (X^\top X)^{-1} X^\top y$.
+
+---
+
+## 5. Jensen's inequality
+
+**Finite form.** If $f$ is convex, $\theta_i \ge 0$ with $\sum_{i=1}^n \theta_i = 1$, then
+
+$$
+\boxed{\ f\!\left(\sum_{i=1}^n \theta_i x_i\right) \le \sum_{i=1}^n \theta_i f(x_i).\ }
+$$
+
+**Proof (induction on $n$).** The base case $n = 2$ is the definition of convexity. Suppose the inequality holds for $n - 1$ points and consider $n$ points with weights $\theta_1, \dots, \theta_n$. Without loss of generality $\theta_n < 1$; set $s = 1 - \theta_n > 0$. Then
+
+$$
+\sum_{i=1}^n \theta_i x_i = s \cdot \underbrace{\sum_{i=1}^{n-1} \frac{\theta_i}{s} x_i}_{=: \,\tilde x} + \theta_n x_n,
+$$
+
+and the weights $\theta_i / s$ are nonnegative summing to $1$. Apply convexity at the two points $\tilde x$ and $x_n$ with weights $s$ and $\theta_n$:
+
+$$
+f\!\left(\sum_{i=1}^n \theta_i x_i\right) \le s\, f(\tilde x) + \theta_n f(x_n).
+$$
+
+By the inductive hypothesis applied to $\tilde x$,
+
+$$
+f(\tilde x) \le \sum_{i=1}^{n-1} \frac{\theta_i}{s} f(x_i).
+$$
+
+Multiplying by $s$ and substituting,
+
+$$
+f\!\left(\sum_{i=1}^n \theta_i x_i\right) \le \sum_{i=1}^{n-1} \theta_i f(x_i) + \theta_n f(x_n) = \sum_{i=1}^n \theta_i f(x_i). \quad\blacksquare
+$$
+
+**Expectation form.** If $X$ is a random variable taking values in $C$ with $\mathbb{E}\lVert X \rVert < \infty$, and $f$ is convex on $C$, then
+
+$$
+f\bigl(\mathbb{E}[X]\bigr) \le \mathbb{E}[f(X)].
+$$
+
+For discrete $X$ this is exactly the finite form with $\theta_i = \mathbb{P}(X = x_i)$. The continuous case follows by approximation; we won't prove the measure-theoretic version here but we will use it freely.
+
+<Aside type="warning">
+Direction of the inequality **flips** for concave $f$ (since $-f$ is convex). Two consequences we will lean on:
+
+- $\ln$ is concave on $(0, \infty)$, so $\ln \mathbb{E}[X] \ge \mathbb{E}[\ln X]$.
+- $\exp$ is convex on $\mathbb{R}$, so $\mathbb{E}[e^X] \ge e^{\mathbb{E}[X]}$.
+
+The first is one form of the AM–GM inequality. The second underlies the log-sum-exp shift we'll meet in session 0.10.
+</Aside>
+
+**Tiny worked use — Gibbs' inequality (revisit of 0.6).** For distributions $p, q$ on a finite set $\mathcal{X}$,
+
+$$
+\mathrm{KL}(p \,\|\, q) = \sum_{x \in \mathcal{X}} p(x) \ln \frac{p(x)}{q(x)} \ge 0.
+$$
+
+Because $-\ln$ is convex, Jensen applied with weights $p(x)$ on points $q(x)/p(x)$ gives
+
+$$
+-\sum_x p(x) \ln \frac{q(x)}{p(x)} \;\ge\; -\ln \sum_x p(x)\, \frac{q(x)}{p(x)} \;=\; -\ln \sum_x q(x) \;=\; -\ln 1 \;=\; 0.
+$$
+
+Strict convexity of $-\ln$ further gives equality iff $q(x)/p(x)$ is constant on the support of $p$, i.e. iff $p = q$. This is the inequality we already used in 0.6.
+
+---
+
+## 6. The gradient is the direction of steepest ascent
+
+Pick a base point $x \in \mathbb{R}^n$ with $f$ differentiable there, and a **unit** vector $u \in \mathbb{R}^n$ (so $\lVert u \rVert = 1$ in the Euclidean norm). The **directional derivative** of $f$ at $x$ in direction $u$ is
+
+$$
+D_u f(x) := \lim_{t \to 0} \frac{f(x + t u) - f(x)}{t}.
+$$
+
+Apply the chain rule from 0.3 to $g(t) = f(x + t u)$:
+
+$$
+D_u f(x) = g'(0) = \nabla f(x)^\top u.
+$$
+
+(We are using the **numerator** convention fixed in 0.2: $\partial f / \partial x$ is a $1 \times n$ row, and $\nabla f := (\partial f / \partial x)^\top$ is its column transpose.)
+
+We want the direction $u^*$ that maximises the instantaneous increase of $f$:
+
+$$
+u^* = \arg\max_{\lVert u \rVert = 1} \nabla f(x)^\top u.
+$$
+
+**Cauchy–Schwarz** gives, for any unit $u$,
+
+$$
+\nabla f(x)^\top u \;\le\; \lVert \nabla f(x) \rVert \cdot \lVert u \rVert \;=\; \lVert \nabla f(x) \rVert,
+$$
+
+with equality if and only if $u$ is the positive unit multiple of $\nabla f(x)$. Therefore
+
+$$
+\boxed{\ u^* = \frac{\nabla f(x)}{\lVert \nabla f(x) \rVert}, \qquad \max_{\lVert u \rVert = 1} D_u f(x) = \lVert \nabla f(x) \rVert.\ }
+$$
+
+So the gradient *points in the direction of steepest ascent*, and its magnitude is the rate of ascent in that direction. Equivalently, **$-\nabla f(x)$ is the direction of steepest descent**, which is the move taken at each step of gradient descent:
+
+$$
+\theta_{k+1} = \theta_k - \eta\, \nabla L(\theta_k).
+$$
+
+<Aside type="note">
+"Steepest" depends on the inner product with which we measure unit length. Under a different inner product $\langle u, v \rangle_A = u^\top A v$ with $A \succ 0$, the steepest-ascent direction at $x$ becomes $A^{-1} \nabla f(x)$ (rerun the Cauchy–Schwarz argument in that inner product). Taking $A = \nabla^2 f$ recovers **Newton's method**; taking $A$ as a Fisher-information metric gives the **natural gradient**. We'll meet both in Chapter 3.
+</Aside>
+
+---
+
+## 7. What this buys us going forward
+
+Three takeaways to carry into the rest of the course.
+
+1. **Convex losses are exceptional, but the ones we meet first are convex.** Linear regression with MSE (§4) and logistic regression in the logits (Chapter 1) both have convex losses; stationarity therefore implies global optimality.
+
+2. **Neural networks are non-convex** in their parameters as soon as we compose nonlinearities. Stationarity tells us nothing about global optimality. The pragmatic reason gradient descent still works is the subject of Chapter 3 (over-parameterisation, implicit bias, neural-tangent-kernel intuition).
+
+3. **Jensen is everywhere.** Already used implicitly in 0.6 for $\mathrm{KL} \ge 0$; we'll use it again to derive the **ELBO** in Chapter 9 (variational inference and the variational autoencoder), and once more in 0.10 to bound the log-sum-exp shift.
+
+---
+
+<SelfTest>
+
+**(a)** Show that $f(x) = \max(0, x)$ (the ReLU) is convex on $\mathbb{R}$. Where does the first-order condition of §3 fail to apply, and why is that fine?
+
+**(b)** Let $X$ be a positive random variable with $\mathbb{E}[X] = 1$. Use Jensen to prove $\mathbb{E}[\ln X] \le 0$, and identify the case of equality.
+
+**(c)** For a positive-definite quadratic $f(x) = \tfrac{1}{2} x^\top A x - b^\top x$ with $A \succ 0$, compute $\nabla f$ and $\nabla^2 f$, and show the unique minimiser is $x^* = A^{-1} b$. From §6, what does steepest descent at $x \ne x^*$ look like? Why does $-\nabla f(x)$ generally **not** point at $x^*$?
+
+**(d)** Suppose $f, g : C \to \mathbb{R}$ are both convex on a convex set $C$, and $\alpha, \beta \ge 0$. Prove that $\alpha f + \beta g$ is convex. (This is the property that lets us add an L2 regulariser $\lambda \lVert \theta \rVert^2$ to any convex loss and stay convex.)
+
+</SelfTest>
