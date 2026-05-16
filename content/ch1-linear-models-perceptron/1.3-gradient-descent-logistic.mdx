@@ -99,7 +99,7 @@ a non-negative weighted sum of rank-one PSD matrices, hence $\succeq 0$. So logi
 
 ---
 
-## 6. Connection to your dissertation
+## 6. Where this is going
 
 The update rule
 
@@ -107,7 +107,7 @@ $$
 w_{k+1} = w_k - \frac{\alpha}{m} \sum_{i=1}^m (\hat y_i - y_i)\, x_i
 $$
 
-is exactly the one you derived in Appendix C (eq. C.3), p. 159 — there phrased for a single sigmoid unit but with the same Bernoulli model and the same chain-rule cancellation. The next step in your thesis was to compose this with a hidden layer; we'll do the same in Chapter 2, where the only new ingredient is the chain rule from 0.3 walked backwards through additional matrix-multiplications.
+is the single-sigmoid-unit version of the gradient descent rule that, in Chapter 2, will be composed across many hidden layers. The only new ingredient there is the chain rule from 0.3 walked backwards through additional matrix multiplications.
 
 ---
 

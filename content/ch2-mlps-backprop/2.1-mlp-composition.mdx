@@ -80,8 +80,8 @@ $$
 
 For a moderate net with $L = 6$ and $d_\ell \approx 1000$, this is on the order of $6 \times 10^6$ parameters; for a Transformer LM it grows to $10^{10}$. Same notation throughout.
 
-<Aside type="history">
-Your dissertation §C.4 used $a^{(j)}_i = g(z^{(j-1)}_i)$ with subscripts shifted by one. The course convention here aligns indices: $a^{(\ell)}$ and $z^{(\ell)}$ both refer to layer $\ell$. Re-read your derivations with the index shift in mind and the math is identical.
+<Aside type="note">
+Some older treatments (e.g., older deep-learning textbooks and the original PDP volumes) use $a^{(j)}_i = g(z^{(j-1)}_i)$, with subscripts shifted by one layer. The convention adopted here aligns the indices: $a^{(\ell)}$ and $z^{(\ell)}$ both refer to layer $\ell$. If you encounter the shifted convention elsewhere, the math is identical — only the index labels move.
 </Aside>
 
 ---

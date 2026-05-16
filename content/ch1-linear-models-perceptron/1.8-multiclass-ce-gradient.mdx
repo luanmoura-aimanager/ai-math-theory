@@ -181,8 +181,8 @@ Three reasons.
 2. **It composes cleanly with everything upstream.** Whatever module produced the logits $z$ — a linear layer, a deep stack of attention blocks — receives a "tell me where you went wrong" signal of exactly the right shape (a $K$-dim residual) at exactly the right scale (no $\sigma'$ damping).
 3. **It is interpretable.** $\hat y - y$ is the **error in the predicted distribution**. Moving $z$ a step in the direction $-(\hat y - y)$ shifts probability mass from the wrong classes onto the right class. The size of the move is exactly how off the model currently is.
 
-<Aside type="history">
-Both the multi-class identity and the binary special case appear in your dissertation Appendix C (BCE for a hidden-layer sigmoid network on p. 158–159, softmax + CE on the final layer on p. 174–175). They reappear, identically, every time we re-derive a softmax-head loss in this course — there is nothing new in attention's "logit subtraction" backward; it is the same identity in a more elaborate forward graph.
+<Aside type="note">
+The same identity reappears, in identical form, every time we re-derive a softmax-head loss in this course — there is nothing new in attention's "logit subtraction" backward; it is the same identity in a more elaborate forward graph. For the textbook treatment in our notation, see Bishop, *PRML* (2006) §4.3.4 and Goodfellow, Bengio & Courville, *Deep Learning* (2016) §5.5.
 </Aside>
 
 ---

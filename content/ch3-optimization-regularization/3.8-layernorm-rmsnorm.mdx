@@ -11,7 +11,7 @@ prerequisites: ["ch3-optimization-regularization/3.7-lr-schedules"]
 
 Every modern Transformer uses **LayerNorm**, not BatchNorm. RMSNorm — a stripped-down LayerNorm — is the version in LLaMA, Mistral, and most LLMs from 2023 onward. The reason is structural: BN's dependence on the batch breaks down for variable-length sequences and small per-GPU batches, both of which are the norm in Transformer training. LayerNorm sidesteps the issue by normalising **across the feature dimension** for each individual token, with no batch coupling at all.
 
-This is also the first concept in the course that wasn't in Luan's dissertation. Past this point, every architecture choice we make for LLMs builds on it. (If you want a rigorous treatment of BatchNorm first — useful context but not required here — see [Appendix 3.C](/session/ch3-optimization-regularization/3.C-batchnorm).)
+Past this point, every architecture choice we make for LLMs builds on LayerNorm / RMSNorm. (If you want a rigorous treatment of BatchNorm first — useful context but not required here — see [Appendix 3.C](/session/ch3-optimization-regularization/3.C-batchnorm).)
 
 ---
 

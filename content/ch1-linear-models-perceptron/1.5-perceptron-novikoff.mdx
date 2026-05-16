@@ -136,7 +136,7 @@ This holds at every $k$ at which a mistake occurs. Hence the total number of mis
 - **Non-separable data.** The theorem fails — there is no $u$ with the required property. The perceptron will oscillate forever. The **pocket** variant (keep the best $w$ seen so far) is the classical workaround; in modern practice we use logistic regression with regularisation, which always has a unique solution.
 
 <Aside type="history">
-You proved this in your dissertation §3.2 with a step activation. The modern course replaces the step with the sigmoid (1.2) so that we get a smooth, differentiable loss and can fall back on standard SGD. For proving convergence on the classical hard-threshold model, the perceptron rule is still the simplest non-trivial example available.
+The original perceptron (Rosenblatt, 1958) used a step activation; modern courses replace the step with the sigmoid (1.2) so the loss becomes smooth and differentiable and we can fall back on standard SGD. For proving *convergence* on the classical hard-threshold model, the perceptron rule remains the simplest non-trivial example available — which is why we keep this proof.
 </Aside>
 
 ---

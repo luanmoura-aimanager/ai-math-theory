@@ -101,7 +101,7 @@ Two hidden units with hard-threshold activations, one output unit with linear ac
 Exactly XOR.
 
 <Aside type="history">
-Your dissertation §C.3 builds the same construction with NAND/AND/OR primitives — a classical "logic gate" style proof. The version above (two thresholded sums minus each other) is equivalent and is the form that generalises to: *any* Boolean function on $n$ variables is computable by a one-hidden-layer net with at most $2^n$ hidden units. The smoothed (sigmoid / ReLU) version is what we will train in Chapter 2.
+A classical "logic gate" version of this construction uses NAND / AND / OR primitives explicitly; see Minsky & Papert (1969). The version above (two thresholded sums minus each other) is equivalent and is the form that generalises to: *any* Boolean function on $n$ variables is computable by a one-hidden-layer net with at most $2^n$ hidden units. The smoothed (sigmoid / ReLU) version is what we will train in Chapter 2.
 </Aside>
 
 ---

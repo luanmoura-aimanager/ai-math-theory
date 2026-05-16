@@ -127,7 +127,7 @@ A short heuristic.
 - **Hidden layers, recurrent net.** Tanh and sigmoid (legacy LSTM/GRU choices).
 
 <Aside type="history">
-Your dissertation §C.4 used sigmoid + ReLU + leaky ReLU + softmax — the standard 2019 toolkit. The course adds GELU and SwiGLU because they are the dominant choices in modern Transformer LMs. The math is otherwise unchanged; backprop in this chapter is written generically as "given $g'(z)$", so the choice of activation just plugs in a different derivative formula.
+The standard 2019-era toolkit was sigmoid + ReLU + leaky ReLU + softmax. The course adds GELU (Hendrycks & Gimpel, 2016) and SwiGLU (Shazeer, 2020) because they are the dominant choices in modern Transformer LMs. The math is otherwise unchanged; backprop in this chapter is written generically as "given $g'(z)$", so the choice of activation just plugs in a different derivative formula.
 </Aside>
 
 ---

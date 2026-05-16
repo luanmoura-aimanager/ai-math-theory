@@ -109,9 +109,9 @@ Biases are usually initialised to zero. There is no variance to preserve — bia
 
 ---
 
-## 7. From your dissertation
+## 7. A common pitfall
 
-Your dissertation §C.5 (p. 165) used $\operatorname{Var}(w^{(\ell)}) = 1 / d_{\ell - 1}$ — the original Xavier-forward variance, not the harmonic-mean version. For tanh-activated networks that was the right call. The He factor of $2$ appears once you switch to ReLU, which your dissertation's experiments did in later sections — so retroactively, swapping to He there would have improved trainability. A small but real example of how the theory keeps catching up to the practice.
+Many older codebases (and CV pipelines from the early 2010s) use the forward-only Xavier variance $\operatorname{Var}(w^{(\ell)}) = 1 / d_{\ell - 1}$ across the board — tanh or ReLU, indifferently. For tanh-activated networks this is fine. For ReLU networks it under-scales the weights by a factor of $2$ in variance, and the activation variance halves at every layer (§4). The fix is one line: switch the scaling factor from $1/d_{\text{in}}$ to $2/d_{\text{in}}$ (or call `nn.init.kaiming_normal_` in PyTorch) and trainability improves immediately. A small but real example of how the theory keeps catching up to the practice.
 
 ---
 

@@ -145,7 +145,7 @@ for t, batch in enumerate(loader, start=1):
 Ten lines. Drop in $\beta_1 = 0.9, \beta_2 = 0.999, \alpha = 10^{-3}, \varepsilon = 10^{-8}$ and you have the most-used optimiser of the last decade.
 
 <Aside type="history">
-Your dissertation §C.4 lists Adam as one of the optimisers tried for the Raman 1D-CNN, with the same hyperparameters as above. The derivation here is the same one you wrote there: momentum + RMSProp + bias correction. We've simply organised the three pieces as independent sessions.
+Adam was published by Kingma & Ba (2014) — see [arXiv:1412.6980](https://arxiv.org/abs/1412.6980). The paper's framing is the one we use here: momentum + RMSProp + bias correction, organised as three independent ingredients. The default hyperparameters $\beta_1 = 0.9, \beta_2 = 0.999, \varepsilon = 10^{-8}$ are the ones from the original paper and still dominate practice a decade later.
 </Aside>
 
 ---

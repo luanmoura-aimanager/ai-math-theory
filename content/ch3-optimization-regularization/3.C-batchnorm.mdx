@@ -158,6 +158,6 @@ BN is not used in modern Transformers — LayerNorm is. See 3.11 for why.
 
 **(c)** A practitioner trains a BN'd ResNet for 100 epochs and at inference runs it with `model.train()` (not `.eval()`) by accident. They report "the model works on batches but produces nonsense on single images." Explain.
 
-**(d)** For Luan's dissertation 1D-CNN (Raman 6-class), would BN be applied per spectral coordinate or per feature map? Sketch the operation and the shapes of $\mu_\mathcal{B}, \sigma_\mathcal{B}^2, \gamma, \beta$.
+**(d)** For a 1D-CNN classifier on spectroscopic data ($B$ samples, $C$ channels, $L$ spectral positions), would BN be applied per spectral coordinate, per channel, or globally? Sketch the operation and the shapes of $\mu_\mathcal{B}, \sigma_\mathcal{B}^2, \gamma, \beta$.
 
 </SelfTest>
