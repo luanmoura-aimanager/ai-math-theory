@@ -1,0 +1,145 @@
+---
+title: "2.6 — Backprop, part 2: the recursion δ⁽ℓ⁾ = (W⁽ℓ⁺¹⁾)ᵀ δ⁽ℓ⁺¹⁾ ⊙ g'(z⁽ℓ⁾)"
+chapter: 2
+order: 6
+estimatedMinutes: 22
+goal: "Derive the recursion that propagates the delta variable backwards through the network."
+prerequisites: ["ch2-mlps-backprop/2.5-backprop-output-delta", "ch0-math-foundations/0.3-chain-rule"]
+---
+
+## 1. Why this session exists
+
+Once we have $\delta^{(L)} = \hat y - y$ at the output (2.5), we need a way to push that gradient signal *backwards* — to $\delta^{(L-1)}$, then $\delta^{(L-2)}$, all the way to $\delta^{(1)}$. The chain rule from 0.3 gives us exactly one recursion, with two factors at each step: a matrix multiply by $W^{(\ell+1)}$ and an elementwise multiply by $g'^{(\ell)}(z^{(\ell)})$. This session derives it.
+
+---
+
+## 2. Setup
+
+Recall the forward pass at consecutive layers:
+
+$$
+\begin{aligned}
+z^{(\ell)}   &= W^{(\ell)} a^{(\ell-1)} + b^{(\ell)}, \\
+a^{(\ell)}   &= g^{(\ell)}(z^{(\ell)}), \\
+z^{(\ell+1)} &= W^{(\ell+1)} a^{(\ell)} + b^{(\ell+1)}.
+\end{aligned}
+$$
+
+The dependency graph at this step is
+
+$$
+z^{(\ell)} \;\xrightarrow{g^{(\ell)}}\; a^{(\ell)} \;\xrightarrow{W^{(\ell+1)},\, +\, b^{(\ell+1)}}\; z^{(\ell+1)}.
+$$
+
+The loss $L$ depends on $z^{(\ell)}$ only through $z^{(\ell+1)}$ (via $a^{(\ell)}$). By the chain rule,
+
+$$
+\frac{\partial L}{\partial z^{(\ell)}} \;=\; \frac{\partial L}{\partial z^{(\ell+1)}} \cdot \frac{\partial z^{(\ell+1)}}{\partial a^{(\ell)}} \cdot \frac{\partial a^{(\ell)}}{\partial z^{(\ell)}}.
+$$
+
+Each Jacobian factor is easy.
+
+---
+
+## 3. Each factor in turn
+
+**$\partial z^{(\ell+1)} / \partial a^{(\ell)} = W^{(\ell+1)}$.** Direct from the affine forward $z^{(\ell+1)} = W^{(\ell+1)} a^{(\ell)} + b^{(\ell+1)}$. In the numerator convention this Jacobian is the $d_{\ell+1} \times d_\ell$ matrix $W^{(\ell+1)}$ itself.
+
+**$\partial a^{(\ell)} / \partial z^{(\ell)} = \operatorname{diag}\bigl(g'^{(\ell)}(z^{(\ell)})\bigr)$.** The activation $g^{(\ell)}$ is applied elementwise, so each $a^{(\ell)}_i$ depends only on $z^{(\ell)}_i$. The Jacobian is diagonal with $i$-th entry $g'(z^{(\ell)}_i)$.
+
+**$\partial L / \partial z^{(\ell+1)} = (\delta^{(\ell+1)})^\top$** by definition of the next-layer delta — written as a row in the numerator convention.
+
+---
+
+## 4. Putting it together
+
+Substituting,
+
+$$
+\bigl(\delta^{(\ell)}\bigr)^\top \;=\; (\delta^{(\ell+1)})^\top \cdot W^{(\ell+1)} \cdot \operatorname{diag}\!\bigl(g'^{(\ell)}(z^{(\ell)})\bigr).
+$$
+
+Transpose both sides to get a column:
+
+$$
+\delta^{(\ell)} \;=\; \operatorname{diag}\!\bigl(g'^{(\ell)}(z^{(\ell)})\bigr) \cdot (W^{(\ell+1)})^\top \cdot \delta^{(\ell+1)}.
+$$
+
+Multiplying a vector by $\operatorname{diag}(g'(z))$ is exactly elementwise multiplication by $g'(z)$. So
+
+$$
+\boxed{\ \delta^{(\ell)} \;=\; \Bigl((W^{(\ell+1)})^\top\, \delta^{(\ell+1)}\Bigr) \,\odot\, g'^{(\ell)}\bigl(z^{(\ell)}\bigr) \;\in\; \mathbb{R}^{d_\ell}.\ }
+$$
+
+This is the **backprop recursion**. Two factors per step:
+
+1. **Matrix-multiply step.** Multiply $\delta^{(\ell+1)} \in \mathbb{R}^{d_{\ell+1}}$ by $(W^{(\ell+1)})^\top \in \mathbb{R}^{d_\ell \times d_{\ell+1}}$. This "spreads" the gradient signal across layer-$\ell$ units in proportion to how strongly each contributed to layer $\ell+1$. Cost $\Theta(d_\ell\, d_{\ell+1})$ multiply-adds.
+2. **Activation step.** Elementwise multiply by $g'^{(\ell)}(z^{(\ell)}) \in \mathbb{R}^{d_\ell}$. This "scales" the gradient by how responsive each unit was at its current operating point. Cost $\Theta(d_\ell)$ multiplies.
+
+Total cost per backward step: dominated by the matmul — same order as the forward.
+
+---
+
+## 5. Sanity check: dimensions
+
+- $W^{(\ell+1)}$ is $d_{\ell+1} \times d_\ell$, so $(W^{(\ell+1)})^\top$ is $d_\ell \times d_{\ell+1}$.
+- $\delta^{(\ell+1)}$ is $d_{\ell+1}$, so $(W^{(\ell+1)})^\top \delta^{(\ell+1)}$ is $d_\ell$ ✓.
+- $g'^{(\ell)}(z^{(\ell)})$ is $d_\ell$, so the Hadamard product is $d_\ell$ ✓.
+- $\delta^{(\ell)}$ is $d_\ell$ ✓.
+
+<Aside type="history">
+Your dissertation Appendix C (p. 164–166) derived the same recursion as $\partial E / \partial w^{(j)}_{il}$, written in "scalars only" indexed form. The matrix form here is the standard modern convention; it is identical content, just easier to vectorise. Compare your eq. (C.5) with the boxed identity above — same equation.
+</Aside>
+
+---
+
+## 6. Batched form
+
+Define $\Delta^{(\ell)} \in \mathbb{R}^{B \times d_\ell}$ (rows = examples). The recursion becomes
+
+$$
+\boxed{\ \Delta^{(\ell)} \;=\; \bigl(\Delta^{(\ell+1)}\, W^{(\ell+1)}\bigr) \,\odot\, g'^{(\ell)}\!\bigl(Z^{(\ell)}\bigr) \;\in\; \mathbb{R}^{B \times d_\ell}.\ }
+$$
+
+Worked dimensions:
+
+- $\Delta^{(\ell+1)}$ is $B \times d_{\ell+1}$.
+- $W^{(\ell+1)}$ is $d_{\ell+1} \times d_\ell$.
+- $\Delta^{(\ell+1)} W^{(\ell+1)}$ is $B \times d_\ell$ ✓.
+- $g'(Z^{(\ell)})$ is $B \times d_\ell$ ✓.
+- Hadamard product is $B \times d_\ell$ ✓.
+
+Note that the *single-example* form has $(W^{(\ell+1)})^\top \delta$, but the *batched row-major* form has $\Delta\, W^{(\ell+1)}$ without a transpose — this is the row-vs-column distinction. Keep one convention and stick to it.
+
+---
+
+## 7. Why this is efficient
+
+The forward pass at layer $\ell$ does one matrix-multiply $A W^\top$ of cost $\Theta(B\, d_\ell\, d_{\ell-1})$.
+
+The backward pass at layer $\ell$ does one matrix-multiply $\Delta W$ of cost $\Theta(B\, d_\ell\, d_{\ell+1})$ plus one elementwise op of cost $\Theta(B\, d_\ell)$.
+
+**Backward = forward in cost.** This is the fundamental reason gradient descent on deep nets is practical: the price of one gradient computation is one extra forward-pass-equivalent of FLOPs. Forward + backward + parameter update ≈ 3× one forward pass. Without the trick — say, computing $\partial L / \partial \theta$ via $N$ finite-difference forward passes — we'd be paying $N \times$ forward. For $N \sim 10^9$ parameters, that is the difference between hours and millennia.
+
+---
+
+## 8. Takeaways
+
+- $\delta^{(\ell)} = ((W^{(\ell+1)})^\top \delta^{(\ell+1)}) \odot g'^{(\ell)}(z^{(\ell)})$ — the central recursion.
+- Batched: $\Delta^{(\ell)} = (\Delta^{(\ell+1)} W^{(\ell+1)}) \odot g'(Z^{(\ell)})$.
+- Cost per layer = one matmul, same scale as the forward pass.
+- This is why deep learning is computationally feasible.
+
+---
+
+<SelfTest>
+
+**(a)** Derive the recursion line by line from the chain rule on $z^{(\ell)} \to a^{(\ell)} \to z^{(\ell+1)}$. Check each Jacobian shape.
+
+**(b)** For an MLP with widths $(d_0, d_1, d_2, d_3) = (10, 64, 64, 3)$ and ReLU activations, compute $\delta^{(2)}$ given $\delta^{(3)}$, $W^{(3)}$, and $z^{(2)}$. Write out shapes at every step.
+
+**(c)** Explain in words why $g'(z^{(\ell)})$ being small (sigmoid saturation, say) attenuates $\delta^{(\ell)}$ and what that means for the trainability of deep sigmoid networks. (Foreshadow of 2.9.)
+
+**(d)** Suppose layer $\ell + 1$ uses the identity activation. Show that $g'(z^{(\ell)})$ still appears, but $g'^{(\ell+1)}(z^{(\ell+1)}) = 1$ disappears one step down the chain. What does this say about the role of nonlinearities in shaping gradient flow?
+
+</SelfTest>

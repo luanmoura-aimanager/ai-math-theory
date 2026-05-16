@@ -1,0 +1,225 @@
+---
+title: "2.12 — Implementation day: a 2-layer MLP from scratch in NumPy"
+chapter: 2
+order: 12
+estimatedMinutes: 30
+goal: "Implement a 2-layer MLP — forward, backward, SGD update — in pure NumPy. ~80 lines, no deep-learning library."
+prerequisites: ["ch2-mlps-backprop/2.7-backprop-weight-gradients", "ch2-mlps-backprop/2.10-weight-initialization"]
+---
+
+## 1. Why this session exists
+
+You've derived every formula in Chapter 2. Now type them into Python and watch the loss curve come down on a real dataset. Pure NumPy, no library magic. Eighty lines, end-to-end. This is the exercise that converts "I follow the math" into "I can build this".
+
+---
+
+## 2. The task
+
+Train a 2-layer ReLU MLP on a small classification problem. Two options:
+
+- **MNIST** if you want the canonical exercise. $28 \times 28$ grayscale digits, 10 classes, 60k train + 10k test.
+- **Two-moons** if you want to fit on your laptop in under a minute. 2-D toy, 2 classes, one scikit-learn call.
+
+For this guide we use **two-moons**, which makes the math trivially fast and gives a beautiful decision-boundary picture at the end. The same code with $d_0 = 784$ and $d_L = 10$ handles MNIST.
+
+---
+
+## 3. Architecture
+
+- $d_0 = 2$ (two-moons) or $784$ (MNIST).
+- $d_1 = 64$ (hidden width).
+- $d_2 = 2$ (two-moons) or $10$ (MNIST). Output logits → softmax → cross-entropy.
+- Hidden activation: ReLU.
+
+That is one hidden layer in the sense of 2.1; "2-layer MLP" by convention counts trainable layers, not activation layers.
+
+---
+
+## 4. Initialisation (He, from 2.10)
+
+```python
+import numpy as np
+rng = np.random.default_rng(0)
+
+d0, d1, d2 = 2, 64, 2
+
+W1 = rng.normal(0.0, np.sqrt(2.0 / d0), size=(d1, d0))
+b1 = np.zeros(d1)
+W2 = rng.normal(0.0, np.sqrt(2.0 / d1), size=(d2, d1))
+b2 = np.zeros(d2)
+```
+
+He init for ReLU layers; zero biases.
+
+---
+
+## 5. Forward pass (from 2.4)
+
+```python
+def relu(z):
+    return np.maximum(0.0, z)
+
+def softmax(z):
+    z = z - z.max(axis=1, keepdims=True)   # log-sum-exp shift (0.10)
+    e = np.exp(z)
+    return e / e.sum(axis=1, keepdims=True)
+
+def forward(X, W1, b1, W2, b2):
+    Z1 = X @ W1.T + b1
+    A1 = relu(Z1)
+    Z2 = A1 @ W2.T + b2
+    Yhat = softmax(Z2)
+    return Z1, A1, Z2, Yhat
+```
+
+`X` has shape $B \times d_0$, all activations have shape $B \times d_\ell$. The softmax is row-wise, stable via the max-subtraction from 0.10.
+
+---
+
+## 6. Loss (from 1.7)
+
+```python
+def cross_entropy(Yhat, y_int):
+    # y_int: integer class labels, shape (B,)
+    B = Yhat.shape[0]
+    eps = 1e-12
+    return -np.mean(np.log(Yhat[np.arange(B), y_int] + eps))
+```
+
+In production we would fuse softmax + CE for stability (the $-z_y + \operatorname{logsumexp}(z)$ form from 1.7); here we compute softmax explicitly to keep the code transparent.
+
+---
+
+## 7. Backward pass (from 2.5–2.7)
+
+```python
+def backward(X, y_int, Z1, A1, Yhat, W2):
+    B, K = Yhat.shape
+
+    # one-hot the labels
+    Y = np.zeros_like(Yhat)
+    Y[np.arange(B), y_int] = 1.0
+
+    # output delta (2.5)
+    Delta2 = (Yhat - Y) / B          # shape (B, d2)
+
+    # layer-2 grads (2.7)
+    dW2 = Delta2.T @ A1              # shape (d2, d1)
+    db2 = Delta2.sum(axis=0)         # shape (d2,)
+
+    # backprop recursion (2.6)
+    Delta1 = (Delta2 @ W2) * (Z1 > 0)   # ReLU' is 1 if z>0 else 0
+    # shape (B, d1)
+
+    # layer-1 grads
+    dW1 = Delta1.T @ X               # shape (d1, d0)
+    db1 = Delta1.sum(axis=0)         # shape (d1,)
+
+    return dW1, db1, dW2, db2
+```
+
+Every line corresponds to a boxed formula from 2.5–2.7. No automatic differentiation; this *is* reverse-mode AD, by hand, specialised to this graph.
+
+---
+
+## 8. SGD update (from 1.3)
+
+```python
+def sgd_step(params, grads, lr):
+    return [p - lr * g for p, g in zip(params, grads)]
+```
+
+That's it.
+
+---
+
+## 9. Training loop
+
+```python
+from sklearn.datasets import make_moons
+
+X, y_int = make_moons(n_samples=2000, noise=0.20, random_state=0)
+X = X.astype(np.float64)
+
+lr = 0.1
+batch_size = 64
+n_epochs = 200
+
+n = X.shape[0]
+
+for epoch in range(n_epochs):
+    perm = rng.permutation(n)
+    for i in range(0, n, batch_size):
+        idx = perm[i:i + batch_size]
+        Xb, yb = X[idx], y_int[idx]
+
+        Z1, A1, Z2, Yhat = forward(Xb, W1, b1, W2, b2)
+        dW1, db1, dW2, db2 = backward(Xb, yb, Z1, A1, Yhat, W2)
+
+        W1 -= lr * dW1
+        b1 -= lr * db1
+        W2 -= lr * dW2
+        b2 -= lr * db2
+
+    if epoch % 20 == 0:
+        _, _, _, Yhat = forward(X, W1, b1, W2, b2)
+        loss = cross_entropy(Yhat, y_int)
+        acc = (Yhat.argmax(axis=1) == y_int).mean()
+        print(f"epoch {epoch:4d} | loss {loss:.4f} | acc {acc:.3f}")
+```
+
+After 200 epochs on two-moons you should hit $\sim 99\%$ training accuracy. The decision boundary is a smooth wiggly curve separating the two crescents.
+
+---
+
+## 10. Sanity checks
+
+Three things to verify before trusting the implementation.
+
+**(a) Backward matches a finite-difference reference.** For one parameter $\theta_k$, compute
+
+$$
+\widetilde{\partial L / \partial \theta_k} \approx \frac{L(\theta_k + \varepsilon) - L(\theta_k - \varepsilon)}{2 \varepsilon}
+$$
+
+with $\varepsilon = 10^{-6}$ and compare against the analytic gradient. Agreement to $\sim 10^{-6}$ relative error is healthy.
+
+**(b) Loss decreases monotonically on average.** If it doesn't, the learning rate is too high or the gradient signs are flipped.
+
+**(c) Re-run with `lr = 10` and confirm divergence.** A failure mode is reassuring — it confirms you can break things.
+
+---
+
+## 11. What to do next
+
+Drop this code into your dissertation's notation and confirm the numbers match what you wrote there. Then break things on purpose:
+
+- Replace ReLU with sigmoid and observe vanishing gradients (2.9) as you stack more hidden layers.
+- Turn off He init (set $\sigma_W = 0.01$) and observe everything dies.
+- Increase the learning rate until SGD diverges; find the threshold.
+- Add a second hidden layer; verify your backward correctly chains two recursions.
+
+Each of these is one or two lines of code and ten minutes of staring at training curves. It is the quickest path to internalising what the math in Chapter 2 actually does.
+
+---
+
+## 12. Takeaways
+
+- One 80-line script implements the full Chapter 2 pipeline: He init → forward (matmul + ReLU + softmax) → cross-entropy → backward (delta recursion + outer products) → SGD update.
+- Every line of the backward maps to a boxed formula from 2.5–2.7.
+- Finite-difference gradient checking is the cheapest correctness test.
+- Once this works on two-moons, swap in MNIST and watch it train.
+
+---
+
+<SelfTest>
+
+**(a)** Run the script. Report the final training loss and accuracy after 200 epochs.
+
+**(b)** Implement a finite-difference gradient check on `W2[0, 0]` and verify analytic agreement to $\sim 10^{-6}$.
+
+**(c)** Replace ReLU with sigmoid, keep everything else the same. How many epochs to reach 95% accuracy? What happens if you double the depth (insert another `(W, b, ReLU)` block)?
+
+**(d)** Profile the forward and backward passes with `time.perf_counter`. Verify the ratio is roughly 1 : 1 (Baur–Strassen, 2.11).
+
+</SelfTest>

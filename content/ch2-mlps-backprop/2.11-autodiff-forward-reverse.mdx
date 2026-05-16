@@ -1,0 +1,131 @@
+---
+title: "2.11 — Automatic differentiation: forward vs reverse mode"
+chapter: 2
+order: 11
+estimatedMinutes: 22
+goal: "Understand why reverse-mode AD is O(forward) for a single scalar output and is the only practical choice for deep learning."
+prerequisites: ["ch2-mlps-backprop/2.7-backprop-weight-gradients", "ch0-math-foundations/0.3-chain-rule"]
+---
+
+## 1. Why this session exists
+
+Backprop in 2.5–2.7 was derived for one specific architecture (the MLP). In real frameworks — PyTorch, JAX, TensorFlow — the same chain-rule computation is generated *automatically* for any computational graph you can write down. This is **automatic differentiation** (AD), and it comes in two flavours, **forward-mode** and **reverse-mode**. Knowing the cost asymmetry between them is the difference between a working training loop and one that's $10^6 \times$ slower than it should be.
+
+---
+
+## 2. The computational graph
+
+Every computation is a DAG of primitive operations: matmul, add, sigmoid, sum, log, …. Each node has $n$ inputs and $m$ outputs (usually $m = 1$ for scalars, $m \in \{B, K, \ldots\}$ for batched activations). The full forward pass is one such DAG; the loss is the unique sink with $1$ output.
+
+AD evaluates the Jacobian of the sink with respect to the leaves (parameters or inputs) by applying the chain rule along DAG edges. The two modes differ in the *order* of traversal.
+
+---
+
+## 3. Forward mode
+
+**Idea.** Propagate Jacobian-times-vector products *forward* through the graph, alongside the values.
+
+Suppose we want $\partial L / \partial \theta_k$ for one specific scalar parameter $\theta_k$. Define a "tangent" $\dot u := \partial u / \partial \theta_k$ for every intermediate $u$. The tangents propagate by the chain rule:
+
+$$
+\text{if } v = f(u_1, \dots, u_n), \text{ then } \dot v = \sum_i \frac{\partial f}{\partial u_i}\, \dot u_i.
+$$
+
+Initialise $\dot{\theta_k} = 1$ and $\dot{\theta_j} = 0$ for $j \ne k$, sweep forward through the graph alongside the value computation, and read off $\dot L = \partial L / \partial \theta_k$ at the sink.
+
+**Cost.** One forward sweep per parameter gives one partial derivative. For $N$ parameters: $\Theta(N \cdot \text{forward cost})$.
+
+**Good for.** Few inputs, many outputs. Computing the Jacobian of an $\mathbb{R}^d \to \mathbb{R}^k$ function when $d \ll k$.
+
+**Bad for.** Deep learning. We have $N \sim 10^9$ parameters and one scalar output. Forward-mode AD would cost $10^9$ forward passes per gradient step. Infeasible.
+
+---
+
+## 4. Reverse mode
+
+**Idea.** Propagate Jacobian-vector products *backwards* through the graph, from the scalar sink to the leaves.
+
+Define a "cotangent" $\bar u := \partial L / \partial u$ for every intermediate $u$. The cotangents propagate by the chain rule applied to the reverse-mode adjoint:
+
+$$
+\text{if } v = f(u_1, \dots, u_n), \text{ then } \bar u_i \mathrel{+}= \bar v \cdot \frac{\partial f}{\partial u_i}.
+$$
+
+Initialise $\bar L = 1$ and sweep backward through the graph (in reverse topological order from the sink). The cotangents at the leaves are exactly the partial derivatives of $L$ with respect to those leaves.
+
+**Cost.** One backward sweep gives *all* parameter gradients at once: $\Theta(\text{forward cost})$ — same order as the forward pass.
+
+**Good for.** One output, many inputs ($N \sim 10^9$ parameters and a scalar loss). **The only practical choice for deep learning.**
+
+The "$\Theta(\text{forward})$" claim is essentially the **Baur–Strassen theorem** (1983): the cost of computing the gradient of a scalar-valued function is within a constant factor of the cost of evaluating the function. The constant is small (usually $2$–$5$); for our MLP backprop derivation it was $\approx 2$ (one matmul backward $\approx$ one matmul forward).
+
+---
+
+## 5. Worked comparison
+
+A toy: $f(\theta_1, \theta_2, \theta_3) = (\theta_1 + \theta_2) \cdot \theta_3$. Compute $\partial f / \partial \theta_1$, $\partial f / \partial \theta_2$, $\partial f / \partial \theta_3$.
+
+**Forward mode for $\partial f / \partial \theta_1$.** Set $\dot \theta_1 = 1$, $\dot \theta_2 = \dot \theta_3 = 0$. Propagate:
+
+- $u := \theta_1 + \theta_2$, so $\dot u = \dot \theta_1 + \dot \theta_2 = 1$.
+- $f := u \cdot \theta_3$, so $\dot f = \dot u\, \theta_3 + u\, \dot \theta_3 = \theta_3$.
+
+Three operations to get one partial. Repeat for $\theta_2$ (another sweep, also $\Theta(\text{forward})$), then for $\theta_3$. Total: $3 \times \text{forward}$.
+
+**Reverse mode (all three at once).** Forward pass: $u = \theta_1 + \theta_2$, $f = u \cdot \theta_3$. Backward: initialise $\bar f = 1$.
+
+- $\bar u \mathrel{+}= \bar f \cdot \theta_3 = \theta_3$ and $\bar \theta_3 \mathrel{+}= \bar f \cdot u = u$.
+- $\bar \theta_1 \mathrel{+}= \bar u \cdot 1 = \theta_3$ and $\bar \theta_2 \mathrel{+}= \bar u \cdot 1 = \theta_3$.
+
+All three partials in one sweep. Total: $\approx 1 \times \text{forward}$.
+
+Forward is $3 \times$ slower than reverse for three parameters. Scale this up to $10^9$ and the asymmetry is the difference between "feasible" and "the heat death of the universe".
+
+---
+
+## 6. How real frameworks implement it
+
+PyTorch and JAX both implement reverse-mode AD with two main components.
+
+1. **The forward pass** builds a graph (PyTorch's `Tensor`s carry a `grad_fn` attribute; JAX traces functions into a `jaxpr`) recording the operations performed.
+2. **`.backward()`** traverses the graph in reverse topological order, calling each node's pre-registered backward formula (a "vector–Jacobian product", or VJP).
+
+Each primitive op (matmul, sigmoid, sum, log) ships with a forward + backward pair. Users don't write the backward by hand — they compose primitives. The chain-rule machinery from this chapter is implemented once, at the framework level, and called for every model.
+
+<Aside type="note">
+JAX's `grad`, `jit`, `vmap` are functional transformations on traced functions. PyTorch's autograd is imperative, building the graph during execution. The mathematical content is identical; the engineering differs.
+</Aside>
+
+---
+
+## 7. Higher-order derivatives
+
+Want a Hessian? Two ways:
+
+1. **Forward over reverse.** Run reverse-mode on $L$ to get $\nabla L$, then run forward-mode on the function $\theta \mapsto \nabla L$ to get $\nabla^2 L$ row-by-row. Cost $\Theta(N \cdot \text{forward})$.
+2. **Reverse over reverse.** Run reverse-mode on $\theta \mapsto \nabla L \cdot v$ (a scalar) to get $\nabla^2 L \cdot v$ for an arbitrary direction $v$ in $\Theta(\text{forward})$ — useful for Hessian-vector products without forming the matrix.
+
+For deep learning, we almost never form the full Hessian (it has $N^2$ entries, $10^{18}$ for our $N = 10^9$ example). Hessian-vector products are the right primitive for second-order methods (K-FAC, Sophia, …; Chapter 3).
+
+---
+
+## 8. Takeaways
+
+- Forward-mode AD: $\Theta(\#\text{inputs} \cdot \text{forward})$. Good when inputs few, outputs many.
+- Reverse-mode AD: $\Theta(\text{forward})$ for one scalar output. **The standard mode for DL.**
+- Backprop from 2.5–2.7 is reverse-mode AD specialised to the MLP graph.
+- Framework-level VJPs make this transparent for arbitrary user code.
+
+---
+
+<SelfTest>
+
+**(a)** A function $f : \mathbb{R}^{1000} \to \mathbb{R}^{1000}$ has Jacobian $J \in \mathbb{R}^{1000 \times 1000}$. How many forward-mode sweeps to compute $J$? How many reverse-mode sweeps? Conclude they tie for square Jacobians.
+
+**(b)** State the Baur–Strassen theorem in one sentence and explain why it justifies training $10^9$-parameter models with reverse-mode AD.
+
+**(c)** A custom op `my_op(x) = x * sin(x)` should ship with what backward function? Write the VJP $\bar x \mathrel{+}= \bar y \cdot (?)$ in terms of $x$.
+
+**(d)** Why don't deep-learning frameworks materialise the full Hessian? Answer in terms of $N$, FLOPs, and memory. What is the right object to materialise instead?
+
+</SelfTest>

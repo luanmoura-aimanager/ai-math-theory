@@ -1,0 +1,138 @@
+---
+title: "2.10 — Weight initialisation: Xavier/Glorot and He"
+chapter: 2
+order: 10
+estimatedMinutes: 18
+goal: "Derive variance-preserving initialisations: Xavier (linear/tanh, 1/n) and He (ReLU, 2/n)."
+prerequisites: ["ch2-mlps-backprop/2.9-vanishing-exploding-gradients"]
+---
+
+## 1. Why this session exists
+
+Section 2.9 left an open question: even if the activation $g$ has well-behaved $g'$, the matrix factors $(W^{(\ell+1)})^\top$ in the backprop chain can themselves rescale the gradient. To keep activations *and* gradients well-scaled across depth, we initialise weights with a carefully chosen variance. The two recipes are **Xavier/Glorot** (linear or tanh) and **He** (ReLU).
+
+This is one of those moments where deep learning's empirical fix turns out to come from a one-line calculation.
+
+---
+
+## 2. Setup: variance propagation through a linear layer
+
+Consider one linear layer
+
+$$
+z = W a + b
+$$
+
+with $W \in \mathbb{R}^{d_{\text{out}} \times d_{\text{in}}}$, $a \in \mathbb{R}^{d_{\text{in}}}$, $b = 0$ (for now). Assume entries of $W$ are i.i.d. with mean $0$ and variance $\sigma_W^2$, independent of $a$. Then
+
+$$
+z_i = \sum_{j=1}^{d_{\text{in}}} W_{i, j}\, a_j.
+$$
+
+Compute $\operatorname{Var}(z_i)$. With $\mathbb{E}[W_{i, j}] = 0$ and independence,
+
+$$
+\operatorname{Var}(z_i) \;=\; \sum_j \operatorname{Var}(W_{i, j}\, a_j) \;=\; \sum_j \mathbb{E}[W_{i, j}^2]\, \mathbb{E}[a_j^2] \;=\; d_{\text{in}} \cdot \sigma_W^2 \cdot \operatorname{Var}(a).
+$$
+
+(With $a_j$ centred and i.i.d. across $j$, $\mathbb{E}[a_j^2] = \operatorname{Var}(a)$.)
+
+**To preserve variance** through the layer, $\operatorname{Var}(z) = \operatorname{Var}(a)$, we need
+
+$$
+\boxed{\ \sigma_W^2 \;=\; \frac{1}{d_{\text{in}}}.\ }
+$$
+
+This is the **variance-preservation principle** for forward propagation.
+
+---
+
+## 3. Xavier / Glorot initialisation (Glorot & Bengio, 2010)
+
+Glorot's full analysis does the same calculation in the backward pass and asks for *both* forward and backward variances to be preserved. Backward through the linear layer (from 2.6),
+
+$$
+\operatorname{Var}\bigl((W^\top \delta)_i\bigr) = d_{\text{out}} \cdot \sigma_W^2 \cdot \operatorname{Var}(\delta).
+$$
+
+To preserve $\operatorname{Var}(\delta)$ we need $\sigma_W^2 = 1 / d_{\text{out}}$. Forward wants $1 / d_{\text{in}}$; backward wants $1 / d_{\text{out}}$. Compromise: take the harmonic mean,
+
+$$
+\boxed{\ \sigma_W^2 \;=\; \frac{2}{d_{\text{in}} + d_{\text{out}}} \quad\text{(Xavier / Glorot)}.\ }
+$$
+
+In practice we sample $W_{i, j} \sim \mathcal{N}(0, \sigma_W^2)$ or, equivalently variance-wise, $W_{i, j} \sim \mathcal{U}(-r, r)$ with $r = \sqrt{6 / (d_{\text{in}} + d_{\text{out}})}$.
+
+This was the right choice when the dominant activation was tanh, which has $\tanh'(0) = 1$ — so the activation doesn't change the variance budget. With sigmoid hidden layers, Xavier was already a marked improvement on the previous "random scale, hope" approach.
+
+---
+
+## 4. He initialisation (He et al., 2015)
+
+For ReLU activations the calculation needs one more step. Recall (2.3, 2.9) that $\operatorname{ReLU}'(z) \in \{0, 1\}$ and that for a symmetrically distributed $z$, $\operatorname{ReLU}(z) = 0$ half the time. Plugging this into the variance propagation:
+
+$$
+\operatorname{Var}\bigl(\operatorname{ReLU}(z)\bigr) = \tfrac{1}{2}\, \operatorname{Var}(z),
+$$
+
+assuming a centred symmetric $z$. So *passing through a ReLU halves the variance*. To compensate, the next layer's weight matrix should *double* the variance budget:
+
+$$
+\boxed{\ \sigma_W^2 \;=\; \frac{2}{d_{\text{in}}} \quad\text{(He / Kaiming, for ReLU)}.\ }
+$$
+
+This is the **He** (or **Kaiming**) initialisation — the default for ReLU networks today (`nn.init.kaiming_normal_` in PyTorch).
+
+**Why this matters concretely.** Without the $2 / d_{\text{in}}$ correction, ReLU networks see their activation variance halve at every layer; after $L = 20$ layers, the typical activation magnitude has shrunk by $2^{-10} \approx 10^{-3}$, and the network is effectively dead. He init keeps the activation variance constant across depth.
+
+---
+
+## 5. Generalisations
+
+Two natural extensions.
+
+**Generic activation $g$ with derivative-magnitude $\eta := \sqrt{\mathbb{E}[(g'(Z))^2]}$ at the initialisation scale.** The compensating variance is
+
+$$
+\sigma_W^2 = \frac{1}{\eta^2 \cdot d_{\text{in}}}.
+$$
+
+Plugging $\eta^2 = 1/2$ (ReLU half-on) gives $2 / d_{\text{in}}$, recovering He. Plugging $\eta = 1$ (tanh near zero) gives $1 / d_{\text{in}}$, recovering Xavier-forward.
+
+**Layer-wise scale rescue.** Modern alternatives like **LSUV** (Mishkin & Matas, 2016) iteratively rescale each layer's weights so that the actual variance of $z^{(\ell)}$ at initialisation matches a target value, measured on a real batch. More accurate than the closed-form rule, more annoying to implement.
+
+---
+
+## 6. Biases
+
+Biases are usually initialised to zero. There is no variance to preserve — biases shift means, not variances. Exception: the bias of the *output* logit for a binary classifier on imbalanced data is sometimes initialised to $\operatorname{logit}(\mathbb{P}(y = 1))$ so that the network's prior prediction at step 0 matches the class frequency.
+
+---
+
+## 7. From your dissertation
+
+Your dissertation §C.5 (p. 165) used $\operatorname{Var}(w^{(\ell)}) = 1 / d_{\ell - 1}$ — the original Xavier-forward variance, not the harmonic-mean version. For tanh-activated networks that was the right call. The He factor of $2$ appears once you switch to ReLU, which your dissertation's experiments did in later sections — so retroactively, swapping to He there would have improved trainability. A small but real example of how the theory keeps catching up to the practice.
+
+---
+
+## 8. Takeaways
+
+- Forward-variance preservation: $\sigma_W^2 = 1 / d_{\text{in}}$.
+- Backward-variance preservation: $\sigma_W^2 = 1 / d_{\text{out}}$.
+- Xavier (compromise): $\sigma_W^2 = 2 / (d_{\text{in}} + d_{\text{out}})$. Use with linear or tanh.
+- He (ReLU correction): $\sigma_W^2 = 2 / d_{\text{in}}$. Use with ReLU.
+- Biases initialise to zero unless you have prior class-imbalance information.
+
+---
+
+<SelfTest>
+
+**(a)** Verify the §2 variance computation step by step, being explicit about which independence and centring assumptions you used.
+
+**(b)** Derive the ReLU compensation factor of $2$ in §4 by computing $\mathbb{E}[\operatorname{ReLU}(Z)^2]$ for $Z \sim \mathcal{N}(0, \sigma^2)$.
+
+**(c)** For a 10-layer ReLU MLP with widths all equal to $d = 256$, compute the expected magnitude of $\lVert a^{(10)} \rVert$ relative to $\lVert a^{(0)} \rVert$ under (i) Xavier init, (ii) He init.
+
+**(d)** Why don't we just initialise all weights to $0$? (Hint: think about what happens to the symmetry between units in the same layer when every weight is identical and the gradient is also identical.)
+
+</SelfTest>

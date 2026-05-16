@@ -1,0 +1,129 @@
+---
+title: "2.1 — From perceptrons to layers: the MLP as composition"
+chapter: 2
+order: 1
+estimatedMinutes: 18
+goal: "Write the MLP as a composition of affine maps and pointwise nonlinearities, with clean layer-wise notation."
+prerequisites: ["ch1-linear-models-perceptron/1.6-xor-depth"]
+---
+
+## 1. Why this session exists
+
+Chapter 1 built single-layer models. Chapter 2 builds **multilayer** models — every neural network in this course will be an instance of the structure we write down here. The whole engine is one diagram and one composition: stack affine maps and pointwise nonlinearities, alternating, and you have an MLP.
+
+The hard part isn't the definition; it's notation. We're going to fix a single, consistent notation now and use it for the rest of the course.
+
+---
+
+## 2. One-hidden-layer MLP
+
+Inputs $x \in \mathbb{R}^{d_0}$. Output $\hat y \in \mathbb{R}^{d_L}$ (whatever the task demands: a single logit for binary, $K$ logits for $K$-class).
+
+A **single hidden layer** with $d_1$ units computes
+
+$$
+\begin{aligned}
+z^{(1)} &= W^{(1)} x + b^{(1)} \in \mathbb{R}^{d_1}, \\
+a^{(1)} &= g\bigl(z^{(1)}\bigr) \in \mathbb{R}^{d_1}, \\
+\hat y &= W^{(2)} a^{(1)} + b^{(2)} \in \mathbb{R}^{d_2},
+\end{aligned}
+$$
+
+with weight matrices $W^{(1)} \in \mathbb{R}^{d_1 \times d_0}$ and $W^{(2)} \in \mathbb{R}^{d_2 \times d_1}$, biases $b^{(1)} \in \mathbb{R}^{d_1}$ and $b^{(2)} \in \mathbb{R}^{d_2}$, and a **pointwise activation** $g$ applied entry-by-entry. For classification we then push $\hat y$ through a sigmoid or softmax; for regression we leave it linear.
+
+For multi-class classification specifically, the final output of the network *and* the prediction in probability space are
+
+$$
+z^{(L)} \in \mathbb{R}^K \quad \text{(logits)}, \qquad \hat y = \operatorname{softmax}(z^{(L)}) \in \Delta^{K-1}.
+$$
+
+---
+
+## 3. The general $L$-layer MLP
+
+Generalising the one-hidden-layer case to $L$ layers:
+
+$$
+a^{(0)} := x, \qquad
+\begin{cases}
+z^{(\ell)} = W^{(\ell)} a^{(\ell-1)} + b^{(\ell)}, \\
+a^{(\ell)} = g^{(\ell)}\bigl(z^{(\ell)}\bigr),
+\end{cases}
+\quad \ell = 1, \dots, L,
+$$
+
+with $W^{(\ell)} \in \mathbb{R}^{d_\ell \times d_{\ell-1}}$, $b^{(\ell)} \in \mathbb{R}^{d_\ell}$, and each $g^{(\ell)}$ a pointwise nonlinearity (or the identity for a final regression head). The full network is the **composition**
+
+$$
+\boxed{\ f(x) \;=\; g^{(L)}\!\Bigl(W^{(L)}\, g^{(L-1)}\!\bigl(W^{(L-1)} \cdots g^{(1)}(W^{(1)} x + b^{(1)}) \cdots + b^{(L-1)}\bigr) + b^{(L)}\Bigr).\ }
+$$
+
+Read it out loud once. Every neural network in this course — convolutional, recurrent, Transformer — is structurally this composition, with extra structure imposed on each $W^{(\ell)}$ (sparsity, weight-sharing, attention).
+
+---
+
+## 4. Notation we'll keep for the rest of the course
+
+- $L$ — number of layers (depth).
+- $d_\ell$ — width of layer $\ell$ ($d_0$ is the input dimension, $d_L$ the output dimension).
+- $z^{(\ell)} = W^{(\ell)} a^{(\ell-1)} + b^{(\ell)}$ — **pre-activation** at layer $\ell$.
+- $a^{(\ell)} = g^{(\ell)}(z^{(\ell)})$ — **activation** at layer $\ell$. $a^{(0)} = x$.
+- $W^{(\ell)} \in \mathbb{R}^{d_\ell \times d_{\ell-1}}$ — weight matrix mapping layer $\ell - 1$ to layer $\ell$. Rows index outputs, columns index inputs.
+- $b^{(\ell)} \in \mathbb{R}^{d_\ell}$ — bias of layer $\ell$.
+- $g^{(\ell)}$ — pointwise activation (sigmoid, ReLU, GELU, identity, …).
+
+The parameters of the network are $\theta = \{W^{(\ell)}, b^{(\ell)}\}_{\ell = 1}^L$, totalling
+
+$$
+\#\theta = \sum_{\ell = 1}^L \bigl(d_\ell\, d_{\ell - 1} + d_\ell\bigr) \quad \text{scalars}.
+$$
+
+For a moderate net with $L = 6$ and $d_\ell \approx 1000$, this is on the order of $6 \times 10^6$ parameters; for a Transformer LM it grows to $10^{10}$. Same notation throughout.
+
+<Aside type="history">
+Your dissertation §C.4 used $a^{(j)}_i = g(z^{(j-1)}_i)$ with subscripts shifted by one. The course convention here aligns indices: $a^{(\ell)}$ and $z^{(\ell)}$ both refer to layer $\ell$. Re-read your derivations with the index shift in mind and the math is identical.
+</Aside>
+
+---
+
+## 5. The two "linear" layer types coming later
+
+Every layer in this chapter is **fully connected**: $W^{(\ell)}$ is dense, every output unit sees every input unit. Two cousins we'll meet later:
+
+- **Convolutional** (Chapter 4). $W^{(\ell)}$ is a structured sparse matrix that re-uses the same small filter across spatial positions. Many fewer parameters for the same $d_\ell, d_{\ell-1}$.
+- **Self-attention** (Chapter 6). $W^{(\ell)}$ depends on the input itself, $W^{(\ell)} = f(x)$ — a *data-dependent* linear layer. Same composition structure, dynamic weights.
+
+The general MLP is the prototype. The rest are special cases.
+
+---
+
+## 6. The compositional perspective
+
+Three takeaways from the composition view.
+
+1. **Each layer is a learned feature map.** $a^{(\ell)}$ is a representation of the input. Deeper layers tend to be more abstract; we'll formalise this in 2.2 (universal approximation) and in Chapter 5 (embeddings).
+2. **The chain rule is the engine.** All of backprop is the chain rule from 0.3 applied to this composition. Nothing new about derivatives; everything new about *organising* the derivative computation efficiently.
+3. **Nonlinearity is essential.** Without the $g^{(\ell)}$'s, every $f$ reduces to a single linear map $W = W^{(L)} \cdots W^{(1)}$, and we'd be back to the perceptron of Chapter 1. The composition only buys expressive power when at least one $g^{(\ell)}$ is nonlinear — the XOR result of 1.6 is the prototype.
+
+---
+
+## 7. Takeaways
+
+- An MLP is a composition of affine maps and pointwise nonlinearities.
+- Parameters: $\theta = \{W^{(\ell)}, b^{(\ell)}\}$.
+- The notation $(z^{(\ell)}, a^{(\ell)}, W^{(\ell)}, b^{(\ell)}, g^{(\ell)})$ carries through the entire course.
+- Without nonlinearities, depth gains nothing; XOR is the canonical witness.
+
+---
+
+<SelfTest>
+
+**(a)** For an MLP with widths $d_0 = 784$ (MNIST), $d_1 = 256$, $d_2 = 128$, $d_3 = 10$ (one hidden block of two layers + softmax head), count the total number of parameters layer by layer.
+
+**(b)** Show that an MLP with no nonlinearities — every $g^{(\ell)} = \operatorname{id}$ — is equivalent to a single affine layer. Find the equivalent $(W, b)$ in terms of the per-layer parameters.
+
+**(c)** Write the one-hidden-layer MLP $f(x) = W^{(2)} \sigma(W^{(1)} x + b^{(1)}) + b^{(2)}$ that solves XOR (use the construction from 1.6 §4 with sigmoids and a large gain). What are the entries of $W^{(1)}, b^{(1)}, W^{(2)}, b^{(2)}$?
+
+**(d)** A common mistake: applying the activation $g$ after the *output* of the last layer for a regression task. Why is that wrong, and what is the correct convention for regression heads?
+
+</SelfTest>

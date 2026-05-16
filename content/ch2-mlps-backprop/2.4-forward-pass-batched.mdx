@@ -1,0 +1,121 @@
+---
+title: "2.4 — The forward pass in batched matrix form"
+chapter: 2
+order: 4
+estimatedMinutes: 16
+goal: "Vectorise the MLP forward pass over a mini-batch of B examples and get every dimension right cold."
+prerequisites: ["ch2-mlps-backprop/2.1-mlp-composition"]
+---
+
+## 1. Why this session exists
+
+In code, MLPs process a mini-batch of $B$ examples at a time, not one example at a time — that is what makes GPU computation efficient. The math is identical, but the shapes change. Getting layer shapes right *cold* (no derivation, you see "$B \times d_2$" and just know what's there) is a skill we want before we start computing gradients in 2.5–2.7.
+
+---
+
+## 2. Single example: refresher
+
+From 2.1, per-example forward at layer $\ell$:
+
+$$
+z^{(\ell)} = W^{(\ell)} a^{(\ell-1)} + b^{(\ell)}, \qquad a^{(\ell)} = g^{(\ell)}(z^{(\ell)}),
+$$
+
+with $a^{(\ell)} \in \mathbb{R}^{d_\ell}$, $W^{(\ell)} \in \mathbb{R}^{d_\ell \times d_{\ell-1}}$, $b^{(\ell)} \in \mathbb{R}^{d_\ell}$.
+
+---
+
+## 3. Batch: stacking examples as rows
+
+Let $A^{(\ell-1)} \in \mathbb{R}^{B \times d_{\ell-1}}$ be the batch of activations at layer $\ell - 1$, one example per row. Then the batched pre-activation is
+
+$$
+\boxed{\ Z^{(\ell)} \;=\; A^{(\ell-1)}\, (W^{(\ell)})^\top \;+\; \mathbf{1}_B\, (b^{(\ell)})^\top \;\in\; \mathbb{R}^{B \times d_\ell},\ }
+$$
+
+with $\mathbf{1}_B$ the all-ones column. In NumPy/PyTorch, the bias addition is implemented by broadcasting: you just write `Z = A @ W.T + b`.
+
+The batched activation is the pointwise nonlinearity applied entry-by-entry:
+
+$$
+A^{(\ell)} = g^{(\ell)}(Z^{(\ell)}) \;\in\; \mathbb{R}^{B \times d_\ell}.
+$$
+
+**Why the transpose?** Because we chose to put examples as **rows** of $A$. The matrix-vector product $W^{(\ell)} a$ from §2 has $a$ as a column on the right; to apply the same map to every row of $A$, the convenient form is $A\, W^\top$.
+
+<Aside type="note">
+The "examples as rows" convention is what NumPy / PyTorch use by default. An equivalent column-major convention puts examples as columns; then the formula is $Z = W A + b\, \mathbf{1}^\top$ with no transpose. Pick one and stick with it; we'll stay row-major for the rest of the course.
+</Aside>
+
+---
+
+## 4. Dimension table
+
+Every shape you'll ever need at the forward pass.
+
+- Input batch: $A^{(0)} = X \in \mathbb{R}^{B \times d_0}$.
+- Weights: $W^{(\ell)} \in \mathbb{R}^{d_\ell \times d_{\ell-1}}$ (output dim × input dim).
+- Bias: $b^{(\ell)} \in \mathbb{R}^{d_\ell}$ (output dim).
+- Pre-activation: $Z^{(\ell)} = A^{(\ell-1)} (W^{(\ell)})^\top + b^{(\ell)} \in \mathbb{R}^{B \times d_\ell}$.
+- Activation: $A^{(\ell)} = g^{(\ell)}(Z^{(\ell)}) \in \mathbb{R}^{B \times d_\ell}$.
+- Output logits: $Z^{(L)} \in \mathbb{R}^{B \times d_L}$.
+- Output probabilities: $\hat Y = \operatorname{softmax}(Z^{(L)},\ \text{axis} = 1) \in \mathbb{R}^{B \times d_L}$ — softmax over the class axis, separately for each row.
+
+A worked instance — MNIST with $(d_0, d_1, d_2, d_3) = (784, 256, 128, 10)$ and batch $B = 32$:
+
+- $X$ is $32 \times 784$.
+- $W^{(1)}$ is $256 \times 784$, $b^{(1)}$ is $256$.
+- $Z^{(1)}$ is $32 \times 256$, $A^{(1)}$ is $32 \times 256$.
+- $W^{(2)}$ is $128 \times 256$, $b^{(2)}$ is $128$.
+- $Z^{(2)}$ is $32 \times 128$, $A^{(2)}$ is $32 \times 128$.
+- $W^{(3)}$ is $10 \times 128$, $b^{(3)}$ is $10$.
+- $Z^{(3)}$ is $32 \times 10$, $\hat Y$ is $32 \times 10$.
+
+If you can write this table cold, the rest of the chapter follows mechanically.
+
+---
+
+## 5. The training loss in batch form
+
+For multi-class classification with $K = d_L$ classes and one-hot targets $Y \in \{0, 1\}^{B \times K}$,
+
+$$
+L(\theta) \;=\; -\frac{1}{B} \sum_{i=1}^B \sum_{k=1}^K Y_{i, k}\, \log \hat Y_{i, k},
+$$
+
+equivalently $-\frac{1}{B} \operatorname{tr}(Y^\top \log \hat Y)$ with $\log$ elementwise. Using the log-sum-exp form from 0.10 / 1.7,
+
+$$
+L(\theta) \;=\; \frac{1}{B} \sum_{i=1}^B \Bigl[\, -z^{(L)}_{i, y_i} \;+\; \log \sum_{j=1}^K e^{\,z^{(L)}_{i, j}} \,\Bigr],
+$$
+
+i.e. per-row stable log-sum-exp plus per-row true-class logit subtraction, then average. In PyTorch this is `F.cross_entropy(logits, y)` with `logits` of shape $B \times K$ and `y` of shape $B$ (class indices).
+
+---
+
+## 6. Why this matters for what's next
+
+Backprop in 2.5–2.7 will be derived in the same batched matrix form. Knowing the shapes ahead of time prevents silly transposition bugs: each gradient should be the same shape as its parameter, every $\delta^{(\ell)}$ should be the same shape as $Z^{(\ell)}$, and any product that isn't $d_\ell \times d_{\ell-1}$ where we wanted weights is a sign we got something wrong.
+
+---
+
+## 7. Takeaways
+
+- Examples-as-rows: $A^{(\ell)} \in \mathbb{R}^{B \times d_\ell}$, $W^{(\ell)} \in \mathbb{R}^{d_\ell \times d_{\ell-1}}$, $Z^{(\ell)} = A^{(\ell-1)} (W^{(\ell)})^\top + b^{(\ell)}$.
+- Bias is broadcast across the batch axis.
+- The forward pass is $L$ matrix-multiplies and $L$ pointwise activations.
+- Loss is a scalar summary; we'll backprop *from* it through this graph in 2.5.
+
+---
+
+<SelfTest>
+
+**(a)** For an MLP with widths $(d_0, d_1, d_2, d_3) = (10, 64, 64, 3)$ and batch $B = 8$, list the shapes of $X$, $W^{(\ell)}$, $b^{(\ell)}$, $Z^{(\ell)}$, $A^{(\ell)}$ for $\ell = 1, 2, 3$.
+
+**(b)** Verify that $A^{(\ell-1)} (W^{(\ell)})^\top + b^{(\ell)}$ produces $B$ independent vector additions (one per row), not a single matrix add.
+
+**(c)** Count the number of scalar multiplications in the forward pass of the MNIST network of §4 for a batch $B = 32$. Compare with the parameter count.
+
+**(d)** Suppose you swapped to the column-major convention $A^{(\ell)} \in \mathbb{R}^{d_\ell \times B}$. Rewrite the forward formula. Which layout is more cache-friendly when $B$ is large? (Hint: think about how matmul libraries lay out memory and dispatch BLAS.)
+
+</SelfTest>

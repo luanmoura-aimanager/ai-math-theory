@@ -1,0 +1,154 @@
+---
+title: "2.3 — Activation functions: sigmoid, tanh, ReLU, leaky ReLU, GELU"
+chapter: 2
+order: 3
+estimatedMinutes: 22
+goal: "Know the formula, derivative, saturation regime, and typical use case of each common activation function."
+prerequisites: ["ch0-math-foundations/0.9-ae-differentiability-relu", "ch1-linear-models-perceptron/1.2-logistic-regression-bce"]
+---
+
+## 1. Why this session exists
+
+The activation function $g^{(\ell)}$ is the only nonlinearity in an MLP — everything else is affine. Picking $g$ is the difference between a net that trains easily (ReLU, GELU) and one that vanishes its own gradient before reaching layer 5 (deep sigmoid). This session collects the standard choices, their derivatives, and their training-time pathologies.
+
+---
+
+## 2. Sigmoid
+
+$$
+\sigma(z) = \frac{1}{1 + e^{-z}}, \qquad \sigma'(z) = \sigma(z)\bigl(1 - \sigma(z)\bigr).
+$$
+
+Range $(0, 1)$. Symmetric around $z = 0$ in the sense $1 - \sigma(z) = \sigma(-z)$. Self-derivative identity from 1.2.
+
+**Saturation.** $\sigma'(z) \in (0,\, 1/4]$ with maximum at $z = 0$. For $|z|$ large, $\sigma'(z) \to 0$ exponentially. **This is the vanishing-gradient problem.** Multiply $L$ saturated $\sigma'$s and the gradient signal at the input shrinks by $(1/4)^L$ in the worst case — a depth-10 sigmoid net loses 6 orders of magnitude.
+
+**Where it appears.** Output layer of binary classifiers (paired with BCE in 1.2). Almost never used as a hidden activation in modern networks.
+
+---
+
+## 3. Hyperbolic tangent
+
+$$
+\tanh(z) = \frac{e^z - e^{-z}}{e^z + e^{-z}} = 2\, \sigma(2 z) - 1, \qquad \tanh'(z) = 1 - \tanh^2(z).
+$$
+
+Range $(-1, 1)$. Centred at $0$, which makes downstream weights see a zero-mean input — empirically slightly better trainability than sigmoid for the same architecture.
+
+**Saturation.** $\tanh'(z) \in (0, 1]$ with the maximum at $z = 0$. Same exponential decay for $|z|$ large, but the bound is $1$ instead of $1/4$.
+
+**Where it appears.** Old-school RNNs (LSTM cells use $\tanh$ in the cell update). Largely supplanted by ReLU and friends in feed-forward networks.
+
+---
+
+## 4. ReLU
+
+$$
+\operatorname{ReLU}(z) = \max(0, z), \qquad \operatorname{ReLU}'(z) = \begin{cases} 1, & z > 0, \\ 0, & z < 0. \end{cases}
+$$
+
+(Subgradient $[0, 1]$ at $z = 0$; see 0.9. Frameworks pick $0$ by convention.)
+
+**No saturation on the positive side.** $\operatorname{ReLU}'(z) = 1$ whenever $z > 0$, so gradient signal flows through without attenuation. This is the single biggest reason ReLU enabled training of very deep networks (Krizhevsky et al., 2012 onwards).
+
+**Dying-ReLU pathology.** A unit with $z < 0$ on every training example has $\operatorname{ReLU}'(z) = 0$ on every example and never receives a gradient — it is **dead** and stays dead. Bad initialisation or excessive learning rate can kill a substantial fraction of a layer's units.
+
+**Where it appears.** The default hidden-layer activation for everything from CNNs to MLPs through the 2010s. Still common in Transformers, though increasingly displaced by GELU and SiLU.
+
+---
+
+## 5. Leaky ReLU and parametric ReLU
+
+$$
+\operatorname{LReLU}_\alpha(z) = \max(\alpha z,\, z), \qquad \operatorname{LReLU}_\alpha'(z) = \begin{cases} 1, & z > 0, \\ \alpha, & z < 0, \end{cases}
+$$
+
+with small $\alpha \in (0, 1)$, typically $\alpha = 0.01$.
+
+The negative-side slope $\alpha$ ensures **no unit is ever truly dead**: a leaky-ReLU unit always receives some gradient signal. **Parametric ReLU (PReLU)** makes $\alpha$ a learned parameter, one per channel.
+
+**Where it appears.** Vision backbones occasionally; less common in modern Transformer LMs.
+
+---
+
+## 6. GELU
+
+$$
+\operatorname{GELU}(z) = z \cdot \Phi(z),
+$$
+
+where $\Phi$ is the standard-normal CDF. Smooth everywhere ($C^\infty$). A common closed-form approximation,
+
+$$
+\operatorname{GELU}(z) \approx \tfrac{1}{2}\, z\, \Bigl(1 + \tanh\bigl(\sqrt{2/\pi}\,(z + 0.044715\, z^3)\bigr)\Bigr).
+$$
+
+Derivative: $\operatorname{GELU}'(z) = \Phi(z) + z\, \phi(z)$, where $\phi$ is the standard-normal density.
+
+**Properties.** Like ReLU for $z \gg 0$ (slope $\approx 1$). Like zero for $z \ll 0$ (with a small negative dip near $z \approx -1$). Smooth instead of piecewise-affine. **No dying units** — gradients flow everywhere, just very small for $z \ll 0$.
+
+**Where it appears.** The default activation in BERT, GPT-2, GPT-3, and most subsequent Transformer LMs. The smoothness probably helps optimisation marginally; the bigger reason is empirical — GELU consistently outperforms ReLU by a small margin in attention-heavy architectures.
+
+---
+
+## 7. Swish / SiLU
+
+$$
+\operatorname{SiLU}(z) = z \cdot \sigma(z), \qquad \operatorname{SiLU}'(z) = \sigma(z) + z\, \sigma(z)\bigl(1 - \sigma(z)\bigr).
+$$
+
+Smooth, non-monotonic (small dip near $z \approx -1.28$, like GELU). Discovered by Ramachandran et al. (2017) through neural-architecture search; equivalent to the Swish activation of the same paper.
+
+**Where it appears.** Many recent LLMs (Llama, Mistral, …) use SiLU in their feed-forward sub-blocks, often in the gated variant called **SwiGLU**.
+
+---
+
+## 8. Gated variants: GLU, GeGLU, SwiGLU
+
+Modern LLM feed-forward blocks often **gate** the activation: compute two parallel linear projections and elementwise-multiply one through an activation,
+
+$$
+\operatorname{SwiGLU}(x) = \operatorname{SiLU}(W_1 x) \odot (W_2 x).
+$$
+
+This doubles the parameter count of the FFN block but consistently outperforms ungated versions (Shazeer 2020). We'll meet SwiGLU again in Chapter 8 when surveying modern LLM architectures.
+
+---
+
+## 9. Choosing one
+
+A short heuristic.
+
+- **Output layer of a binary classifier.** Sigmoid.
+- **Output layer of a multi-class classifier.** Softmax.
+- **Output layer of a regression.** Identity.
+- **Hidden layers, small / classical net.** ReLU (or Leaky ReLU if dying-ReLU bites).
+- **Hidden layers, modern Transformer LM.** GELU (canonical) or SwiGLU (state-of-the-art).
+- **Hidden layers, recurrent net.** Tanh and sigmoid (legacy LSTM/GRU choices).
+
+<Aside type="history">
+Your dissertation §C.4 used sigmoid + ReLU + leaky ReLU + softmax — the standard 2019 toolkit. The course adds GELU and SwiGLU because they are the dominant choices in modern Transformer LMs. The math is otherwise unchanged; backprop in this chapter is written generically as "given $g'(z)$", so the choice of activation just plugs in a different derivative formula.
+</Aside>
+
+---
+
+## 10. Takeaways
+
+- Sigmoid and tanh saturate and cause vanishing gradients in deep networks.
+- ReLU resolves vanishing gradients on the positive side but introduces dying units.
+- Leaky ReLU, GELU, SwiGLU are "ReLU-like but more forgiving on the negative side".
+- Modern default: GELU for Transformer FFN; SwiGLU for the latest LLMs.
+
+---
+
+<SelfTest>
+
+**(a)** Compute $\sigma'(z)$, $\tanh'(z)$, $\operatorname{ReLU}'(z)$, $\operatorname{GELU}'(z)$, $\operatorname{SiLU}'(z)$ at $z = 0$. Which has the largest derivative at zero?
+
+**(b)** Show that $\tanh(z) = 2\, \sigma(2z) - 1$. Use this to derive $\tanh'(z) = 1 - \tanh^2(z)$ from $\sigma'(z) = \sigma(z)(1 - \sigma(z))$.
+
+**(c)** A ReLU MLP of depth $L = 20$, initialised so each unit has $\mathbb{P}(z > 0) = 1/2$. Compute the expected fraction of *fully-alive* gradient paths from input to output. (Motivation for the He initialisation in 2.10.)
+
+**(d)** For GELU, verify $\operatorname{GELU}(z) \to z$ as $z \to +\infty$ and $\operatorname{GELU}(z) \to 0$ exponentially fast as $z \to -\infty$. Roughly where is the minimum of $\operatorname{GELU}$ on $\mathbb{R}$?
+
+</SelfTest>

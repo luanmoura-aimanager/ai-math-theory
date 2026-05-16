@@ -1,0 +1,111 @@
+---
+title: "2.9 — Vanishing and exploding gradients"
+chapter: 2
+order: 9
+estimatedMinutes: 18
+goal: "Explain the multiplicative chain of g'(z) along the backward pass and why sigmoid kills depth while ReLU survives."
+prerequisites: ["ch2-mlps-backprop/2.6-backprop-recursion"]
+---
+
+## 1. Why this session exists
+
+The backprop recursion from 2.6,
+
+$$
+\delta^{(\ell)} = \bigl((W^{(\ell+1)})^\top \delta^{(\ell+1)}\bigr) \odot g'^{(\ell)}(z^{(\ell)}),
+$$
+
+is a *product* over layers. Whatever happens at the top gets multiplied by a chain of Jacobian factors as it propagates to the bottom. If those factors are systematically $< 1$, the gradient signal **vanishes** before reaching the input layers. If they are systematically $> 1$, it **explodes**. Either way, training stalls — vanishing because layer-1 weights stop receiving meaningful updates; exploding because the optimiser overshoots into noise.
+
+This session quantifies the chain and pins down why ReLU saved deep learning circa 2012.
+
+---
+
+## 2. The multiplicative chain
+
+Iterating the recursion from layer $L$ down to layer $1$ and ignoring the matrix factors for a moment (treating them as "approximately norm-preserving" — we'll fix this in 2.10),
+
+$$
+\lVert \delta^{(1)} \rVert \;\approx\; \lVert \delta^{(L)} \rVert \cdot \prod_{\ell = 1}^{L - 1} \bigl|g'^{(\ell)}\bigl(z^{(\ell)}\bigr)\bigr|_{\text{typical}},
+$$
+
+with the product running from layer $1$ to layer $L - 1$ and "typical" meaning the geometric mean of the per-unit derivatives along the path. The size of the gradient at layer 1 is set by this product.
+
+If $|g'| \approx c < 1$ at every layer, then $\lVert \delta^{(1)} \rVert \approx c^{L-1} \lVert \delta^{(L)} \rVert$. For sigmoid, $c \le 1/4$, so depth $L = 10$ kills the gradient by a factor of $(1/4)^9 \approx 4 \times 10^{-6}$. **Vanishing gradient.**
+
+If $|g'| \approx c > 1$, then $c^{L-1}$ blows up. **Exploding gradient.**
+
+The matrix factors $(W^{(\ell+1)})^\top$ can rescue or destroy this in either direction — which is why we'll spend all of 2.10 on initialisation.
+
+---
+
+## 3. Sigmoid: vanishing by construction
+
+Recall from 2.3 that $\sigma'(z) = \sigma(z)(1 - \sigma(z)) \le 1/4$, with equality only at $z = 0$. At typical operating points $z = \pm 2$, $\sigma'(z) \approx 0.10$. So the multiplicative factor at each layer is at most $0.25$, and usually around $0.10$.
+
+For depth $L = 10$, $\lVert \delta^{(1)} \rVert / \lVert \delta^{(L)} \rVert \in (10^{-10},\, 10^{-6})$, depending on operating points. The gradient at layer 1 is *not* getting useful training signal. **This is the entire reason sigmoid hidden layers were abandoned around 2010–2012.**
+
+Tanh is slightly better: $\tanh'(z) \in (0, 1]$, with maximum $1$ at $z = 0$. But for $|z| > 2$ the derivative is again close to $0$, and the chain still shrinks. Tanh deep networks were trainable but slow; the AlexNet jump in 2012 was largely about replacing them with ReLU.
+
+---
+
+## 4. ReLU: vanishing is gone (on the active side)
+
+For ReLU, $\operatorname{ReLU}'(z) \in \{0, 1\}$. On the *active* side ($z > 0$), the multiplicative factor is exactly $1$ — gradient passes through undamped. On the *dead* side ($z < 0$), it is $0$ — gradient is killed completely for that unit.
+
+The key statistical fact: a *path* from layer 1 to the loss is alive iff *every* ReLU along the way is active. If we initialise weights so each ReLU is active with probability $1/2$ (which is what symmetry around zero gives), then a single fixed path of length $L$ is alive with probability $2^{-L}$. **But there are exponentially many paths**, and they share weights — so the effective gradient at layer 1 stays bounded as $L$ grows, *provided* the weight matrices have the right scale.
+
+That "right scale" is the **He initialisation** of 2.10: $\operatorname{Var}(W^{(\ell)}_{i, j}) = 2 / d_{\ell - 1}$. It exactly compensates for the factor of $1/2$ from dead ReLUs.
+
+---
+
+## 5. The exploding side
+
+For unbounded activations or aggressively scaled weights, the per-step product can be $> 1$, and the gradient explodes exponentially. Classical example: linear RNNs (no nonlinearity, weights unbounded) — the backprop product becomes the matrix power $(W^\top)^T$ for $T$ time steps, and the largest eigenvalue of $W$ controls everything.
+
+The clean clinical fix is **gradient clipping**: after computing the gradient, scale it down to a fixed norm threshold $c$,
+
+$$
+g \leftarrow g \cdot \min\!\left(1, \frac{c}{\lVert g \rVert}\right).
+$$
+
+This caps the maximum step size in parameter space and prevents the optimiser from veering off into infinity. Standard practice in RNNs and Transformers; clip threshold is typically $c = 1.0$.
+
+<Aside type="note">
+A subtler form of explosion happens *during the forward pass* in deep Transformers, where residual streams accumulate without bound. The fix is **layer normalisation** (Chapter 6), which keeps activations bounded after each residual step. Norm-based stabilisation of the forward and backward passes is one of the design choices that made very deep Transformers trainable.
+</Aside>
+
+---
+
+## 6. What this implies for activation choice
+
+- **Avoid pure sigmoid / tanh in hidden layers.** Their derivatives are bounded above by $1/4$ and $1$ respectively, and saturate fast. The gradient chain shrinks geometrically with depth.
+- **Prefer ReLU / GELU / SiLU.** Their derivatives are bounded by $\sim 1$ everywhere on the positive side and don't go far above $1$ on the negative side. The chain is roughly preserved.
+- **Use the right initialisation** (2.10) so the matrix factors don't unilaterally rescale the chain.
+- **Use residual connections** (Chapters 4, 5) — they bypass the multiplicative chain entirely by adding the input to the output, $a^{(\ell)} = a^{(\ell-1)} + f^{(\ell)}(a^{(\ell-1)})$.
+
+The combination of "good activation + good init + residuals + layernorm" is essentially the entire story of how networks with 50–100+ layers became routine in the 2015–2020 stretch.
+
+---
+
+## 7. Takeaways
+
+- The backprop signal at layer $1$ is a *product* of per-layer Jacobian norms.
+- Sigmoid: typical factor $\le 1/4$ → vanishing for $L > 10$.
+- ReLU: typical factor $= 1$ on the active side → vanishing solved (modulo dying units).
+- Exploding: rare with bounded activations, common in unbounded ones; fix with gradient clipping.
+- Modern recipe: ReLU/GELU + He init + residual connections + layernorm.
+
+---
+
+<SelfTest>
+
+**(a)** Compute $\sigma'(z)$ at $z = 0, 1, 2, 3$. For a sigmoid hidden net of depth $L = 8$ with typical operating point $z = 2$, estimate the ratio $\lVert \delta^{(1)} \rVert / \lVert \delta^{(L)} \rVert$.
+
+**(b)** For ReLU at depth $L = 10$, assume each unit is active with probability $1/2$. What is the probability that a single fixed path from input to output is alive end-to-end? With $d_\ell = 256$ units per layer, what is the expected number of live paths?
+
+**(c)** Show that scaling $g \leftarrow g \cdot \min(1, c / \lVert g \rVert)$ ensures $\lVert g_{\text{new}} \rVert \le c$ and preserves direction. Is the resulting update step still a descent direction for the original loss?
+
+**(d)** Residual connection: $a^{(\ell)} = a^{(\ell-1)} + f^{(\ell)}(a^{(\ell-1)})$. Compute $\partial a^{(\ell)} / \partial a^{(\ell-1)}$ and explain why this Jacobian "always contains $I$ as a term", letting gradient flow through even when $f$ saturates.
+
+</SelfTest>

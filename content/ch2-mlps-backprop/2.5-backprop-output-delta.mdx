@@ -1,0 +1,135 @@
+---
+title: "2.5 — Backprop, part 1: the output delta δ⁽ᴸ⁾ = ŷ − y"
+chapter: 2
+order: 5
+estimatedMinutes: 16
+goal: "Define the backprop delta variable and derive the output-layer delta for softmax + cross-entropy."
+prerequisites: ["ch1-linear-models-perceptron/1.8-multiclass-ce-gradient", "ch2-mlps-backprop/2.4-forward-pass-batched"]
+---
+
+## 1. Why this session exists
+
+Backpropagation is the chain rule from 0.3 applied to the MLP composition from 2.1. To organise the computation we introduce a single variable — the **delta**, $\delta^{(\ell)}$ — that propagates gradient signal backwards through the network. The base case of the backward recursion lives at the loss layer. For softmax + cross-entropy, the answer is the identity we already proved in 1.8.
+
+---
+
+## 2. Definition of $\delta^{(\ell)}$
+
+For each layer $\ell$, define
+
+$$
+\boxed{\ \delta^{(\ell)} \;:=\; \frac{\partial L}{\partial z^{(\ell)}} \;\in\; \mathbb{R}^{d_\ell}.\ }
+$$
+
+(One column per example in the batched form; we keep working per-example here and re-vectorise in §5.)
+
+In words: $\delta^{(\ell)}$ is the gradient of the loss with respect to the *pre-activation* at layer $\ell$. It is the natural backward-pass variable because once we have it we can compute the gradients w.r.t. $W^{(\ell)}$ and $b^{(\ell)}$ in one step (2.7), *and* we can propagate to $\delta^{(\ell-1)}$ in one step (2.6).
+
+---
+
+## 3. The output delta for softmax + CE
+
+Setup. Final-layer logits $z^{(L)} \in \mathbb{R}^K$, predicted distribution $\hat y = \operatorname{softmax}(z^{(L)}) \in \mathbb{R}^K$, one-hot label $y \in \{0, 1\}^K$, cross-entropy loss
+
+$$
+L = -\sum_{k=1}^K y_k\, \log \hat y_k.
+$$
+
+This is *exactly* the setup of 1.8. By the result there,
+
+$$
+\boxed{\ \delta^{(L)} \;=\; \frac{\partial L}{\partial z^{(L)}} \;=\; \hat y - y.\ }
+$$
+
+The "miracle gradient" of the entire chapter. No $\sigma'$ damping, no $K \times K$ matrix — just a $K$-vector residual.
+
+---
+
+## 4. Other common output deltas
+
+Three more output layers we'll need.
+
+**Sigmoid + binary cross-entropy** (the $K = 2$ case, also used per-output for multi-label classification). From 1.2,
+
+$$
+\delta^{(L)} = \hat y - y \in \mathbb{R}.
+$$
+
+**Linear + mean-squared error** (regression with no output nonlinearity). Loss $L = \tfrac{1}{2} \lVert \hat y - y \rVert^2$ with $\hat y = z^{(L)}$. Then
+
+$$
+\delta^{(L)} = \hat y - y \in \mathbb{R}^{d_L}.
+$$
+
+Same shape, same expression — the "match the activation to the loss" principle of 1.2 keeps the output delta clean every time.
+
+**Sigmoid + MSE.** This is the *bad* pairing from 1.2 SelfTest (d). It leaves a $\sigma'(z^{(L)})$ multiplier:
+
+$$
+\delta^{(L)} = (\hat y - y)\, \odot\, \sigma'(z^{(L)}).
+$$
+
+You can do it, but the $\sigma' \in (0, 1/4]$ damping makes confident-but-wrong predictions move slowly. Avoid.
+
+---
+
+## 5. Batched form
+
+For a mini-batch of $B$ examples, define
+
+$$
+\Delta^{(\ell)} \;:=\; \frac{\partial L_{\text{batch}}}{\partial Z^{(\ell)}} \;\in\; \mathbb{R}^{B \times d_\ell}.
+$$
+
+Here $L_{\text{batch}} = \tfrac{1}{B} \sum_{i=1}^B L_i$ is the average loss over the batch. By linearity,
+
+$$
+\Delta^{(\ell)}_{i, :} \;=\; \frac{1}{B}\, \frac{\partial L_i}{\partial z^{(\ell)}_i} \;=\; \frac{1}{B}\, \delta^{(\ell)}_i.
+$$
+
+So the batched $\Delta^{(L)}$ for softmax + CE is
+
+$$
+\Delta^{(L)} \;=\; \frac{1}{B}\,(\hat Y - Y) \;\in\; \mathbb{R}^{B \times K}.
+$$
+
+(In code we usually keep the $1/B$ factor inside the loss reduction. Whether it lives in $\Delta$ or in the final gradient is bookkeeping.)
+
+---
+
+## 6. Sanity check via shapes
+
+- $z^{(L)} \in \mathbb{R}^{d_L}$, so $\delta^{(L)} \in \mathbb{R}^{d_L}$ ✓.
+- $\hat y, y \in \mathbb{R}^{d_L}$, so $\hat y - y \in \mathbb{R}^{d_L}$ ✓.
+- Batched: $Z^{(L)}, \hat Y, Y \in \mathbb{R}^{B \times d_L}$, so $\hat Y - Y \in \mathbb{R}^{B \times d_L}$ ✓.
+
+All shapes match. This is how we'll spot dimension bugs in 2.6 and 2.7.
+
+---
+
+## 7. Takeaways
+
+- $\delta^{(\ell)} := \partial L / \partial z^{(\ell)}$ is the central backward-pass variable.
+- For softmax + CE, $\delta^{(L)} = \hat y - y$ (1.8 reused verbatim).
+- Same identity for sigmoid + BCE and for linear + MSE — these are the three "loss-aligned" output heads.
+- Avoid sigmoid + MSE: it leaves a $\sigma'$ multiplier and trains slowly.
+
+---
+
+## 8. Where we go next
+
+We have $\delta^{(L)}$. Session 2.6 propagates it backwards: $\delta^{(\ell+1)} \to \delta^{(\ell)}$ via the chain rule. Session 2.7 uses each $\delta^{(\ell)}$ to compute $\partial L / \partial W^{(\ell)}$ and $\partial L / \partial b^{(\ell)}$. Session 2.8 walks through a tiny numerical example end-to-end.
+
+---
+
+<SelfTest>
+
+**(a)** For a regression task with linear output and MSE loss, derive $\delta^{(L)}$ from scratch.
+
+**(b)** For multi-label classification — multiple independent sigmoid outputs each with its own BCE — write $\delta^{(L)}$ as a vector and check that each entry is $\hat y_k - y_k$.
+
+**(c)** Compute $\delta^{(L)}$ for the *bad* pairing sigmoid + MSE and contrast with sigmoid + BCE. For what values of $(\hat y, y)$ is the BCE delta much larger than the MSE one?
+
+**(d)** In code, $\Delta^{(L)}$ would be returned by `(logits.softmax(dim=-1) - y_onehot) / B`. Verify the units/scale: if you multiply by the learning rate and update, are the magnitudes sensible?
+
+</SelfTest>

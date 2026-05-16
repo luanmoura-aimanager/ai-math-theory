@@ -1,0 +1,118 @@
+---
+title: "2.2 — Universal approximation: what one hidden layer can and cannot do"
+chapter: 2
+order: 2
+estimatedMinutes: 20
+goal: "State and unpack the universal approximation theorem: one hidden layer approximates any continuous function on a compact set — with important caveats."
+prerequisites: ["ch2-mlps-backprop/2.1-mlp-composition"]
+---
+
+## 1. Why this session exists
+
+XOR (1.6) showed that *one* hidden layer is enough to compute a non-linear-separable Boolean function. The natural question — *how powerful is one hidden layer in general?* — was answered by Cybenko (1989) and Hornik (1991): arbitrarily powerful, in a precise approximation sense. This is the **universal approximation theorem** (UAT).
+
+The theorem is important for what it asserts (existence of an approximator) and *equally* important for what it doesn't assert (efficient training, reasonable size, depth efficiency). This session does both halves.
+
+---
+
+## 2. Statement
+
+**Theorem (Cybenko, 1989, sigmoidal case).** Let $\sigma : \mathbb{R} \to [0, 1]$ be a continuous **sigmoidal** function: $\sigma(z) \to 1$ as $z \to +\infty$, $\sigma(z) \to 0$ as $z \to -\infty$. Let $K \subset \mathbb{R}^d$ be compact and $f : K \to \mathbb{R}$ continuous. Then for every $\varepsilon > 0$ there exist $N \in \mathbb{N}$, weights $W \in \mathbb{R}^{N \times d}$, biases $b \in \mathbb{R}^N$, output weights $v \in \mathbb{R}^N$ such that the **one-hidden-layer network**
+
+$$
+F_N(x) \;=\; \sum_{i=1}^N v_i\, \sigma(W_i^\top x + b_i)
+$$
+
+satisfies
+
+$$
+\sup_{x \in K} \bigl|f(x) - F_N(x)\bigr| \;<\; \varepsilon.
+$$
+
+**Hornik's extension (1991).** Replace "sigmoidal" by "any non-polynomial continuous activation". The theorem still holds. So ReLU, GELU, tanh, swish — all are universal approximators.
+
+In words: with enough hidden units, a *single* hidden layer can approximate *any* continuous function on *any* bounded region to *any* accuracy.
+
+---
+
+## 3. What this is — and isn't — telling us
+
+Four things to internalise.
+
+**(a) Universality is existential, not constructive.** The theorem promises that *some* $(W, b, v)$ realising $\varepsilon$-approximation exists. It says nothing about how to *find* them. Training, optimisation, generalisation — none of those questions are addressed.
+
+**(b) The width $N$ is uncontrolled.** The theorem says "for every $\varepsilon$, there exists $N$". It does not bound $N$ in terms of $\varepsilon$ or in terms of the complexity of $f$. For pathological $f$ (high oscillation, sharp transitions) $N$ can be astronomically large. **Universality is not efficiency.**
+
+**(c) It is shallow universality.** UAT is a statement about *one* hidden layer. It doesn't say a deep network is needed or even helpful. The reason we use depth in practice is **not** that shallow nets cannot represent the target — they can — but that deep nets often represent natural targets with *exponentially fewer* parameters. This is a separation result (Telgarsky 2016 and follow-ups), not a universality result.
+
+**(d) Continuity matters.** UAT covers continuous targets on compact domains. It says nothing about discontinuous functions, unbounded domains, or functions on discrete spaces. The right tool for piecewise-constant or discrete targets is a different theory (decision trees / boosting).
+
+<Aside type="warning">
+A common over-reading: "deep learning works because of UAT". This is wrong. UAT predicts that a shallow net with enough units can fit anything. The empirical surprise of deep learning is that gradient descent on *finite-width* networks finds *generalising* solutions — that is the deep-learning story (Chapter 3, implicit bias, NTK, etc.), and it is **not** what UAT is about.
+</Aside>
+
+---
+
+## 4. Why it's true — intuition only
+
+We won't prove UAT — the original arguments use the Hahn–Banach theorem (Cybenko) and the Stone–Weierstrass theorem (Hornik). The intuition is short.
+
+Pick a sigmoidal $\sigma$. By scaling and shifting, $\sigma(W^\top x + b)$ is a **soft indicator** of a half-space: it ramps from $\approx 0$ on one side of $\{W^\top x + b = 0\}$ to $\approx 1$ on the other, with a sharp transition that gets sharper as we scale $W$.
+
+A *sum* of two such soft indicators — one with positive weight, one with negative weight — gives a **soft bump** that is $\approx 1$ inside a slab and $\approx 0$ outside. Sums of soft bumps approximate any function that is approximately constant on small slabs. Continuous functions are uniformly approximable by such slab-step functions on a compact set (the Stone–Weierstrass step). Hence sums of sigmoids approximate continuous functions. QED, very roughly.
+
+ReLU and other non-polynomial activations admit similar constructions: sums of $\operatorname{ReLU}(w^\top x + b)$ produce piecewise-affine continuous functions, and those are dense in $C(K)$.
+
+---
+
+## 5. The depth-width trade-off
+
+UAT leaves an obvious follow-up question: *for the same approximation accuracy*, can we use *fewer total parameters* by going deep instead of wide?
+
+Yes. Two concrete results.
+
+- **Telgarsky (2016).** There exist functions on $[0, 1]$ that a depth-$L$ ReLU net realises with $\Theta(L)$ units, but any depth-$\mathcal{O}(1)$ net needs $\Omega(2^L)$ units to approximate within $\varepsilon$. Depth can be **exponentially** parameter-efficient.
+- **Eldan & Shamir (2016).** A separation between depth-2 and depth-3 networks in $\mathbb{R}^d$: certain targets require $e^{\Omega(d)}$ hidden units at depth 2 but only polynomial size at depth 3.
+
+These results say: depth is a *parameter-efficient* knob for representing functions that compose simple pieces. Empirically this matches what we observe — deep nets on hierarchical data (images, text) use orders of magnitude fewer parameters than the shallow equivalents.
+
+---
+
+## 6. Where this is going
+
+The rest of the chapter is about *making* such networks work in practice:
+
+- 2.3 — choosing $g^{(\ell)}$.
+- 2.4 — vectorising the forward pass over a batch.
+- 2.5–2.8 — backprop: computing gradients through the composition.
+- 2.9–2.10 — training pathologies (vanishing/exploding gradients) and initialisation.
+- 2.11–2.12 — automatic differentiation and an end-to-end NumPy implementation.
+
+UAT tells us the function we want is *in the family*. The rest of the chapter is about how to actually find it.
+
+---
+
+## 7. Takeaways
+
+- **Universal approximation.** One hidden layer with a non-polynomial continuous activation can approximate any continuous function on a compact set to arbitrary precision.
+- **What UAT does not say.** How big the network must be; how to train it; whether deep is better than wide; anything about generalisation from a finite sample.
+- **Depth–width trade-off.** Depth can be exponentially parameter-efficient for naturally compositional targets (Telgarsky, Eldan–Shamir).
+- Empirically, depth is preferred — UAT is the *floor* of network expressivity, not the ceiling.
+
+---
+
+<SelfTest>
+
+**(a)** Sketch a one-hidden-layer ReLU network that approximates $f(x) = x^2$ on $[-1, 1]$ to within $\varepsilon = 0.01$. How many hidden units does your construction use? (Hint: approximate $x^2$ by a piecewise-affine function with enough ReLU "kinks".)
+
+**(b)** Match each statement to "yes, UAT covers it" or "no, UAT does not":
+  - Training a network with SGD converges to the approximator.
+  - There exists a network of size at most $\operatorname{poly}(1/\varepsilon)$ achieving accuracy $\varepsilon$.
+  - There exists a finite-sized network with $\sup_x |f(x) - F(x)| < \varepsilon$.
+  - The approximator generalises from a finite training set.
+
+**(c)** Why doesn't UAT extend to polynomial activations? (Hint: what is the function class spanned by sums of $\sigma(W^\top x + b)$ when $\sigma$ is a polynomial of degree $k$?)
+
+**(d)** Read Telgarsky's separation theorem out loud and translate it into one sentence about the practical advantage of depth.
+
+</SelfTest>
