@@ -2,6 +2,8 @@
 
 Site de estudo para o livro em progresso **"Do perceptron aos LLMs"**: uma trilha math-first de deep learning até LLMs, em estilo de dissertação.
 
+**Produção:** https://ai-math-theory.vercel.app
+
 ## Rodar localmente
 
 Ver [SETUP.md](./SETUP.md).
