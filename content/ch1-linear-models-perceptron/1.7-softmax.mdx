@@ -1,0 +1,154 @@
+---
+title: "1.7 — From binary to multi-class: the softmax"
+chapter: 1
+order: 7
+estimatedMinutes: 22
+goal: "Derive the softmax as the multinomial-logit MLE for K-class classification and connect it to the binary case and to the log-sum-exp identity."
+prerequisites: ["ch1-linear-models-perceptron/1.2-logistic-regression-bce", "ch0-math-foundations/0.10-numerical-stability"]
+---
+
+## 1. Why this session exists
+
+The sigmoid (1.2) handled $y \in \{0, 1\}$. For $y \in \{1, \dots, K\}$ we need a probability-simplex output. The **softmax** is the canonical generalisation. It will play four roles:
+
+- The natural multinomial extension of the sigmoid (this session).
+- The MLE of a multinomial-logit observation model (this session).
+- The output head of essentially every modern classifier and language model (Chapters 5–8).
+- The gradient sink with the cleanest backward pass in all of deep learning, $\partial L / \partial z = \hat y - y$, generalising 1.2 — the topic of 1.8.
+
+---
+
+## 2. Setup
+
+Labels: $y \in \{1, \dots, K\}$. We will mostly work with the **one-hot** encoding,
+
+$$
+y \in \{0, 1\}^K \quad \text{with exactly one entry equal to } 1.
+$$
+
+Per-class linear scores ("logits"):
+
+$$
+z_k = w_k^\top x + b_k, \qquad k = 1, \dots, K,
+$$
+
+stacked into a vector $z \in \mathbb{R}^K$. The weight matrix is $W \in \mathbb{R}^{K \times n}$ with rows $w_k^\top$; the bias is $b \in \mathbb{R}^K$.
+
+---
+
+## 3. The softmax
+
+Define the **softmax** as
+
+$$
+\boxed{\ \operatorname{softmax}(z)_k \;=\; \frac{e^{z_k}}{\sum_{j=1}^K e^{z_j}}, \quad k = 1, \dots, K. \ }
+$$
+
+Three properties.
+
+**Probability simplex.** Each entry is in $(0, 1)$, and the entries sum to $1$:
+
+$$
+\sum_{k=1}^K \operatorname{softmax}(z)_k = \frac{\sum_k e^{z_k}}{\sum_j e^{z_j}} = 1.
+$$
+
+So $\hat y := \operatorname{softmax}(z)$ is a valid distribution over the $K$ classes.
+
+**Shift invariance.** From 0.10 §4, $\operatorname{softmax}(z + c\,\mathbf{1}) = \operatorname{softmax}(z)$ for any scalar $c$. We use this to stabilise the computation by subtracting $\max_j z_j$.
+
+**Reduction to sigmoid.** For $K = 2$ with logits $(z_1, z_2)$,
+
+$$
+\operatorname{softmax}(z)_1 = \frac{e^{z_1}}{e^{z_1} + e^{z_2}} = \frac{1}{1 + e^{z_2 - z_1}} = \sigma(z_1 - z_2).
+$$
+
+So the two-class softmax depends only on the *difference* of logits, which is the sigmoid of the difference. Setting $z_2 \equiv 0$ recovers the binary sigmoid exactly; the binary case is over-parameterised, which is why for $K = 2$ we usually use one logit and $\sigma$.
+
+---
+
+## 4. The multinomial-logit observation model
+
+Postulate that, conditional on $x$,
+
+$$
+p(y = k \mid x; W, b) = \operatorname{softmax}(W x + b)_k = \frac{e^{w_k^\top x + b_k}}{\sum_{j} e^{w_j^\top x + b_j}}.
+$$
+
+This is the **multinomial-logit** model — the multi-class generalisation of the Bernoulli logistic model in 1.2 (which collapses out of $K = 2$).
+
+The data likelihood for a single example $(x, y)$ with one-hot label $y$:
+
+$$
+p(y \mid x; W, b) = \prod_{k=1}^K \hat y_k^{\,y_k},
+$$
+
+i.e. just the predicted probability of the *correct* class — the product is $1$ for every $k$ except the true class.
+
+---
+
+## 5. MLE = cross-entropy
+
+The log-likelihood for $m$ examples is
+
+$$
+\sum_{i=1}^m \log p(y_i \mid x_i; W, b) = \sum_{i=1}^m \sum_{k=1}^K y_{i, k}\, \log \hat y_{i, k}.
+$$
+
+Negating and averaging gives the **multi-class cross-entropy** training loss:
+
+$$
+\boxed{\ L_{\text{CE}}(W, b) \;=\; -\frac{1}{m} \sum_{i=1}^m \sum_{k=1}^K y_{i, k}\, \log \hat y_{i, k}.\ }
+$$
+
+The same construction as 1.2 (BCE) and 1.1 (least squares): negative average log-likelihood of an observation model. For one-hot $y$ the inner sum reduces to picking out the predicted probability of the true class, $\log \hat y_{i,\, y_i}$.
+
+---
+
+## 6. Cross-entropy on logits via log-sum-exp
+
+Inserting the definition of softmax,
+
+$$
+-\log \hat y_y = -z_y + \log \sum_{j=1}^K e^{z_j}.
+$$
+
+The right-hand side is exactly the log-sum-exp expression from 0.10 §4. Two consequences.
+
+**Stability for free.** Pair this loss with the stable log-sum-exp implementation $\max_j z_j + \log \sum_j e^{z_j - \max_j z_j}$ and you get a fused softmax + cross-entropy that never overflows.
+
+**Direct link to information theory.** $-\log p(y \mid x)$ is the **information content** of observing $y$ under the model. Summed over the dataset and divided by $m$, it is the empirical cross-entropy between the data distribution and the model (0.6, 0.7). Minimising it is exactly the Cover-and-Thomas "code-length minimisation" reading of MLE.
+
+<Aside type="note">
+**Geometric reading.** Softmax is the smooth analogue of $\arg\max$: as we scale all logits by $\beta \to \infty$, $\operatorname{softmax}(\beta z)$ converges to the one-hot indicator of $\arg\max_k z_k$. The parameter $\beta$ is sometimes called an *inverse temperature*; we'll see it in decoding (Chapter 10) and in softmax attention (Chapter 6), where temperature appears as $1/\sqrt{d_k}$.
+</Aside>
+
+---
+
+## 7. Decision rule and Bayes optimality
+
+At inference, the classifier predicts $\hat y = \arg\max_k \hat y_k = \arg\max_k z_k$ (since $\exp$ is monotone). If the multinomial-logit model is correctly specified, this rule coincides with the **Bayes-optimal classifier** that minimises the misclassification rate.
+
+In practice the model is misspecified (the world is not log-linear in the raw features), but the softmax + MLE pairing remains an excellent default — it is convex in $(W, b)$, scales linearly with $K$, and gives calibrated probabilities under mild assumptions.
+
+---
+
+## 8. Takeaways
+
+- Softmax: smooth, simplex-valued, shift-invariant, reduces to sigmoid for $K = 2$.
+- Multinomial-logit model: $p(y = k \mid x) = \operatorname{softmax}(Wx + b)_k$.
+- MLE of this model = multi-class cross-entropy loss.
+- Combined with log-sum-exp, the loss admits a stable fused computation directly on logits.
+
+---
+
+<SelfTest>
+
+**(a)** Verify the reduction $\operatorname{softmax}(z)_1 = \sigma(z_1 - z_2)$ for $K = 2$ and conclude that binary logistic regression is a special case of multi-class softmax regression with $w_2 \equiv 0$.
+
+**(b)** Show shift-invariance algebraically: $\operatorname{softmax}(z + c\,\mathbf{1}) = \operatorname{softmax}(z)$. Conclude that the multinomial-logit model has a redundant parameter — shifting all $w_k$ by the same vector and all $b_k$ by the same scalar leaves the model unchanged.
+
+**(c)** Compute $\partial \operatorname{softmax}(z)_k / \partial z_j$ in the two cases $j = k$ and $j \ne k$. (We'll need this in 1.8.)
+
+**(d)** Show that as the inverse temperature $\beta \to \infty$, $\operatorname{softmax}(\beta z)_k \to \mathbb{1}[k = \arg\max_j z_j]$. What is the role of $\beta$ if you instead want to *sample* from the model?
+
+</SelfTest>

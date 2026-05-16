@@ -1,0 +1,139 @@
+---
+title: "1.6 — The XOR problem and why we need depth"
+chapter: 1
+order: 6
+estimatedMinutes: 18
+goal: "Prove no linear classifier solves XOR, then build a 2-hidden-unit network that does — the simplest case where depth strictly increases expressivity."
+prerequisites: ["ch1-linear-models-perceptron/1.4-separating-hyperplane"]
+---
+
+## 1. Why this session exists
+
+Minsky and Papert's 1969 book *Perceptrons* observed that the simplest non-trivial logical function — exclusive OR — cannot be computed by a single-layer perceptron. The observation effectively killed neural-network research for a decade. The fix (a hidden layer) is mathematically trivial once you know it, but conceptually it is the entire reason the rest of this course exists: **adding depth strictly increases what a linear-threshold network can represent.**
+
+This session does the proof of impossibility and constructs the explicit 2-hidden-unit solution.
+
+---
+
+## 2. XOR
+
+The XOR function on $\{0, 1\}^2$ takes the four input combinations to the values
+
+$$
+\text{XOR}(0, 0) = 0,\quad \text{XOR}(0, 1) = 1,\quad \text{XOR}(1, 0) = 1,\quad \text{XOR}(1, 1) = 0.
+$$
+
+Geometrically: the two diagonally opposite corners of the unit square share a label; the two off-diagonal corners share the other label.
+
+---
+
+## 3. Impossibility for a single linear unit
+
+**Claim.** No affine function $f(x) = w_1 x_1 + w_2 x_2 + b$ classifies all four points correctly under the encoding $\{0 \mapsto -1,\ 1 \mapsto +1\}$ via $\operatorname{sign}(f(x))$.
+
+**Proof.** Suppose for contradiction such $(w_1, w_2, b)$ exist. The four required sign conditions read
+
+$$
+\begin{aligned}
+\text{XOR}(0, 0) = 0 \implies\ & b < 0, \\
+\text{XOR}(1, 0) = 1 \implies\ & w_1 + b > 0, \\
+\text{XOR}(0, 1) = 1 \implies\ & w_2 + b > 0, \\
+\text{XOR}(1, 1) = 0 \implies\ & w_1 + w_2 + b < 0.
+\end{aligned}
+$$
+
+Add the middle two:
+
+$$
+(w_1 + b) + (w_2 + b) = w_1 + w_2 + 2 b \;>\; 0.
+$$
+
+Add the first and the last:
+
+$$
+b + (w_1 + w_2 + b) = w_1 + w_2 + 2 b \;<\; 0.
+$$
+
+The two sums are *the same number* but are required to be both positive and negative. Contradiction. $\blacksquare$
+
+---
+
+## 4. The solution: one hidden layer
+
+XOR is **not** a half-space. But it *is* the symmetric difference of two half-spaces. We compute it as a small linear combination of thresholded sums.
+
+Let
+
+$$
+h_1(x) = \mathbb{1}\bigl[\,x_1 + x_2 - 0.5 > 0\,\bigr], \qquad h_2(x) = \mathbb{1}\bigl[\,x_1 + x_2 - 1.5 > 0\,\bigr].
+$$
+
+Read off:
+
+- $h_1(x) = 1$ iff at least one input is on. (Logical OR.)
+- $h_2(x) = 1$ iff both inputs are on. (Logical AND.)
+
+Then
+
+$$
+\text{XOR}(x_1, x_2) = h_1(x) \,\wedge\, \neg h_2(x) = h_1(x) - h_2(x),
+$$
+
+where the subtraction works because $h_1 \ge h_2$ pointwise on $\{0, 1\}^2$.
+
+So XOR is computed by the two-layer network
+
+$$
+\begin{aligned}
+h_1 &= \mathbb{1}\bigl[\,1 \cdot x_1 + 1 \cdot x_2 - 0.5 > 0\,\bigr] \\
+h_2 &= \mathbb{1}\bigl[\,1 \cdot x_1 + 1 \cdot x_2 - 1.5 > 0\,\bigr] \\
+o   &= h_1 - h_2.
+\end{aligned}
+$$
+
+Two hidden units with hard-threshold activations, one output unit with linear activation. Walk the four inputs:
+
+- $(x_1, x_2) = (0, 0)$: $h_1 = 0,\ h_2 = 0,\ o = 0$. ✅
+- $(x_1, x_2) = (0, 1)$: $h_1 = 1,\ h_2 = 0,\ o = 1$. ✅
+- $(x_1, x_2) = (1, 0)$: $h_1 = 1,\ h_2 = 0,\ o = 1$. ✅
+- $(x_1, x_2) = (1, 1)$: $h_1 = 1,\ h_2 = 1,\ o = 0$. ✅
+
+Exactly XOR.
+
+<Aside type="history">
+Your dissertation §C.3 builds the same construction with NAND/AND/OR primitives — a classical "logic gate" style proof. The version above (two thresholded sums minus each other) is equivalent and is the form that generalises to: *any* Boolean function on $n$ variables is computable by a one-hidden-layer net with at most $2^n$ hidden units. The smoothed (sigmoid / ReLU) version is what we will train in Chapter 2.
+</Aside>
+
+---
+
+## 5. What this teaches us about depth
+
+The XOR result is the simplest piece of evidence for two structural truths in deep learning.
+
+1. **Depth ≠ width.** A wide *single-layer* perceptron — no matter how many parameters — can only carve $\mathbb{R}^n$ into two half-spaces. It cannot compute the intersection of two half-spaces, which is what XOR requires.
+2. **Composition is the source of expressivity.** Composing two threshold functions yields a *non-convex* decision region. Iterating composition (the MLP of Chapter 2) yields arbitrarily complex piecewise-affine regions; in the limit, MLPs can approximate any continuous function on a compact set — the universal approximation theorem (Hornik 1989), which we'll prove in Chapter 3.
+
+The hidden layer is the *new primitive*. It is the difference between fitting a half-space and fitting a polyhedron, and it is the difference between linear regression and "deep learning". Everything else in this course is engineering on top of that insight.
+
+---
+
+## 6. Takeaways
+
+- A single linear classifier cannot solve XOR (the contradiction in §3).
+- Two hidden units plus one output unit do solve XOR (the construction in §4).
+- Cause: XOR is not a half-space; it is the symmetric difference of two half-spaces.
+- This is the prototype demonstration that depth strictly enlarges the function class.
+
+---
+
+<SelfTest>
+
+**(a)** Walk through the §3 contradiction explicitly with $w_1, w_2, b$ replaced by symbolic numbers, observing which two pairs of inequalities clash.
+
+**(b)** Build a two-hidden-unit network that computes the parity function on three inputs, $x_1 \oplus x_2 \oplus x_3$. (Hint: parity on $n$ bits needs more hidden units than on 2; try $n = 3$ first and find the minimum count.)
+
+**(c)** Replace the hard-threshold activations in §4 with sigmoids $h_j = \sigma\bigl(\alpha (w_j^\top x - b_j)\bigr)$ with steepness parameter $\alpha$. Show that as $\alpha \to \infty$, the sigmoid network recovers the hard-threshold one. What goes wrong with backprop when $\alpha$ is very large? (A foreshadow of vanishing-gradient: Chapter 5.)
+
+**(d)** Argue that the family of functions computable by a single linear-threshold unit is closed under negation but not under XOR. Use this closure property to give a 3-line non-existence proof of XOR for a perceptron.
+
+</SelfTest>

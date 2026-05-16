@@ -1,0 +1,185 @@
+---
+title: "1.5 — The perceptron algorithm and Novikoff's convergence theorem"
+chapter: 1
+order: 5
+estimatedMinutes: 26
+goal: "State the perceptron learning rule and prove it converges in at most R²/γ² updates on a linearly separable dataset."
+prerequisites: ["ch1-linear-models-perceptron/1.4-separating-hyperplane"]
+---
+
+## 1. Why this session exists
+
+The **perceptron** (Rosenblatt, 1958) is the first training algorithm for a linear classifier, predating gradient descent on smooth losses. It is also the first algorithm in this course we can prove a clean convergence theorem about. The proof — due to **Novikoff** (1962) — is a one-page induction using the geometric quantities from 1.4. After we have it, every later statement about neural-network training will be measured against this baseline.
+
+---
+
+## 2. The model
+
+Use $\pm 1$ labels: $y_i \in \{-1, +1\}$. The classifier:
+
+$$
+\hat y(x) = \operatorname{sign}(w^\top x + b).
+$$
+
+To simplify notation, *absorb the bias* into the weight vector by augmenting every input with a constant feature:
+
+$$
+\tilde x = \begin{pmatrix} x \\ 1 \end{pmatrix} \in \mathbb{R}^{n+1}, \qquad \tilde w = \begin{pmatrix} w \\ b \end{pmatrix} \in \mathbb{R}^{n+1}.
+$$
+
+Then $w^\top x + b = \tilde w^\top \tilde x$, and everything works in terms of $\tilde w \in \mathbb{R}^{n+1}$. For the rest of this session we drop the tildes and pretend the bias is just another weight on a constant-1 feature.
+
+---
+
+## 3. The learning rule
+
+Initialise $w_0 = 0$. Iterate over the data (round-robin or arbitrary order). At each step, given the current $w_k$ and a chosen example $(x_i, y_i)$:
+
+- **Correct case** ($y_i\, w_k^\top x_i > 0$): leave $w$ unchanged.
+- **Mistake case** ($y_i\, w_k^\top x_i \le 0$): update
+
+$$
+\boxed{\ w_{k+1} \;=\; w_k + y_i\, x_i.\ }
+$$
+
+The update pushes $w$ in the direction that improves the score $y_i\, w_k^\top x_i$ for the example that was just misclassified:
+
+$$
+y_i\, w_{k+1}^\top x_i = y_i\, w_k^\top x_i + y_i^2\, \lVert x_i \rVert^2 = y_i\, w_k^\top x_i + \lVert x_i \rVert^2.
+$$
+
+Each mistake increases that example's score by $\lVert x_i \rVert^2 > 0$.
+
+<Aside type="note">
+The perceptron rule looks ad hoc but is exactly the **subgradient method** (0.9) on the convex hinge-style loss
+
+$$
+L_{\text{perc}}(w) = \sum_i \max\bigl(0,\, -y_i\, w^\top x_i\bigr).
+$$
+
+"Do nothing on correct examples, push by $y_i x_i$ on mistakes" is the negated subgradient of that loss. We'll meet the smoother analogue (hinge + slack) when discussing SVMs in Chapter 3.
+</Aside>
+
+---
+
+## 4. Novikoff's theorem
+
+**Setup.** Suppose the dataset $\{(x_i, y_i)\}_{i=1}^m$ is **linearly separable with geometric margin $\gamma > 0$**, i.e. there exists a unit vector $u \in \mathbb{R}^{n+1}$ (with $\lVert u \rVert = 1$) such that
+
+$$
+y_i\, u^\top x_i \;\ge\; \gamma \quad \text{for all } i.
+$$
+
+Suppose all inputs are bounded in norm: $\lVert x_i \rVert \le R$ for all $i$.
+
+**Claim.** Starting from $w_0 = 0$ and running the perceptron rule of §3, the total number of mistakes (and hence updates) is at most
+
+$$
+\boxed{\ M \;\le\; \frac{R^2}{\gamma^2}. \ }
+$$
+
+In particular, the algorithm terminates in finitely many steps.
+
+**Proof.** Let $w_k$ be the weight vector *after the $k$-th mistake*. We track two quantities.
+
+**Bound 1 — alignment with $u$ grows linearly.** Take the inner product of the update $w_{k+1} = w_k + y_i x_i$ with $u$:
+
+$$
+u^\top w_{k+1} = u^\top w_k + y_i\, u^\top x_i \ge u^\top w_k + \gamma.
+$$
+
+By induction, since $u^\top w_0 = 0$,
+
+$$
+u^\top w_k \;\ge\; k\, \gamma.
+$$
+
+By the Cauchy–Schwarz inequality, $u^\top w_k \le \lVert u \rVert \cdot \lVert w_k \rVert = \lVert w_k \rVert$, hence
+
+$$
+\lVert w_k \rVert \;\ge\; k\, \gamma. \qquad (\star)
+$$
+
+**Bound 2 — squared norm grows at most linearly.** Expand the squared norm of $w_{k+1}$:
+
+$$
+\lVert w_{k+1} \rVert^2 = \lVert w_k \rVert^2 + 2\, y_i\, w_k^\top x_i + \lVert x_i \rVert^2.
+$$
+
+Because the update was applied only when $y_i\, w_k^\top x_i \le 0$, the cross term is $\le 0$. And $\lVert x_i \rVert^2 \le R^2$. So
+
+$$
+\lVert w_{k+1} \rVert^2 \;\le\; \lVert w_k \rVert^2 + R^2.
+$$
+
+By induction from $\lVert w_0 \rVert^2 = 0$,
+
+$$
+\lVert w_k \rVert^2 \;\le\; k\, R^2. \qquad (\star\star)
+$$
+
+**Combining.** From $(\star)$, $\lVert w_k \rVert^2 \ge k^2 \gamma^2$. From $(\star\star)$, $\lVert w_k \rVert^2 \le k R^2$. So
+
+$$
+k^2 \gamma^2 \;\le\; k R^2 \implies k \;\le\; \frac{R^2}{\gamma^2}.
+$$
+
+This holds at every $k$ at which a mistake occurs. Hence the total number of mistakes is $M \le R^2 / \gamma^2$. $\blacksquare$
+
+---
+
+## 5. What the bound is — and isn't — telling us
+
+- **Margin matters.** Halving the margin quadruples the worst-case update count. Wider margins → faster convergence.
+- **Scale matters only through $R$.** Rescaling all $x_i$ by the same constant $c$ scales both $R$ and $\gamma$ by $c$, leaving $R^2 / \gamma^2$ unchanged.
+- **No assumption on data order.** Adversarial orderings can hit the bound; favourable orderings finish faster. The *total* mistake count is invariant under reorderings.
+- **Non-separable data.** The theorem fails — there is no $u$ with the required property. The perceptron will oscillate forever. The **pocket** variant (keep the best $w$ seen so far) is the classical workaround; in modern practice we use logistic regression with regularisation, which always has a unique solution.
+
+<Aside type="history">
+You proved this in your dissertation §3.2 with a step activation. The modern course replaces the step with the sigmoid (1.2) so that we get a smooth, differentiable loss and can fall back on standard SGD. For proving convergence on the classical hard-threshold model, the perceptron rule is still the simplest non-trivial example available.
+</Aside>
+
+---
+
+## 6. A worked toy example
+
+Two points in $\mathbb{R}^2$: $x_+ = (1, 0)$ with $y = +1$, $x_- = (-1, 0)$ with $y = -1$. Augment with the constant feature: $\tilde x_+ = (1, 0, 1)$, $\tilde x_- = (-1, 0, 1)$.
+
+$R = \sqrt 2$ and $u = (1, 0, 0)$ achieves $y_i\, u^\top \tilde x_i = 1$ for both points, so $\gamma = 1$. Novikoff bound: $M \le 2 / 1 = 2$.
+
+Start $w_0 = 0$. Both examples score $0$, so both trigger mistakes. Suppose we hit $\tilde x_+$ first:
+
+$$
+w_1 = 0 + (+1)\,(1, 0, 1) = (1, 0, 1).
+$$
+
+Now check $\tilde x_-$: the signed score is $y\, w_1^\top \tilde x_- = (-1)(-1 + 0 + 1) = 0$, still a mistake. Update:
+
+$$
+w_2 = w_1 + (-1)\,(-1, 0, 1) = (2, 0, 0).
+$$
+
+Both examples now score $+2 > 0$. Done. Two mistakes total, exactly hitting the Novikoff bound.
+
+---
+
+## 7. Takeaways
+
+- Perceptron rule: $w_{k+1} = w_k + y_i x_i$ on mistakes, no-op on correct examples.
+- Novikoff: $M \le R^2 / \gamma^2$ updates on a linearly separable dataset.
+- Proof: two inductive inequalities and one Cauchy–Schwarz application.
+- Margin is the central quantity; the same theme recurs in SVMs and in PAC-style generalisation bounds.
+
+---
+
+<SelfTest>
+
+**(a)** Run the perceptron on the dataset $x_1 = (0, 1)$, $x_2 = (1, 0)$, $x_3 = (-1, 0)$ with labels $(+1, +1, -1)$ (augment with a bias feature). Show every update, and verify the bound $M \le R^2 / \gamma^2$ is respected.
+
+**(b)** Convince yourself the choice $w_0 = 0$ is not essential: redo the inductive step with $w_0 \ne 0$ and adjust the bound.
+
+**(c)** What goes wrong on a non-separable dataset? Run the perceptron on $x_1 = (1, 1)$, $x_2 = (-1, -1)$ labelled $+1$, plus $x_3 = (1, -1)$, $x_4 = (-1, 1)$ labelled $-1$ (this is XOR). Describe the long-run behaviour.
+
+**(d)** Modify the rule to weight updates by a learning rate $\alpha > 0$: $w_{k+1} = w_k + \alpha\, y_i\, x_i$. Does Novikoff's bound still hold? Does $\alpha$ appear in the final answer?
+
+</SelfTest>

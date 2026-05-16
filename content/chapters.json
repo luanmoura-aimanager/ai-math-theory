@@ -2,5 +2,9 @@
   "ch0-math-foundations": {
     "title": "Chapter 0 — Math foundations",
     "order": 0
+  },
+  "ch1-linear-models-perceptron": {
+    "title": "Chapter 1 — Linear models and the perceptron",
+    "order": 1
   }
 }

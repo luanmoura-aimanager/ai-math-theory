@@ -1,0 +1,217 @@
+---
+title: "1.8 — Multi-class cross-entropy and the ŷ − y gradient"
+chapter: 1
+order: 8
+estimatedMinutes: 22
+goal: "Prove the identity ∂L/∂z = ŷ − y for softmax + cross-entropy and understand why it is the most-used backward identity in deep learning."
+prerequisites: ["ch1-linear-models-perceptron/1.7-softmax"]
+---
+
+## 1. Why this session exists
+
+Softmax + cross-entropy is the output head of almost every modern classifier and the entire next-token loss of every LLM. Underneath, it admits a single backward identity:
+
+$$
+\frac{\partial L}{\partial z} = \hat y - y.
+$$
+
+This is the same identity we saw in 1.2 for sigmoid + BCE (the $K = 2$ case). It is the algebraic miracle that makes softmax + cross-entropy the gold-standard pairing — no $\sigma'$ tail, no $K \times K$ matrix to multiply during backward, just a single subtraction. This session is the careful derivation.
+
+---
+
+## 2. Setup
+
+A single training example. Logits $z \in \mathbb{R}^K$, one-hot label $y \in \{0, 1\}^K$ with $\sum_k y_k = 1$. Predicted distribution:
+
+$$
+\hat y_k = \operatorname{softmax}(z)_k = \frac{e^{z_k}}{\sum_j e^{z_j}}.
+$$
+
+Cross-entropy loss:
+
+$$
+L = -\sum_{k=1}^K y_k\, \log \hat y_k.
+$$
+
+Because $y$ is one-hot, $L = -\log \hat y_c$ where $c$ is the index of the true class. Equivalently, $L = -z_c + \log \sum_j e^{z_j}$ (the log-sum-exp form from 0.10 / 1.7).
+
+---
+
+## 3. The Jacobian of softmax
+
+We need $\partial \hat y_k / \partial z_j$ for all $k, j$. Two cases.
+
+**Case $j = k$:**
+
+$$
+\frac{\partial \hat y_k}{\partial z_k}
+= \frac{\partial}{\partial z_k} \frac{e^{z_k}}{\sum_l e^{z_l}}
+= \frac{e^{z_k} \cdot \sum_l e^{z_l} - e^{z_k} \cdot e^{z_k}}{\bigl(\sum_l e^{z_l}\bigr)^2}
+= \hat y_k - \hat y_k^2 = \hat y_k\,(1 - \hat y_k).
+$$
+
+**Case $j \ne k$:**
+
+$$
+\frac{\partial \hat y_k}{\partial z_j}
+= \frac{\partial}{\partial z_j} \frac{e^{z_k}}{\sum_l e^{z_l}}
+= -\frac{e^{z_k}\, e^{z_j}}{\bigl(\sum_l e^{z_l}\bigr)^2}
+= -\hat y_k\, \hat y_j.
+$$
+
+Combining,
+
+$$
+\boxed{\ \frac{\partial \hat y_k}{\partial z_j} \;=\; \hat y_k\,(\delta_{kj} - \hat y_j),\ }
+$$
+
+where $\delta_{kj}$ is the Kronecker delta. The Jacobian matrix is
+
+$$
+J = \operatorname{diag}(\hat y) - \hat y\, \hat y^\top \;\in\; \mathbb{R}^{K \times K}.
+$$
+
+It is symmetric, PSD, and singular — its null space is $\mathbf{1}$, reflecting the simplex constraint $\sum_k \hat y_k = 1$.
+
+---
+
+## 4. The gradient of cross-entropy — derivation 1 (via the Jacobian)
+
+By the chain rule,
+
+$$
+\frac{\partial L}{\partial z_j} = \sum_{k=1}^K \frac{\partial L}{\partial \hat y_k} \cdot \frac{\partial \hat y_k}{\partial z_j}.
+$$
+
+Each factor:
+
+$$
+\frac{\partial L}{\partial \hat y_k} = -\frac{y_k}{\hat y_k}, \qquad
+\frac{\partial \hat y_k}{\partial z_j} = \hat y_k\,(\delta_{kj} - \hat y_j).
+$$
+
+Multiply and sum:
+
+$$
+\frac{\partial L}{\partial z_j} = -\sum_k \frac{y_k}{\hat y_k} \cdot \hat y_k\,(\delta_{kj} - \hat y_j) = -\sum_k y_k\,(\delta_{kj} - \hat y_j).
+$$
+
+The $\hat y_k$ in numerator and denominator cancel. Distribute the sum:
+
+$$
+\frac{\partial L}{\partial z_j} = -\sum_k y_k\, \delta_{kj} + \hat y_j\, \sum_k y_k = -y_j + \hat y_j \cdot 1 = \hat y_j - y_j.
+$$
+
+Writing this as a vector identity,
+
+$$
+\boxed{\ \frac{\partial L}{\partial z} \;=\; \hat y - y \;\in\; \mathbb{R}^K. \ }
+$$
+
+---
+
+## 5. Derivation 2 (via the log-sum-exp form)
+
+Same result, no Jacobian. Start from
+
+$$
+L = -z_c + \log \sum_j e^{z_j}.
+$$
+
+For the first piece, $\partial(-z_c) / \partial z_j = -\delta_{jc} = -y_j$ (since $y$ is one-hot with $y_c = 1$).
+
+For the second piece,
+
+$$
+\frac{\partial}{\partial z_j} \log \sum_l e^{z_l} = \frac{e^{z_j}}{\sum_l e^{z_l}} = \hat y_j.
+$$
+
+(A side identity worth committing to memory: **the gradient of log-sum-exp is the softmax.**)
+
+Adding,
+
+$$
+\frac{\partial L}{\partial z_j} = -y_j + \hat y_j = \hat y_j - y_j. \quad \blacksquare
+$$
+
+The second derivation is shorter because the log-sum-exp form bypasses the softmax Jacobian entirely. Internally, PyTorch's `F.cross_entropy` uses something equivalent.
+
+---
+
+## 6. Gradient w.r.t. the parameters
+
+With logits $z = W x + b$ in $\mathbb{R}^K$, the chain rule extends through the linear layer.
+
+**$\nabla_W L$.** $z_k = w_k^\top x + b_k$, so $\partial z_k / \partial w_k = x^\top$ (and $\partial z_k / \partial w_l = 0$ for $l \ne k$). Therefore
+
+$$
+\frac{\partial L}{\partial w_k} = (\hat y_k - y_k)\, x^\top,
+$$
+
+which stacks into the matrix outer-product
+
+$$
+\boxed{\ \nabla_W L \;=\; (\hat y - y)\, x^\top \;\in\; \mathbb{R}^{K \times n}.\ }
+$$
+
+(Residual column times input row.)
+
+**$\nabla_b L$.** $\partial z_k / \partial b_k = 1$, so
+
+$$
+\nabla_b L = \hat y - y.
+$$
+
+Averaged over a mini-batch of $m$ examples,
+
+$$
+\nabla_W L_{\text{batch}} = \frac{1}{m} \sum_{i=1}^m (\hat y_i - y_i)\, x_i^\top, \qquad
+\nabla_b L_{\text{batch}} = \frac{1}{m} \sum_{i=1}^m (\hat y_i - y_i).
+$$
+
+Same "residual × input" pattern as 1.3, just with vector-valued residuals now.
+
+---
+
+## 7. Why this identity is the most-used in deep learning
+
+Three reasons.
+
+1. **It is the backward signal at the loss layer of every classifier.** Every CNN classifier, every Transformer LM head, every reward model in RLHF (Chapter 9) — they all backpropagate $\hat y - y$ out of the softmax + CE head.
+2. **It composes cleanly with everything upstream.** Whatever module produced the logits $z$ — a linear layer, a deep stack of attention blocks — receives a "tell me where you went wrong" signal of exactly the right shape (a $K$-dim residual) at exactly the right scale (no $\sigma'$ damping).
+3. **It is interpretable.** $\hat y - y$ is the **error in the predicted distribution**. Moving $z$ a step in the direction $-(\hat y - y)$ shifts probability mass from the wrong classes onto the right class. The size of the move is exactly how off the model currently is.
+
+<Aside type="history">
+Both the multi-class identity and the binary special case appear in your dissertation Appendix C (BCE for a hidden-layer sigmoid network on p. 158–159, softmax + CE on the final layer on p. 174–175). They reappear, identically, every time we re-derive a softmax-head loss in this course — there is nothing new in attention's "logit subtraction" backward; it is the same identity in a more elaborate forward graph.
+</Aside>
+
+---
+
+## 8. Takeaways
+
+- $\partial L_{\text{CE}} / \partial z = \hat y - y$. Memorise this.
+- Two derivations: through the softmax Jacobian, or by differentiating the log-sum-exp form.
+- Gradient w.r.t. the weight matrix is the outer product $(\hat y - y)\, x^\top$, averaged over the batch.
+- Sigmoid + BCE is the $K = 2$ special case of this identity (1.2).
+
+---
+
+## 9. Where we go next
+
+Chapter 0 gave us mathematical fluency. Chapter 1 used it to build the simplest end-to-end trainable models — linear regression, binary logistic regression, the perceptron, multi-class softmax regression — and articulated the central obstacle (XOR) that motivates depth.
+
+Chapter 2 introduces the **multilayer perceptron** and **backpropagation**: the same chain rule from 0.3 and the same $\hat y - y$ gradient sink from this session, run through more than one matrix multiplication. The result will be every neural network in this course, all the way to the Transformer.
+
+---
+
+<SelfTest>
+
+**(a)** Redo derivation 1 explicitly for $K = 2$ and check that you recover $\partial L / \partial z = \hat y - y$ as a 2-vector. Compare with the 1.2 scalar version.
+
+**(b)** Show that the softmax Jacobian $J = \operatorname{diag}(\hat y) - \hat y\, \hat y^\top$ is symmetric, PSD, and has $\mathbf{1}$ in its null space. Explain in words why each of these properties is *required* by the structure of softmax outputs.
+
+**(c)** Suppose you use **label smoothing**: replace one-hot $y$ with $(1 - \varepsilon)\, y + \varepsilon\, \mathbf{1} / K$. Show that $\partial L / \partial z = \hat y - y_{\text{smoothed}}$ where $y_{\text{smoothed}}$ is the smoothed target. Why does this prevent confident logits from growing without bound (it acts as a stand-in for L2 regularisation on $z$)?
+
+**(d)** Compute the Hessian $\nabla^2_z L$ and check that it equals the softmax Jacobian $J$ from §3. Conclude that softmax + CE is convex in $z$, and hence in $(W, b)$ since $z = Wx + b$ is affine.
+
+</SelfTest>

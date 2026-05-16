@@ -1,0 +1,170 @@
+---
+title: "1.1 — Linear regression as MLE under Gaussian noise"
+chapter: 1
+order: 1
+estimatedMinutes: 24
+goal: "Show that least squares is exactly maximum likelihood under a Gaussian-noise model, and derive the normal equations as a stationarity condition."
+prerequisites: ["ch0-math-foundations/0.7-cross-entropy-mle", "ch0-math-foundations/0.4-probability-review"]
+---
+
+## 1. Why this session exists
+
+Linear regression is the simplest non-trivial model in this course, and the one we can take apart most rigorously. Three independent stories converge on it:
+
+- **Optimisation.** Minimise $\lVert y - X w \rVert^2$ (least squares).
+- **Probability.** Maximise the likelihood of data under a Gaussian-noise observation model.
+- **Geometry.** Orthogonally project $y$ onto the column space of $X$.
+
+This session shows that the first two are *the same problem*, with the same minimiser given in closed form by the normal equations. The geometric picture comes for free.
+
+---
+
+## 2. The probabilistic model
+
+Fix a design matrix $X \in \mathbb{R}^{m \times n}$ (rows are data points $x_i^\top$) and a target vector $y \in \mathbb{R}^m$. Assume
+
+$$
+y = X w^* + \varepsilon, \qquad \varepsilon \sim \mathcal{N}(0,\, \sigma^2 I_m),
+$$
+
+with unknown true parameter $w^* \in \mathbb{R}^n$ and known noise variance $\sigma^2 > 0$. Conditional on $X$ and $w^*$,
+
+$$
+y \mid X, w^* \;\sim\; \mathcal{N}(X w^*,\, \sigma^2 I_m).
+$$
+
+The likelihood of $y$ under parameter $w$ is the Gaussian density evaluated at the observed $y$:
+
+$$
+p(y \mid X, w) = \frac{1}{(2 \pi \sigma^2)^{m/2}} \exp\!\left(-\frac{1}{2\sigma^2} \lVert y - X w \rVert^2\right).
+$$
+
+(The covariance is $\sigma^2 I_m$, which gives the diagonal Gaussian; the quadratic form in the exponent is the squared Euclidean norm.)
+
+---
+
+## 3. From MLE to least squares
+
+The MLE estimator is $w_{\text{MLE}} = \arg\max_w p(y \mid X, w)$. Logarithm is monotone, so
+
+$$
+w_{\text{MLE}} = \arg\max_w \log p(y \mid X, w).
+$$
+
+Taking the log,
+
+$$
+\log p(y \mid X, w) = -\frac{m}{2} \log(2 \pi \sigma^2) - \frac{1}{2 \sigma^2} \lVert y - X w \rVert^2.
+$$
+
+The first term is constant in $w$ and drops out. The factor $1 / (2 \sigma^2)$ is positive, so maximising the log-likelihood is equivalent to minimising the residual sum of squares:
+
+$$
+\boxed{\ w_{\text{MLE}} \;=\; \arg\min_w\, \lVert y - X w \rVert^2.\ }
+$$
+
+Least squares **is** MLE under Gaussian noise. This is the prototype: every standard loss we'll meet (BCE, multi-class CE, Huber, …) is the negative log-likelihood of some observation model.
+
+<Aside type="note">
+The minimiser does not depend on $\sigma^2$. Different noise levels give the *same* optimal $w$; they would matter only for posterior uncertainty (Bayesian linear regression, beyond this session).
+</Aside>
+
+---
+
+## 4. The normal equations
+
+Let $L(w) = \tfrac{1}{2} \lVert y - X w \rVert^2$. The factor of $\tfrac{1}{2}$ is purely cosmetic — it makes the gradient clean.
+
+Expand:
+
+$$
+L(w) = \tfrac{1}{2} (y - X w)^\top (y - X w) = \tfrac{1}{2} y^\top y - y^\top X w + \tfrac{1}{2} w^\top X^\top X w.
+$$
+
+Apply the matrix-calculus identities from 0.2 (numerator convention):
+
+$$
+\frac{\partial}{\partial w}\bigl[y^\top X w\bigr] = y^\top X, \qquad
+\frac{\partial}{\partial w}\bigl[w^\top X^\top X w\bigr] = 2 w^\top X^\top X.
+$$
+
+(The second uses $\partial (w^\top A w) / \partial w = w^\top (A + A^\top) = 2 w^\top A$ when $A = X^\top X$ is symmetric.)
+
+So
+
+$$
+\frac{\partial L}{\partial w} = -y^\top X + w^\top X^\top X.
+$$
+
+Setting this row vector to zero and transposing,
+
+$$
+\boxed{\ X^\top X\, w \;=\; X^\top y.\ }
+$$
+
+These are the **normal equations**: a linear system of $n$ equations in $n$ unknowns.
+
+**Existence and uniqueness.** From 0.8 §4 we know $\nabla^2 L = X^\top X \succeq 0$, so $L$ is convex; any stationary point is a global minimum. If $X$ has full column rank, $X^\top X \succ 0$ is invertible and
+
+$$
+w^* = (X^\top X)^{-1} X^\top y.
+$$
+
+If $X$ is rank-deficient, the normal equations have a whole affine subspace of solutions; the *minimum-norm* solution is given by the Moore–Penrose pseudoinverse $X^+ y$.
+
+---
+
+## 5. Geometric interpretation: projection
+
+Let $\hat y := X w^*$. The first normal equation says
+
+$$
+X^\top (y - \hat y) = 0,
+$$
+
+i.e. the residual $r := y - \hat y$ is orthogonal to every column of $X$. So $\hat y$ is the **orthogonal projection** of $y$ onto $\operatorname{col}(X) \subset \mathbb{R}^m$, with projector matrix
+
+$$
+P_X := X (X^\top X)^{-1} X^\top.
+$$
+
+Two sanity checks: $P_X^2 = P_X$ (idempotent) and $P_X^\top = P_X$ (symmetric) — the defining properties of an orthogonal projector.
+
+<Aside type="history">
+You derived precisely this in your dissertation Appendix C (eqs. C.0–C.1) for MLE under Gaussian noise. We've reused the same derivation in the modern course notation; nothing structural changes.
+</Aside>
+
+---
+
+## 6. Quick computational note
+
+Direct inversion of $X^\top X$ is numerically poor when $X$ is ill-conditioned (e.g. nearly-collinear features). In practice we either:
+
+1. Factorise $X^\top X = R^\top R$ via **Cholesky** and back-substitute.
+2. Compute a **QR decomposition** $X = QR$; then $w^* = R^{-1} Q^\top y$ — much better conditioned.
+3. Use the **singular value decomposition** $X = U \Sigma V^\top$; then $w^* = V \Sigma^+ U^\top y$ even when $X$ is rank-deficient.
+
+Numerical linear algebra is its own course; we'll mention these techniques again when Hessian-based optimisers come up in Chapter 3.
+
+---
+
+## 7. Takeaways
+
+- The Gaussian-noise model turns MLE into least squares: $w_{\text{MLE}} = \arg\min \lVert y - X w \rVert^2$.
+- The minimiser is unique when $X$ has full column rank: $w^* = (X^\top X)^{-1} X^\top y$.
+- Fitted values $\hat y = P_X y$ are the orthogonal projection of the targets onto the column space.
+- This is the template: each loss function in the rest of the course will be the negative log-likelihood of some observation model.
+
+---
+
+<SelfTest>
+
+**(a)** Derive the normal equations from scratch starting from $L(w) = \tfrac{1}{2} \lVert y - X w \rVert^2$. Show every step of the matrix differentiation.
+
+**(b)** Prove that $P_X = X (X^\top X)^{-1} X^\top$ satisfies $P_X^2 = P_X$ and $P_X = P_X^\top$. What is the trace of $P_X$? (Hint: it equals $\operatorname{rank}(X)$.)
+
+**(c)** Suppose $X$ has linearly dependent columns. Show that $L(w)$ still has a global minimum (in fact, infinitely many), and that the residual $r = y - P_X y$ is unique even though $w^*$ is not.
+
+**(d)** Bayesian twist. With a Gaussian prior $w \sim \mathcal{N}(0, \tau^2 I_n)$ instead of plain MLE, show that the MAP estimate is the **ridge** regression solution $w_{\text{MAP}} = (X^\top X + \lambda I)^{-1} X^\top y$ with $\lambda = \sigma^2 / \tau^2$. The $L^2$ regulariser is a Gaussian prior in disguise.
+
+</SelfTest>

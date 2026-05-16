@@ -1,0 +1,149 @@
+---
+title: "1.4 — Geometric view: the separating hyperplane and the margin"
+chapter: 1
+order: 4
+estimatedMinutes: 20
+goal: "Interpret a linear classifier geometrically: the decision boundary is a hyperplane, the weight vector is its normal, and the signed distance to the boundary is the margin."
+prerequisites: ["ch1-linear-models-perceptron/1.2-logistic-regression-bce"]
+---
+
+## 1. Why this session exists
+
+Every linear classifier — perceptron, logistic regression, SVM, the first layer of any neural net — predicts based on the sign of $w^\top x + b$. Behind that sign is a single piece of geometry: a hyperplane that cuts $\mathbb{R}^n$ into two half-spaces. This session unpacks that picture and defines the **margin**, the quantity that the perceptron's convergence proof (1.5) and the SVM's margin-maximisation objective (Chapter 3) both control.
+
+---
+
+## 2. Hyperplanes
+
+A **hyperplane** in $\mathbb{R}^n$ is the level set of an affine function:
+
+$$
+H = \{x \in \mathbb{R}^n : w^\top x + b = 0\}, \qquad w \in \mathbb{R}^n \setminus \{0\},\ b \in \mathbb{R}.
+$$
+
+It is a flat $(n-1)$-dimensional affine subspace. The pair $(w, b)$ specifies it up to a nonzero scaling: if $\alpha > 0$, then $(\alpha w, \alpha b)$ describes the same set. (Sign matters: $(-w, -b)$ flips which side is positive.)
+
+**$w$ is the normal vector to $H$.** For any two points $x, y \in H$,
+
+$$
+w^\top x + b = 0, \qquad w^\top y + b = 0 \implies w^\top (x - y) = 0.
+$$
+
+So $w$ is orthogonal to every direction *within* $H$ — it is the normal.
+
+---
+
+## 3. Signed distance to a hyperplane
+
+For an arbitrary point $x_0 \in \mathbb{R}^n$, decompose
+
+$$
+x_0 = x_H + t\, \frac{w}{\lVert w \rVert}, \qquad x_H \in H,\ t \in \mathbb{R},
+$$
+
+choosing $x_H$ as the foot of the perpendicular from $x_0$ to $H$. Apply $w^\top$ and add $b$:
+
+$$
+w^\top x_0 + b = (w^\top x_H + b) + t\, \frac{w^\top w}{\lVert w \rVert} = 0 + t\, \lVert w \rVert.
+$$
+
+Solving for $t$,
+
+$$
+\boxed{\ t \;=\; \frac{w^\top x_0 + b}{\lVert w \rVert}.\ }
+$$
+
+This is the **signed distance** from $x_0$ to $H$. Its sign tells which side $x_0$ lies on; its absolute value is the Euclidean distance. We will call
+
+$$
+d(x) := \frac{w^\top x + b}{\lVert w \rVert}
+$$
+
+the **distance function** of the hyperplane.
+
+<Aside type="note">
+The bare quantity $w^\top x + b$ (without dividing by $\lVert w \rVert$) is called the **functional margin**. It has the same sign as $d(x)$, but its magnitude depends on how $(w, b)$ are scaled. The **geometric margin** $d(x)$ is invariant under positive rescaling of $(w, b)$.
+</Aside>
+
+---
+
+## 4. The decision rule
+
+A linear binary classifier predicts
+
+$$
+\hat y(x) = \operatorname{sign}(w^\top x + b),
+$$
+
+with the convention $\operatorname{sign}(0) = +1$ (the measure-zero boundary case from 0.9 doesn't matter in practice). The two open half-spaces
+
+$$
+\{x : w^\top x + b > 0\}, \qquad \{x : w^\top x + b < 0\}
+$$
+
+are the **decision regions**. For logistic regression specifically, $\hat y_{\text{prob}} = \sigma(w^\top x + b) > 1/2$ is equivalent to $w^\top x + b > 0$, so the **decision boundary** coincides with $H$.
+
+---
+
+## 5. The margin of a dataset
+
+Let $\{(x_i, y_i)\}_{i=1}^m$ with $y_i \in \{-1, +1\}$. (We switch to $\pm 1$ encoding here because it pairs cleanly with the sign rule and with 1.5.) The classifier $(w, b)$ correctly labels example $i$ iff
+
+$$
+y_i\, (w^\top x_i + b) > 0.
+$$
+
+The **geometric margin of $(w, b)$ on example $i$** is
+
+$$
+\gamma_i = y_i\, \frac{w^\top x_i + b}{\lVert w \rVert}.
+$$
+
+Positive iff the example is correctly classified; magnitude = Euclidean distance from $x_i$ to the hyperplane.
+
+The **geometric margin on the dataset** is
+
+$$
+\gamma(w, b) = \min_{i = 1, \dots, m} \gamma_i.
+$$
+
+The **maximum margin** of the dataset is
+
+$$
+\gamma^* = \max_{(w, b)} \gamma(w, b).
+$$
+
+If $\gamma^* > 0$ the dataset is **linearly separable** and $\gamma^*$ measures by how much. This single number controls the perceptron's convergence speed (1.5) and is exactly what SVMs maximise.
+
+---
+
+## 6. Why this matters
+
+Three places the margin re-appears in the course.
+
+1. **1.5 (Novikoff's theorem).** The number of perceptron updates is bounded by $R^2 / \gamma^{*\,2}$ with $R = \max_i \lVert x_i \rVert$.
+2. **SVMs (Chapter 3).** The hard-margin SVM is $\arg\max \gamma$ subject to all $\gamma_i \ge \gamma$. The soft-margin version trades off margin against violations.
+3. **Generalisation bounds.** Large-margin classifiers generalise better; Rademacher and PAC-Bayes bounds tighten as $\gamma$ grows. This is the formal version of the visual intuition that a wider gap separates classes more confidently.
+
+---
+
+## 7. Takeaways
+
+- A linear classifier's decision boundary is a hyperplane $H = \{x : w^\top x + b = 0\}$.
+- $w / \lVert w \rVert$ is the unit normal to $H$; $-b / \lVert w \rVert$ is the signed offset from the origin along that normal.
+- Signed distance from $x$ to $H$: $d(x) = (w^\top x + b) / \lVert w \rVert$.
+- Geometric margin on example $i$: $\gamma_i = y_i d(x_i)$. Dataset margin $\gamma = \min_i \gamma_i$. Maximum margin $\gamma^* = \max_{(w,b)} \gamma$.
+
+---
+
+<SelfTest>
+
+**(a)** Find the hyperplane in $\mathbb{R}^2$ defined by $w = (1, 1)$, $b = -2$. Sketch it. Compute the signed distance from the origin and from $(3, 1)$.
+
+**(b)** Show that the signed distance $d(x)$ is invariant under the positive rescaling $(w, b) \to (\alpha w, \alpha b)$ with $\alpha > 0$, but flips sign under $\alpha < 0$.
+
+**(c)** For a dataset of two points $x_+ = (1, 0)$, $x_- = (-1, 0)$ with labels $\pm 1$, find the maximum-margin hyperplane and compute $\gamma^*$.
+
+**(d)** Prove that if a dataset is linearly separable, the *normalised* parameters $(w / \lVert w \rVert,\, b / \lVert w \rVert)$ achieving the maximum margin satisfy $y_i (w^{*\top} x_i + b^*) \ge \gamma^*$ for all $i$. (This is the canonical normalisation used in the SVM formulation.)
+
+</SelfTest>

@@ -1,0 +1,156 @@
+---
+title: "1.2 — Logistic regression: the sigmoid and binary cross-entropy"
+chapter: 1
+order: 2
+estimatedMinutes: 22
+goal: "Derive the sigmoid model for binary classification, show its self-derivative identity, and obtain binary cross-entropy as the negative log-likelihood of a Bernoulli model."
+prerequisites: ["ch1-linear-models-perceptron/1.1-linear-regression-mle"]
+---
+
+## 1. Why this session exists
+
+Linear regression handled $y \in \mathbb{R}$. For binary classification we need $y \in \{0, 1\}$ and a model that outputs a probability $\hat y \in (0, 1)$. The **sigmoid** is the canonical bridge: it squashes $\mathbb{R}$ into $(0, 1)$ in the way you want to interpret $\hat y$ as a Bernoulli probability. Maximum likelihood for that Bernoulli model produces **binary cross-entropy** (BCE), and the gradient of BCE with respect to the pre-activation has a famously clean form — $\hat y - y$. This is the template every later session in the course will follow.
+
+---
+
+## 2. The sigmoid
+
+Define the **sigmoid** function
+
+$$
+\sigma : \mathbb{R} \to (0, 1), \qquad \sigma(z) = \frac{1}{1 + e^{-z}}.
+$$
+
+Three properties to internalise.
+
+**Range and monotonicity.** $\sigma$ is strictly increasing from $\sigma(-\infty) = 0$ to $\sigma(+\infty) = 1$, with $\sigma(0) = 1/2$.
+
+**Symmetry.** $1 - \sigma(z) = \sigma(-z)$. (Multiply numerator and denominator of $\sigma(-z)$ by $e^z$ to verify.)
+
+**Self-derivative identity.** Differentiate
+
+$$
+\sigma'(z) = \frac{d}{dz} \frac{1}{1 + e^{-z}} = \frac{e^{-z}}{(1 + e^{-z})^2}
+= \frac{1}{1 + e^{-z}} \cdot \frac{e^{-z}}{1 + e^{-z}}.
+$$
+
+The first factor is $\sigma(z)$. The second is $\sigma(-z) = 1 - \sigma(z)$. Hence
+
+$$
+\boxed{\ \sigma'(z) \;=\; \sigma(z)\,\bigl(1 - \sigma(z)\bigr).\ }
+$$
+
+The derivative is expressed in terms of the function value itself — a property that will save us repeated work during backprop.
+
+---
+
+## 3. The Bernoulli model for binary classification
+
+Let $y \in \{0, 1\}$ and define the **logit**
+
+$$
+z = w^\top x + b.
+$$
+
+Model the conditional probability of class $1$ by the sigmoid of the logit:
+
+$$
+\hat y \;=\; p(y = 1 \mid x; w, b) \;=\; \sigma(z), \qquad p(y = 0 \mid x) = 1 - \hat y.
+$$
+
+A compact single expression covering both classes:
+
+$$
+p(y \mid x; w, b) = \hat y^{\,y}\,(1 - \hat y)^{1 - y}.
+$$
+
+(Plug $y = 0$ and $y = 1$ to recover the two Bernoulli probabilities.)
+
+---
+
+## 4. From MLE to binary cross-entropy
+
+Given i.i.d. data $\{(x_i, y_i)\}_{i=1}^m$, the log-likelihood is
+
+$$
+\log p(y_{1:m} \mid X; w, b) = \sum_{i=1}^m \bigl[\,y_i \log \hat y_i + (1 - y_i) \log (1 - \hat y_i)\,\bigr],
+$$
+
+with $\hat y_i = \sigma(w^\top x_i + b)$. MLE maximises this. Negating to convert to a minimisation,
+
+$$
+\boxed{\ L_{\text{BCE}}(w, b) \;=\; -\frac{1}{m} \sum_{i=1}^m \bigl[\,y_i \log \hat y_i + (1 - y_i) \log(1 - \hat y_i)\,\bigr].\ }
+$$
+
+This is **binary cross-entropy**, the negative average log-likelihood of the Bernoulli model. Same recipe as 0.7 (cross-entropy = NLL) and 1.1 (least squares = NLL); only the family of distributions changed.
+
+---
+
+## 5. The clean gradient: $\partial L / \partial z = \hat y - y$
+
+Work on a single example, so drop the average and the index $i$. Let $L = -y \log \hat y - (1 - y) \log(1 - \hat y)$ with $\hat y = \sigma(z)$. We compute $\partial L / \partial z$ via the chain rule
+
+$$
+\frac{\partial L}{\partial z} = \frac{\partial L}{\partial \hat y} \cdot \frac{\partial \hat y}{\partial z}.
+$$
+
+Each factor in turn.
+
+$$
+\frac{\partial L}{\partial \hat y}
+= -\frac{y}{\hat y} + \frac{1 - y}{1 - \hat y}
+= \frac{-y(1 - \hat y) + (1 - y)\hat y}{\hat y (1 - \hat y)}
+= \frac{\hat y - y}{\hat y (1 - \hat y)}.
+$$
+
+From §2,
+
+$$
+\frac{\partial \hat y}{\partial z} = \sigma'(z) = \hat y\,(1 - \hat y).
+$$
+
+Multiplying,
+
+$$
+\frac{\partial L}{\partial z} = \frac{\hat y - y}{\hat y (1 - \hat y)} \cdot \hat y (1 - \hat y) = \hat y - y.
+$$
+
+$$
+\boxed{\ \frac{\partial L_{\text{BCE}}}{\partial z} \;=\; \hat y - y.\ }
+$$
+
+The $\hat y (1 - \hat y)$ in the denominator of the first factor cancels exactly with the sigmoid derivative — the same cancellation we'll see again with softmax + cross-entropy in 1.8. **This is the reason we pair sigmoid with BCE** (and softmax with CE): the gradient at the pre-activation has no $\sigma'$ tail to amplify or shrink. Compare with pairing sigmoid + MSE, which leaves a $\sigma' = \sigma(1 - \sigma) \in (0, 1/4]$ multiplier and creates a vanishing-gradient pathology when the model is confident.
+
+<Aside type="history">
+You derived this identity in your dissertation Appendix C (eq. C.2), p. 158. The notation there used $a$ for the activation; this course uses $\hat y$ and $z$ throughout to stay consistent with 0.7.
+</Aside>
+
+---
+
+## 6. The decision rule
+
+At inference, the sigmoid model predicts class $1$ when $\hat y > 1/2$, equivalently $z > 0$, equivalently $w^\top x + b > 0$. The boundary is the hyperplane $w^\top x + b = 0$. The classifier's class decisions depend only on the **sign** of the logit; the magnitude controls confidence.
+
+This is the geometric handle we'll formalise in 1.4 (separating hyperplane, margin) and re-use throughout Chapters 1–6.
+
+---
+
+## 7. Takeaways
+
+- Sigmoid: smooth, monotone, $(0,1)$-valued, with self-derivative $\sigma'(z) = \sigma(z)(1 - \sigma(z))$.
+- Sigmoid + Bernoulli MLE = BCE loss.
+- $\partial L / \partial z = \hat y - y$. Exact, simple, and the reason this is the canonical pairing.
+
+---
+
+<SelfTest>
+
+**(a)** Prove $1 - \sigma(z) = \sigma(-z)$ directly from the definition.
+
+**(b)** Show $\sigma'(z) = \sigma(z)\,\sigma(-z)$.
+
+**(c)** Compute $\partial L_{\text{BCE}} / \partial w$ for a single example with $\hat y = \sigma(w^\top x + b)$. Express it in terms of $(\hat y - y)$ and $x$.
+
+**(d)** Why would pairing sigmoid with squared-error loss $\tfrac{1}{2}(\hat y - y)^2$ be worse? Compute $\partial L / \partial z$ for that pairing and explain when the gradient vanishes.
+
+</SelfTest>

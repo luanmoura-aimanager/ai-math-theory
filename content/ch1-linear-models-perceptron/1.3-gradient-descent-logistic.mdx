@@ -1,0 +1,132 @@
+---
+title: "1.3 — Gradient descent on the logistic-regression loss"
+chapter: 1
+order: 3
+estimatedMinutes: 20
+goal: "Derive the gradient of the BCE loss w.r.t. the parameters and write the gradient-descent update rule in full vector form."
+prerequisites: ["ch1-linear-models-perceptron/1.2-logistic-regression-bce"]
+---
+
+## 1. Why this session exists
+
+Session 1.2 gave us the loss and the pre-activation gradient $\partial L / \partial z = \hat y - y$. Now we walk the last step — from $\partial L / \partial z$ to $\partial L / \partial w$ — and write down the gradient-descent update. This is the simplest end-to-end training loop in the course: it has all the moving pieces of SGD with none of the depth.
+
+---
+
+## 2. Setup
+
+A training set $\{(x_i, y_i)\}_{i=1}^m$ with $x_i \in \mathbb{R}^n$ and $y_i \in \{0, 1\}$. Parameters $w \in \mathbb{R}^n$, bias $b \in \mathbb{R}$. Per-example pre-activation, prediction, loss:
+
+$$
+z_i = w^\top x_i + b, \qquad \hat y_i = \sigma(z_i),
+$$
+
+$$
+\ell_i = -y_i \log \hat y_i - (1 - y_i) \log(1 - \hat y_i).
+$$
+
+Average BCE loss:
+
+$$
+L(w, b) = \frac{1}{m} \sum_{i=1}^m \ell_i.
+$$
+
+---
+
+## 3. The gradients
+
+From 1.2, $\partial \ell_i / \partial z_i = \hat y_i - y_i$. The chain rule extends this through the linear layer.
+
+**Gradient w.r.t. $w$.** Since $\partial z_i / \partial w = x_i^\top$ (a $1 \times n$ row, numerator convention),
+
+$$
+\frac{\partial \ell_i}{\partial w} = \frac{\partial \ell_i}{\partial z_i} \cdot \frac{\partial z_i}{\partial w} = (\hat y_i - y_i)\, x_i^\top.
+$$
+
+Transposing to a column gradient and averaging over the mini-batch,
+
+$$
+\boxed{\ \nabla_w L \;=\; \frac{1}{m} \sum_{i=1}^m (\hat y_i - y_i)\, x_i.\ }
+$$
+
+**Gradient w.r.t. $b$.** $\partial z_i / \partial b = 1$, so
+
+$$
+\boxed{\ \frac{\partial L}{\partial b} \;=\; \frac{1}{m} \sum_{i=1}^m (\hat y_i - y_i).\ }
+$$
+
+The residual $(\hat y_i - y_i)$ appears in both gradients exactly the way it did for linear regression in 1.1 (with $\hat y_i$ being $w^\top x_i + b$ there). The pattern is general: **gradient = average over examples of (residual × input)**.
+
+---
+
+## 4. The update rule
+
+Vanilla (batch) gradient descent uses the full-batch gradient:
+
+$$
+w \leftarrow w - \alpha\, \nabla_w L, \qquad b \leftarrow b - \alpha\, \frac{\partial L}{\partial b},
+$$
+
+with learning rate $\alpha > 0$. Expanding,
+
+$$
+\boxed{\ w \leftarrow w - \frac{\alpha}{m} \sum_{i=1}^m (\hat y_i - y_i)\, x_i. \ }
+$$
+
+This is the canonical update written out symbol by symbol. Three variants depending on how many examples we average over per step:
+
+- **Batch GD.** All $m$ examples per step. Smooth trajectory, expensive when $m$ is large.
+- **Stochastic GD (SGD).** One example $i_k$ per step: $w \leftarrow w - \alpha (\hat y_{i_k} - y_{i_k}) x_{i_k}$. Noisy but cheap.
+- **Mini-batch SGD.** Average over a mini-batch of size $B$ (typically 32–1024 for tabular data, larger for vision/NLP). Standard practice.
+
+<Aside type="note">
+The convexity result from 0.8 §4 applies to BCE: the Hessian is
+
+$$
+\nabla^2_w L = \frac{1}{m} \sum_i \hat y_i (1 - \hat y_i)\, x_i x_i^\top,
+$$
+
+a non-negative weighted sum of rank-one PSD matrices, hence $\succeq 0$. So logistic-regression BCE is **convex** in $(w, b)$; gradient descent converges to the unique global minimum — assuming $w$ does not run off to infinity, which it can if the data is linearly separable (see §5).
+</Aside>
+
+---
+
+## 5. Two pathologies and how to fix them
+
+**Separable data.** If the classes are perfectly linearly separable, the likelihood can be made arbitrarily close to $1$ by scaling $w$ outwards: $\hat y = \sigma(\alpha w^\top x) \to \{0, 1\}$ as $\alpha \to \infty$ on either side of the hyperplane, and the log-likelihood approaches its supremum at $0$. The MLE doesn't exist — $w$ diverges. **Fix:** L2 regularisation $L \to L + \tfrac{\lambda}{2} \lVert w \rVert^2$, which makes the problem strictly convex with a unique finite minimiser.
+
+**Imbalanced classes.** If one class dominates (say 99% negatives), the unregularised loss is dominated by the negative class and the model collapses to predicting $\hat y \approx 0$ everywhere. **Fix:** class weights in the loss, oversampling / undersampling the data, or focal-style losses (Chapter 7).
+
+---
+
+## 6. Connection to your dissertation
+
+The update rule
+
+$$
+w_{k+1} = w_k - \frac{\alpha}{m} \sum_{i=1}^m (\hat y_i - y_i)\, x_i
+$$
+
+is exactly the one you derived in Appendix C (eq. C.3), p. 159 — there phrased for a single sigmoid unit but with the same Bernoulli model and the same chain-rule cancellation. The next step in your thesis was to compose this with a hidden layer; we'll do the same in Chapter 2, where the only new ingredient is the chain rule from 0.3 walked backwards through additional matrix-multiplications.
+
+---
+
+## 7. Takeaways
+
+- BCE gradient: $\nabla_w L = \tfrac{1}{m} \sum_i (\hat y_i - y_i) x_i$ and $\partial L / \partial b = \tfrac{1}{m} \sum_i (\hat y_i - y_i)$.
+- Pattern: residual × input, averaged.
+- BCE on logistic regression is convex; SGD finds the global minimum (use L2 regularisation if data is separable).
+
+---
+
+<SelfTest>
+
+**(a)** Derive $\nabla_w L$ for L2-regularised BCE, $L_\lambda(w) = L(w) + \tfrac{\lambda}{2} \lVert w \rVert^2$. Write the modified update.
+
+**(b)** Show that the Hessian $\nabla^2_w L = \tfrac{1}{m} \sum_i \hat y_i (1 - \hat y_i)\, x_i x_i^\top$ is PSD. When is it strictly positive definite?
+
+**(c)** For 1-D data $x_i \in \mathbb{R}$ on a linearly separable dataset, describe the BCE loss surface as $w \to \infty$. Where does the minimum live? What does adding $\tfrac{\lambda}{2} w^2$ do?
+
+**(d)** SGD vs mini-batch. Estimate the variance of the one-example gradient as a function of batch size $B$. Why does increasing $B$ reduce variance by $1/B$ and let you increase the learning rate by roughly the same factor (the "linear scaling" rule)?
+
+</SelfTest>
