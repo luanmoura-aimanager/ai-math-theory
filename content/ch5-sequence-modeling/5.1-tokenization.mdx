@@ -1,0 +1,196 @@
+---
+title: "5.1 — Tokenization: words, characters, subwords (BPE)"
+chapter: 5
+order: 1
+estimatedMinutes: 22
+goal: "Understand why every modern LLM uses byte-pair encoding (BPE) tokenisation: derive the algorithm from first principles, see what it solves that word-level and character-level tokenisers don't, and recognise the practical consequences for training and inference."
+prerequisites: ["ch4-cnn-bridge/4.3-bridge-to-sequences"]
+---
+
+## 1. Why this session exists
+
+A neural network operates on real-valued tensors. Text is a string of Unicode code points. *Something* has to convert one into the other, and that something is the **tokeniser**: a deterministic, learned-once function that maps text $\leftrightarrow$ sequences of integer **token IDs**.
+
+Tokenisation is the only part of a modern LLM that is *not* itself a differentiable model. It is fixed before training, shared between training and inference, and it shapes everything downstream:
+
+- The **vocabulary size $V$** sets the row count of the embedding matrix and the column count of the output projection (5.2).
+- The **token efficiency** — how many tokens it takes to encode a typical sentence — directly determines training and inference cost, because cost scales with sequence length, not character count.
+- The **inductive bias** the tokeniser imposes determines what the model finds easy or hard. A tokeniser that splits numbers into individual digits makes arithmetic easier; one that lumps `12345` into a single token makes it almost impossible.
+
+This session derives **byte-pair encoding (BPE)** — the family of tokenisers used by GPT, LLaMA, Mistral, Claude, and essentially every production LLM since 2019 — and contrasts it with the two natural baselines (word-level and character-level).
+
+---
+
+## 2. The two extremes: word-level and character-level
+
+### 2.1 Word-level
+
+Split text on whitespace and punctuation, build a vocabulary of all distinct word forms in the training corpus, map each form to an integer.
+
+The fatal problems:
+
+1. **Out-of-vocabulary (OOV).** Any word not seen at training time gets mapped to a special `<unk>` token. Proper nouns, typos, neologisms, and rare inflections are all lost. The model literally cannot read them.
+2. **Morphology is hidden.** *"run"*, *"runs"*, *"running"*, *"ran"* are four unrelated integers. The model must rediscover that they share meaning purely from co-occurrence statistics.
+3. **Vocabulary explosion.** A web-scale corpus contains millions of distinct word forms. Storing an embedding row for each balloons memory; restricting to the top-$V$ pushes everything else to `<unk>`.
+4. **No graceful degradation.** No way to read an unknown word "approximately." If you've never seen *"unpresidented"* (a typo of *"unprecedented"*), it is indistinguishable from a foreign word or random noise.
+
+### 2.2 Character-level
+
+Map every Unicode code point (or every byte) to a token. Vocabulary is tiny (256 for bytes; ~150k for full Unicode but typically capped much lower in practice).
+
+This fixes OOV — every text becomes representable — and trivially handles morphology, since the network sees every character of every word. The cost:
+
+1. **Sequences are very long.** A 1000-word document is ~5000 characters. Cost in attention layers (Chapter 6) is $O(T^2)$ in sequence length, so a 5× longer sequence is 25× more expensive *per layer*.
+2. **The model has to learn that "the" is a unit from scratch.** Characters are syntactically meaningful but the *unit of meaning* in language is roughly the morpheme. A character-level model spends capacity rediscovering this at every layer.
+3. **Sample efficiency suffers.** A given amount of training compute spans far fewer "concepts" if each concept takes 5–10 tokens to express.
+
+We want a middle road: a vocabulary large enough that common words become single tokens (so sequences stay short), but composable enough that rare words fall back to subword pieces (so nothing is OOV). That middle road is BPE.
+
+---
+
+## 3. Byte-pair encoding: the algorithm
+
+BPE was originally a 1994 *compression* algorithm (Gage). Sennrich, Haddow, and Birch (2016) repurposed it for neural machine translation, and it became the universal tokeniser for LLMs by 2019.
+
+### 3.1 The training algorithm
+
+Inputs: a training corpus $\mathcal{C}$ (a long string) and a target vocabulary size $V$.
+
+**Initial vocabulary.** Start with every byte (or every distinct character) appearing in $\mathcal{C}$. Call this $\mathcal{V}_0$. For byte-level BPE, $|\mathcal{V}_0| = 256$.
+
+**Initial tokenisation.** Tokenise the corpus by splitting it into the units of $\mathcal{V}_0$. Each word becomes a sequence of bytes/characters.
+
+**Iterate.** For $k = 1, 2, \dots, V - |\mathcal{V}_0|$:
+
+1. Count, across the whole tokenised corpus, how often each *adjacent pair* of tokens $(a, b)$ co-occurs inside a word. Call this count $c(a, b)$.
+2. Find the pair $(a^*, b^*) = \arg\max_{(a, b)} c(a, b)$ with the largest count.
+3. Create a new token $ab^*$ (the concatenation), add it to $\mathcal{V}$.
+4. Replace every adjacent occurrence of $(a^*, b^*)$ in the tokenised corpus with the new single token.
+
+After $V - |\mathcal{V}_0|$ iterations, $|\mathcal{V}| = V$, and the algorithm also produces an ordered list of **merge rules** — the sequence of pair-merges, in the order they were learned.
+
+### 3.2 Encoding new text at inference
+
+Tokenise the new text into the initial vocabulary $\mathcal{V}_0$ (bytes or characters), then apply the merge rules *in order*: for each merge $(a, b) \to ab$, scan the sequence and replace every adjacent $(a, b)$ pair with $ab$. The result is the BPE token sequence.
+
+The same merge rules give a deterministic, reversible mapping. Decoding is trivial: each token *is* a string of bytes; concatenate the strings of all tokens in a sequence to recover the text.
+
+---
+
+## 4. Worked example
+
+Take a tiny corpus consisting of four words, each with its frequency in parentheses:
+
+$$
+\mathcal{C} = \{\ \text{low}(5),\ \text{lowest}(2),\ \text{newer}(6),\ \text{wider}(3)\ \}.
+$$
+
+Initial tokenisation (by character, with a word-end marker $\_$ to keep word boundaries):
+
+$$
+\begin{aligned}
+\text{l, o, w, \_} & \quad \times 5 \\
+\text{l, o, w, e, s, t, \_} & \quad \times 2 \\
+\text{n, e, w, e, r, \_} & \quad \times 6 \\
+\text{w, i, d, e, r, \_} & \quad \times 3
+\end{aligned}
+$$
+
+Pair counts: $c(\text{e}, \text{r}) = 6 + 3 = 9$ is the most frequent pair (it appears in *newer* and *wider*). Merge: introduce token `er`.
+
+$$
+\begin{aligned}
+\text{l, o, w, \_} & \quad \times 5 \\
+\text{l, o, w, e, s, t, \_} & \quad \times 2 \\
+\text{n, e, w, er, \_} & \quad \times 6 \\
+\text{w, i, d, er, \_} & \quad \times 3
+\end{aligned}
+$$
+
+New counts. The most frequent pair is now $c(\text{er}, \_) = 9$. Merge: introduce `er_`.
+
+$$
+\begin{aligned}
+\text{l, o, w, \_} & \quad \times 5 \\
+\text{l, o, w, e, s, t, \_} & \quad \times 2 \\
+\text{n, e, w, er\_} & \quad \times 6 \\
+\text{w, i, d, er\_} & \quad \times 3
+\end{aligned}
+$$
+
+Next: $c(\text{l}, \text{o}) = 5 + 2 = 7$ wins. Merge: `lo`.
+
+$$
+\begin{aligned}
+\text{lo, w, \_} & \quad \times 5 \\
+\text{lo, w, e, s, t, \_} & \quad \times 2 \\
+\text{n, e, w, er\_} & \quad \times 6 \\
+\text{w, i, d, er\_} & \quad \times 3
+\end{aligned}
+$$
+
+Continue until you reach the desired vocabulary size. You can see the structure emerging: common prefixes (`lo`), common suffixes (`er_`), and common short words become single tokens, while rare words (`wider`) remain split into subword pieces.
+
+Encoding the unseen word *"lower"* after these three merges: by characters $\to$ `l, o, w, e, r`; apply merges in order: `(e, r) \to er` gives `l, o, w, er`; the merge `(er, \_) \to er_` requires the trailing $\_$; the merge `(l, o) \to lo` gives `lo, w, er`. So *"lower"* tokenises to three pieces even though it was never seen at training time — graceful fallback.
+
+---
+
+## 5. Modern variants
+
+### 5.1 Byte-level BPE (GPT-2 onward)
+
+If $\mathcal{V}_0$ is the set of 256 bytes (Radford et al., 2019), the tokeniser can represent *any* string of Unicode code points, in any language, with no out-of-vocabulary failure mode — every byte is in the base vocabulary. This is the standard for GPT, LLaMA, Mistral. Vocabularies for these models are typically 32k–128k.
+
+### 5.2 WordPiece (BERT)
+
+Same family. Differs in the *merge criterion*: instead of "most frequent pair", WordPiece picks the merge that most increases the likelihood of the training data under a unigram language model. The end result is similar; the difference matters mostly for the order in which merges happen.
+
+### 5.3 SentencePiece (LLaMA, T5, multilingual)
+
+A wrapper around BPE or unigram-LM tokenisation that operates directly on the raw byte stream including spaces — no word-pre-tokenisation step. This is critical for languages without explicit word boundaries (Chinese, Japanese, Thai) and makes the tokeniser truly language-agnostic.
+
+### 5.4 tiktoken (OpenAI)
+
+OpenAI's production BPE library, used for GPT-3.5/4 and several open weights. Implements byte-level BPE with optimised lookups; pre-tokenises with a regex pattern that controls how digits, contractions, and whitespace are handled.
+
+<Aside type="note">
+**The tokeniser is part of the model.** A BPE tokeniser is parameterised by its vocabulary and its ordered list of merge rules. Both are fixed-once artefacts that must travel with the model weights — you cannot tokenise a prompt for GPT-4 with the LLaMA tokeniser and get sensible results. Open-weight releases ship the tokeniser alongside the safetensors.
+</Aside>
+
+---
+
+## 6. Practical consequences
+
+**Token efficiency varies by domain.** English prose with a standard 32k BPE tokeniser averages ~0.75 tokens per word. Code, JSON, and math expressions are far less efficient — `4 + 8 = 12` might be 7 tokens. Non-Latin scripts and rare languages can be 2–4× less efficient than English on a tokeniser trained mostly on English data, which directly translates into compute cost asymmetries.
+
+**Arithmetic is tokenisation-sensitive.** If the tokeniser merges `123` into a single token but leaves `124` as `1` + `24`, the model sees no structural similarity between the two. Modern tokenisers (LLaMA-3, recent GPT) deliberately split digits individually for exactly this reason — it gives the model uniform access to digit-level structure.
+
+**Whitespace is tricky.** GPT-style tokenisers represent the leading space of a word as part of the token (e.g. `Ġhello` is `" hello"` as a single token). This makes detokenisation trivial but means *"hello"* (start of sentence) and *" hello"* (mid-sentence) are *different* tokens.
+
+**Special tokens.** Every model adds non-text tokens to the vocabulary: `<bos>` (beginning of sequence), `<eos>` (end), `<pad>` (padding), and increasingly many control tokens (`<|im_start|>`, `<|im_end|>`, `<|tool_call|>`, etc.). These are reserved IDs at vocab edges; the model learns special behaviour around them during fine-tuning.
+
+**Tokenisation is irreversible information loss in one direction only.** Text $\to$ tokens is many-to-one (different texts can collide if the tokeniser strips information, e.g. some Unicode normalisations); tokens $\to$ text is deterministic. The forward direction can be "weird" — leading spaces, control characters — and is the source of many subtle prompt-engineering bugs.
+
+<Aside type="warning">
+**Don't measure prompt length in characters.** Every cost in an LLM (compute, memory, context budget) is measured in *tokens*. Use the model's own tokeniser to count, never a character-based heuristic. The conversion rate depends on the language, the domain, and even the specific tokeniser version.
+</Aside>
+
+---
+
+## 7. What we keep going forward
+
+From this point on, "input to the model" means a sequence of integer token IDs $x_1, x_2, \dots, x_T$ drawn from a fixed vocabulary $\mathcal{V}$ of size $V$. The neural network never sees text; the tokeniser is an opaque, fixed preprocessor. Everything that follows — embeddings (5.2), the language-modeling objective (5.3), attention (Chapter 6) — operates on this integer sequence.
+
+<SelfTest>
+
+**(a)** Re-run the worked example of §4 for two more merge steps. What is the vocabulary after five merges, and how would *"newer"* tokenise after those five merges?
+
+**(b)** Suppose a byte-level BPE tokeniser has vocabulary size $V = 32{,}000$. How many merge rules does it contain?
+
+**(c)** A model with vocabulary $V$ has an embedding matrix $E \in \mathbb{R}^{V \times d}$ and an output projection $W_\text{out} \in \mathbb{R}^{d \times V}$. For $V = 100{,}000$ and $d = 4096$, how many parameters are in these two matrices alone? Compare to the parameter count of a single Transformer block (we'll see this is roughly $12 d^2$ in Chapter 6).
+
+**(d)** Explain in one paragraph why splitting digits individually (each digit its own token) helps arithmetic in language models, while merging frequent multi-digit numbers (like years: `2023`, `2024`) into single tokens hurts it.
+
+**(e)** A user's prompt is 400 English words and a 200-line Python script. Roughly estimate the token count using English $\approx 0.75$ tokens/word and code $\approx 3$ tokens/line. What does this imply about the cost of pasting a long code snippet versus a long natural-language prompt?
+
+</SelfTest>

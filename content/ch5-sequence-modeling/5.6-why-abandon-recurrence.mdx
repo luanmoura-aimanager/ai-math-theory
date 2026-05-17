@@ -1,0 +1,130 @@
+---
+title: "5.6 — Why we abandon recurrence: parallelism and long range"
+chapter: 5
+order: 6
+estimatedMinutes: 16
+goal: "Articulate the two killer arguments that retire recurrent architectures in favour of attention: hardware-level parallelism in training, and constant-length gradient paths between any two positions."
+prerequisites: ["ch5-sequence-modeling/5.5-rnn-bptt"]
+---
+
+## 1. Why this session exists
+
+[5.5](/session/ch5-sequence-modeling/5.5-rnn-bptt) gave us the recurrent template: a stateful update $h_t = \phi(W h_{t-1} + U x_t + b)$ applied step by step over a sequence. The same section spelled out two structural problems:
+
+1. **Vanishing/exploding gradient** (Bengio, Simard & Frasconi, 1994) makes long-range learning unstable even with the best gating tricks.
+2. **Sequential forward pass** prevents the GPU from parallelising training across the time axis.
+
+This session collects those two arguments into a single brief — *parallelism* and *long range* — and shows how attention solves both simultaneously. The point is not to define attention (Chapter 6 does that from scratch); it is to make precise *what* attention has to give us before we start building it.
+
+---
+
+## 2. Argument 1 — Parallelism
+
+GPUs achieve their performance by executing the same operation on many data elements at once. A modern training accelerator processes $\sim 10^{14}$ floating-point operations per second, but only if the work it's given is *embarrassingly parallel*: many independent small computations that can run simultaneously.
+
+### 2.1 The recurrent forward pass is a serial bottleneck
+
+The RNN forward pass computes $h_1, h_2, \dots, h_T$ in order. $h_t$ cannot be computed until $h_{t-1}$ is available — this is the definition of a recurrence. So a sequence of length $T$ requires $T$ sequential **matrix-vector** products on the GPU, each waiting for the previous one to finish.
+
+Concretely, with hidden dimension $d_h$, each step does a multiply $W h_{t-1}$ of cost $\Theta(d_h^2)$. The *total* compute is $\Theta(T d_h^2)$, which is fine. The problem is the *wall-clock time*: the GPU cannot overlap these $T$ steps. If each matrix multiply takes $\tau$ microseconds, the forward pass takes $T \tau$ microseconds. For $T = 2048$ and $\tau = 1\mu s$, that's 2 ms — and the *next* layer of the network cannot start until this one finishes.
+
+### 2.2 The attention forward pass is a single GEMM
+
+In Chapter 6 we will see that the attention operation maps $X \in \mathbb{R}^{T \times d}$ to an output $Y \in \mathbb{R}^{T \times d}$ via:
+
+$$
+Y = \text{softmax}\!\left( \frac{X W_Q (X W_K)^\top}{\sqrt{d_k}} \right) X W_V,
+$$
+
+with weight matrices $W_Q, W_K, W_V$. Whatever the details, the key structural fact is: **the output at every position is computed from the input at every position by a single batched matrix multiply.** The GPU sees one large multiplication, not $T$ small dependent ones.
+
+The wall-clock cost is dominated by the matrix sizes, not by $T$ sequential steps. Even though the *total* compute is $\Theta(T^2 d)$ — larger than the RNN's $\Theta(T d^2)$ for long sequences — the *time* is much shorter because the GPU can saturate.
+
+### 2.3 Quantitative picture
+
+A modern GPU achieves $> 100\%$ utilisation on large matrix multiplies and $< 1\%$ utilisation on tiny matrix-vector products with serial dependencies. The actual wall-clock ratio is more like:
+
+- **RNN forward, $T = 2048$, $d_h = 1024$:** $\sim 2048$ matrix-vector products, each underutilising the GPU. Real-world throughput is dominated by kernel-launch overhead and is typically $10$–$100 \times$ below the GPU's peak.
+- **Transformer forward, same shape:** a handful of large GEMMs. Real-world throughput is typically $30$–$70\%$ of peak.
+
+The end result is that a Transformer trains $10$–$100 \times$ faster than an RNN of similar parameter count *per training step* — and the gap *widens* as the sequence length grows, because the RNN's wall-clock cost scales with $T$ linearly while the Transformer's scales with $T$ sublinearly when GPU-bound.
+
+<Aside type="note">
+**Sequential at inference, parallel at training.** Even Transformers generate one token at a time *at inference* — autoregressive sampling is sequential. The architectural trick is that *during training* (when you know the whole target sequence already), the causal mask of [Chapter 6.4] lets you compute the loss at all $T$ positions in *one* forward pass. RNNs do not have this property: every gradient step requires a sequential roll-out. This single asymmetry is what makes Transformer pretraining feasible at the trillion-token scale of modern LLMs.
+</Aside>
+
+---
+
+## 3. Argument 2 — Long-range dependencies
+
+The RNN gradient analysis of [5.5 §4](/session/ch5-sequence-modeling/5.5-rnn-bptt) showed that information from a distant loss has to traverse $T - \tau$ copies of the recurrent matrix to reach a far-past hidden state. Spectrally, this product either vanishes or explodes — there is no stable middle ground. Gating (LSTM, GRU) widens the practical range but does not change the asymptotic behaviour: every recurrent architecture has a finite effective horizon.
+
+### 3.1 Path length in a computation graph
+
+A useful way to phrase the problem: in the computation graph that the backward pass traverses, *how many edges* separate two positions $\tau$ and $T$ in the input?
+
+- **RNN.** $\tau$ feeds $\tau+1$ feeds $\tau+2$ feeds ... feeds $T$. The shortest path between $\tau$ and $T$ has length $T - \tau$. Every edge multiplies the gradient by a Jacobian factor; longer paths multiply more.
+- **CNN with kernel $K$.** Each layer extends the receptive field by $K - 1$. For two positions $\tau, T$ to interact, you need depth $\ge \lceil (T - \tau) / (K - 1) \rceil$ — a path length that *also* scales with $T - \tau$, slightly better than RNN if $K > 2$ (this is the depth-tax argument of [4.2 §6](/session/ch4-cnn-bridge/4.2-equivariance-receptive-fields)).
+- **Attention.** Every position is *one edge* away from every other position, regardless of $T$. The path length between $\tau$ and $T$ is constant in $T$.
+
+The constant-length path is the deepest structural reason attention solves the long-range problem. Whatever the gradient magnitude difficulties of a single attention layer (we will see these in Chapter 6), they do not compound with sequence length.
+
+### 3.2 Why a single layer of attention beats $\log T$ layers of dilated convolution
+
+WaveNet-style dilated convolution (covered in [4.2 Aside](/session/ch4-cnn-bridge/4.2-equivariance-receptive-fields) and [4.3 §2](/session/ch4-cnn-bridge/4.3-bridge-to-sequences)) gives a receptive field that grows as $2^L$ in depth, so $\log_2 T$ layers suffice to span sequence length $T$. Why doesn't this fix everything?
+
+Two reasons. *First*, the path length is still $O(\log T)$, not $O(1)$ — gradients still pass through that many non-linearities. *Second*, the receptive field of a dilated stack is *structured* on a dilation grid: arbitrary pairs $(t_1, t_2)$ can only interact via specific intermediate positions. Attention has no such constraint — any pair of positions interacts directly via the dot product $q_{t_1}^\top k_{t_2}$.
+
+The combination — constant path length *and* unrestricted pairwise interaction — is what makes attention qualitatively distinct from every prior fix.
+
+---
+
+## 4. The cost we accept
+
+Attention is not free. Its compute is $\Theta(T^2 d)$ per layer: every position attends to every other, and the quadratic-in-$T$ term dominates for long sequences. Memory is $\Theta(T^2)$ for the attention matrix.
+
+This is the trade we make: **quadratic compute in exchange for parallelism and constant-length paths.** For sequences up to $\sim 2^{15}$ tokens on current hardware, this trade is overwhelmingly favourable — the parallelism gain dwarfs the quadratic cost. Past that, the cost dominates, and a body of research (covered later, in Chapter 6's long-context section) attacks the $T^2$ term: sparse attention, linear attention, sliding windows, state-space models (Mamba).
+
+But for the regime that defines modern LLMs — context length of $4k$ to $\sim 10^6$ tokens, hidden size $\sim 10^4$, hundreds of billions of parameters — the trade-off was clear by 2018 and is the structural reason recurrence is gone from the main path.
+
+---
+
+## 5. What we keep from RNNs
+
+The retirement of recurrence is selective; three ideas from the RNN era persist into modern LLMs:
+
+**(a) Sequential decoding at inference.** Even Transformers generate one token at a time when sampling, using a *KV cache* (Chapter 6) that plays the role of the hidden state. The autoregressive *interface* survives even though the recurrent *implementation* doesn't.
+
+**(b) Gating as a learned residual path.** The LSTM's "cell state with multiplicative gates" is the conceptual ancestor of the gated linear units (GLU / SwiGLU) used in modern Transformer FFNs (cf. [2.3](/session/ch2-mlps-backprop/2.3-activations) Shazeer 2020) and of state-space models with selectivity (Mamba, Cap 8.7). The high-level pattern of "let information flow through with a learned gate" is everywhere — see [Appendix 5.A](/session/ch5-sequence-modeling/5.A-lstm-gru).
+
+**(c) The recurrence as a special case of state-space.** Modern alternatives to attention (linear RNNs, S4, Mamba) revisit the recurrence with carefully designed transition matrices that *do* avoid vanishing gradients and *can* be made parallel via the parallel-scan algorithm. These don't displace attention as the main workhorse, but they suggest that the recurrent picture is not dead — only its naive 1990s instantiation is.
+
+<Aside type="warning">
+**"Attention beats RNNs" is shorthand.** What attention actually beats is *the recurrent implementation of sequence modelling on current GPU hardware*. The principle of "process a sequence by maintaining a state that updates with each new input" is not inherently broken — it is the one cognitive scientists believe describes human language processing. If hardware ever changes (analog accelerators, neuromorphic chips, much larger on-chip memory), the trade-offs could shift. As of 2026, Transformers win because their compute pattern matches what GPUs are good at.
+</Aside>
+
+---
+
+## 6. The transition
+
+We arrive at Chapter 6 with three desiderata in hand, distilled from the failures of $n$-grams, CNNs, and RNNs:
+
+1. **Unbounded conditioning.** No fixed window. ($n$-gram, CNN limit.)
+2. **Constant-length gradient paths.** No exponential decay over distance. (RNN limit.)
+3. **Parallel forward pass.** Every position computable in one batched matrix multiply. (RNN limit.)
+
+These three together specify attention almost uniquely — given that we also want a *content-addressed* mixing rule (the third desideratum of [4.3 §5](/session/ch4-cnn-bridge/4.3-bridge-to-sequences)). Chapter 6 derives the precise operation from these requirements.
+
+<SelfTest>
+
+**(a)** Compute the total number of sequential GPU operations for a forward pass through an RNN with $T = 2048$ steps, versus a Transformer with the same context length. Assume each "operation" is a single matrix multiply (no kernel-launch overhead).
+
+**(b)** A 12-layer Transformer with $d = 768$ processes a sequence of $T = 1024$ tokens. Compute the order of magnitude of attention compute per layer ($T^2 d$) and compare with FFN compute per layer ($\sim 4 T d^2$). Which dominates? At what value of $T$ do they cross over?
+
+**(c)** Argue that the constant path length of attention does *not* by itself imply that learning long-range dependencies is "easy" — only that it is *not exponentially harder* than learning short-range ones. What other issues might still impede long-range learning at large $T$?
+
+**(d)** Explain why a single attention layer is sufficient to give every position information about every other position, while a deep CNN with kernel $K = 3$ requires $\sim T/2$ layers for the same property. What does this imply about how depth is *used* in CNNs versus Transformers?
+
+**(e)** Sketch the inference-time loop of a Transformer LLM (one token generated per step). Identify which part is sequential (and thus comparable to an RNN) and which part is the parallel forward pass of a Transformer block. Why is the cost picture different at training and at inference?
+
+</SelfTest>

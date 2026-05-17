@@ -1,0 +1,205 @@
+---
+title: "5.3 — The language-modeling objective"
+chapter: 5
+order: 3
+estimatedMinutes: 20
+goal: "State the autoregressive factorisation p(x_1, …, x_T) = ∏ p(x_t | x_{<t}), derive next-token cross-entropy as the MLE loss, and connect both to perplexity and the entropy lower bound."
+prerequisites: ["ch5-sequence-modeling/5.2-embeddings-word2vec", "ch0-math-foundations/0.7-cross-entropy-mle"]
+---
+
+## 1. Why this session exists
+
+A language model is any probability distribution over token sequences:
+
+$$
+p(x_1, x_2, \dots, x_T), \qquad x_t \in \mathcal{V}, \ \mathcal{V} = \{1, \dots, V\}.
+$$
+
+To *train* a language model, we need (a) a parametric family $p_\theta$, and (b) a loss function whose minimisation makes $p_\theta$ close to the true distribution underlying the data. This session derives both from first principles. The factorisation is universal — it works for any sequence — and the loss is precisely the cross-entropy minimisation we already saw in [0.7](/session/ch0-math-foundations/0.7-cross-entropy-mle) and [1.8](/session/ch1-linear-models-perceptron/1.8-multiclass-ce-gradient), now lifted to sequences.
+
+After this session, the rest of Chapter 5 (and all of Chapters 6–9) operates *under* the autoregressive objective. Every architecture we look at is a different parameterisation of $p_\theta(x_t \mid x_{<t})$. Attention, MLP, normalisation, residuals — these are all design choices for the *same* function we define here.
+
+---
+
+## 2. The chain rule of probability
+
+For any joint distribution over $T$ random variables, the **chain rule of probability** says:
+
+$$
+\boxed{\ p(x_1, x_2, \dots, x_T) = \prod_{t = 1}^{T} p(x_t \mid x_1, \dots, x_{t - 1}). \ }
+$$
+
+We write $x_{<t} = (x_1, \dots, x_{t-1})$ for the prefix, with $x_{<1} = \emptyset$ (the empty prefix). Then
+
+$$
+p(x_1, \dots, x_T) = \prod_{t=1}^{T} p(x_t \mid x_{<t}).
+$$
+
+**This is an identity, not a modelling choice.** It is true for *any* joint distribution. The chain rule simply reorganises the joint probability as a product of conditionals.
+
+What *is* a modelling choice is the **autoregressive** parameterisation: we choose to model the joint by directly parameterising each of the $T$ conditionals $p(x_t \mid x_{<t})$. Equivalently, we let one model produce a categorical distribution over the next token given the prefix, and the joint emerges by multiplication.
+
+### 2.1 Why this factorisation and not another
+
+The chain rule is symmetric in its choice of ordering. We could equally well write
+
+$$
+p(x_1, \dots, x_T) = \prod_{t = T}^{1} p(x_t \mid x_{> t}),
+$$
+
+a "right-to-left" factorisation. Or any other permutation, though only the strict left-to-right and right-to-left orderings preserve the causal structure of text.
+
+Three reasons left-to-right wins for practical language modelling:
+
+1. **Inference matches generation.** We want to *produce* text. Sampling left-to-right from $p(x_t \mid x_{<t})$ is the natural way: extend a prefix one token at a time. Right-to-left would force you to know the end of the sentence before the beginning.
+2. **Causal mask is implementable.** With one-direction conditioning, every layer of the model can be written so that the representation at position $t$ depends only on positions $\le t$. This is the *causal mask* of Chapter 6.4 and is what lets us train on all $T$ positions in parallel from a single forward pass.
+3. **The conditional structure matches human language production.** Words are written and spoken in time order. The causal direction matches the data-generating process.
+
+Masked language modelling (BERT-style) drops autoregression and conditions each token on *both* sides simultaneously — a *bidirectional* factorisation. This is excellent for representation learning (encoder tasks like classification, retrieval, NER) but it doesn't directly support generation. Modern decoder-only LLMs (GPT, LLaMA, Claude) use the autoregressive factorisation throughout.
+
+---
+
+## 3. From the joint to the loss: maximum likelihood
+
+Suppose we have a corpus of $N$ documents (or "examples"), where document $n$ is a token sequence $\mathbf{x}^{(n)} = (x_1^{(n)}, \dots, x_{T_n}^{(n)})$. Assume documents are i.i.d. draws from the true (unknown) distribution $p^\star$. The **maximum-likelihood estimator** for a model family $p_\theta$ maximises the log-likelihood of the corpus:
+
+$$
+\hat\theta_\text{MLE} = \arg\max_\theta\ \sum_{n=1}^{N} \log p_\theta(\mathbf{x}^{(n)}).
+$$
+
+Substitute the autoregressive factorisation:
+
+$$
+\log p_\theta(\mathbf{x}^{(n)}) = \sum_{t=1}^{T_n} \log p_\theta(x_t^{(n)} \mid x_{<t}^{(n)}).
+$$
+
+The negative log-likelihood, the standard quantity we minimise, is
+
+$$
+\boxed{\ \mathcal{L}(\theta) = -\sum_{n=1}^{N} \sum_{t=1}^{T_n} \log p_\theta(x_t^{(n)} \mid x_{<t}^{(n)}). \ }
+$$
+
+Dividing by the total number of tokens $\sum_n T_n$ converts this to a **per-token negative log-likelihood**, often called the **next-token cross-entropy loss** (and exactly the multiclass CE of [1.8](/session/ch1-linear-models-perceptron/1.8-multiclass-ce-gradient), applied at each time step):
+
+$$
+\boxed{\ \mathcal{L}_\text{token}(\theta) = -\mathbb{E}_{(\mathbf{x}, t)}\, \log p_\theta(x_t \mid x_{<t}). \ }
+$$
+
+Every modern LLM minimises this loss. There is no auxiliary objective for the main pretraining stage of GPT-style models — just predict the next token, averaged over every position in every document.
+
+### 3.1 Why this loss is "right"
+
+Two equivalent justifications:
+
+**(a) Maximum likelihood.** As derived above, minimising $\mathcal{L}$ is exactly maximising the probability that $p_\theta$ assigns to the observed corpus. Under standard regularity conditions (compact parameter space, identifiability), MLE is consistent: $\hat\theta_\text{MLE} \to \theta^\star$ as $N \to \infty$ if the true distribution lies in the model family.
+
+**(b) Cross-entropy with the data distribution.** Let $p^\star$ be the true distribution. Then the population version of $\mathcal{L}_\text{token}$ is
+
+$$
+\mathbb{E}_{\mathbf{x} \sim p^\star,\, t}\, \left[ -\log p_\theta(x_t \mid x_{<t}) \right] = H(p^\star) + \mathbb{E}\left[ \mathrm{KL}\!\left( p^\star(\cdot \mid x_{<t}) \,\|\, p_\theta(\cdot \mid x_{<t}) \right) \right].
+$$
+
+(We saw exactly this decomposition in [0.7 §3](/session/ch0-math-foundations/0.7-cross-entropy-mle).) Since $H(p^\star)$ doesn't depend on $\theta$, minimising the cross-entropy is equivalent to minimising the **average KL divergence** of the model from the truth, position by position. That is the strongest "fit the data" criterion we have.
+
+### 3.2 The lower bound
+
+Both of these views agree that the loss has a non-zero floor:
+
+$$
+\boxed{\ \mathcal{L}_\text{token}(\theta) \ge H(p^\star) = -\mathbb{E}_{\mathbf{x} \sim p^\star,\, t}\, \log p^\star(x_t \mid x_{<t}). \ }
+$$
+
+$H(p^\star)$ is the **entropy of natural language**, the irreducible per-token uncertainty inherent in the data. No language model can drive its loss below this floor — even the true distribution achieves $\mathcal{L}_\text{token} = H(p^\star)$, not zero. Empirically, the per-token entropy of English from a well-trained LM is around 1.5–2.5 nats (corresponding to 2–4 bits), depending on tokeniser and domain.
+
+---
+
+## 4. Per-token cross-entropy in practice
+
+Concretely, the model outputs **logits** $z_t \in \mathbb{R}^V$ for each position $t$ — a $V$-dim vector of unnormalised scores. The conditional distribution is the softmax:
+
+$$
+p_\theta(x_t = k \mid x_{<t}) = \frac{\exp(z_{t,k})}{\sum_{j=1}^V \exp(z_{t,j})} = \text{softmax}(z_t)_k.
+$$
+
+The loss at position $t$, given the true target $y_t = x_t$, is the standard one-hot cross-entropy:
+
+$$
+\ell_t = -\log\, \text{softmax}(z_t)_{y_t} = -z_{t, y_t} + \log \sum_j \exp(z_{t, j}).
+$$
+
+We already derived the gradient of this in [1.8 §4](/session/ch1-linear-models-perceptron/1.8-multiclass-ce-gradient): $\partial \ell_t / \partial z_{t, k} = \text{softmax}(z_t)_k - \mathbb{1}[k = y_t]$. The "predicted minus target" form. For the full LM loss we sum (or average) $\ell_t$ over all positions and all examples.
+
+**Numerical stability.** The $\log \sum_j \exp(z_{t, j})$ term must be computed with the log-sum-exp trick from [0.10 §4](/session/ch0-math-foundations/0.10-numerical-stability), or training underflows immediately. Frameworks do this automatically when you call `cross_entropy(logits, targets)`.
+
+---
+
+## 5. Perplexity
+
+The most common single number used to report LM quality is **perplexity** — the exponentiated per-token loss:
+
+$$
+\boxed{\ \text{PPL} = \exp(\mathcal{L}_\text{token}) = \exp\!\left( -\frac{1}{N} \sum_t \log p_\theta(x_t \mid x_{<t}) \right). \ }
+$$
+
+Three interpretations make the number tangible:
+
+**(a) Geometric average of $1/p$.** Rewrite:
+
+$$
+\text{PPL} = \left( \prod_t \frac{1}{p_\theta(x_t \mid x_{<t})} \right)^{1/N}.
+$$
+
+If the model assigns probability $p$ to each true token, perplexity is $1/p$. A perplexity of 20 means *"on average, the model is as uncertain as if it were uniformly choosing between 20 options."*
+
+**(b) Effective vocabulary size.** A model that assigns probability $1/V$ to every token (no information) has PPL $= V$. A perfect model that always assigns 1 to the truth has PPL $= 1$. PPL is the "effective branching factor" at each position.
+
+**(c) Exponential of bits.** Cross-entropy in nats $\times \log_2 e$ = cross-entropy in bits. Perplexity $= 2^{\text{bits/token}}$. A model with 2 bits/token has PPL $= 4$. Empirically, modern LLMs on web English clock in at 1–2 bits/token (PPL 2–4).
+
+PPL is the *standard* benchmark number for pretraining experiments. Across papers, the conventions about tokenisation, document boundaries, and corpus differ enough that PPL is most meaningful as a **relative** comparison (model A vs model B trained and evaluated identically), not as an absolute number.
+
+<Aside type="note">
+**Bits-per-byte (BPB).** When comparing models with *different* tokenisers, perplexity is incomparable (a tokeniser that uses more tokens per byte will look "worse" purely because each prediction is smaller). The cure is to measure loss in bits per byte, dividing total bits by the *byte length* of the original text rather than the token length. This is the standard for Pile / RedPajama style evaluations.
+</Aside>
+
+---
+
+## 6. The structural picture
+
+The autoregressive setup gives one model with one input/output interface, applied $T$ times in parallel during training and $T$ times sequentially during inference:
+
+- **Training (parallel).** Take a document of length $T$. Compute $z_1, \dots, z_T$ in a single forward pass using a causal mask (Chapter 6.4) so $z_t$ depends only on $x_{<t}$. Compute $\ell_t$ at each position. Sum and backprop. *One forward, one backward, $T$ supervised predictions.*
+- **Inference (sequential).** Start with a prompt $x_1, \dots, x_k$. Compute $z_k$, sample $x_{k+1} \sim \text{softmax}(z_k)$ (or take $\arg\max$, or apply temperature/top-$p$ — see Chapter 10). Append $x_{k+1}$ to the prefix. Repeat. *One step per generated token.*
+
+The parallel training step is the source of the GPU efficiency that makes Transformer pretraining feasible. It is *also* why we use the left-to-right causal factorisation: only this ordering admits the trick of "supervise every position from a single forward pass."
+
+<Aside type="warning">
+**Don't confuse cross-entropy and perplexity.** PPL and cross-entropy contain the same information but are reported on different scales: a halving of cross-entropy corresponds to a square-rooting of perplexity. When monitoring training loss curves, looking at cross-entropy (in nats or bits) is easier to interpret linearly; for *reporting* final model quality, PPL is the convention. Don't mix them in the same plot without a label.
+</Aside>
+
+---
+
+## 7. What we keep going forward
+
+For the rest of the course, when we say "the language model loss" we mean:
+
+$$
+\mathcal{L}_\text{token}(\theta) = -\frac{1}{|\text{corpus}|}\sum_{(\mathbf{x}, t)\,\in\,\text{corpus}} \log p_\theta(x_t \mid x_{<t}),
+$$
+
+with $p_\theta$ a softmax over a vocabulary of size $V$, and $p_\theta(\cdot \mid x_{<t})$ computed by *whatever* architecture we are studying. The objective is fixed. The architectures evolve.
+
+5.4 looks at the simplest possible architecture — the $n$-gram model — and quantifies how badly it fails. 5.5 looks at recurrent networks, the family that LLMs replaced. Chapter 6 introduces attention and the model that actually works at scale.
+
+<SelfTest>
+
+**(a)** Show that the chain rule $p(x_1, \dots, x_T) = \prod_t p(x_t \mid x_{<t})$ follows from the definition of conditional probability and induction on $T$. Why is no independence assumption needed?
+
+**(b)** Compute the per-token cross-entropy in nats for a model that assigns probability $0.3$ to the true next token at every position, and convert it to bits and to perplexity.
+
+**(c)** Two models trained on the same corpus achieve cross-entropies $\mathcal{L}_A = 2.0$ nats/token and $\mathcal{L}_B = 1.5$ nats/token. By what factor is model B's per-token probability of the truth higher than model A's? What is the ratio of perplexities?
+
+**(d)** The empirical per-token cross-entropy of English is roughly 1.5 nats. What does this mean operationally about the floor of pretraining loss for English text? Can a model achieve $\mathcal{L}_\text{token} = 0$?
+
+**(e)** Suppose a model is trained on documents using the autoregressive loss above, but at inference time you ask it to fill in the *middle* of a sentence (the words "$ \dots $" are missing). Argue from the factorisation why the model cannot directly answer this without prefix-suffix tricks.
+
+</SelfTest>

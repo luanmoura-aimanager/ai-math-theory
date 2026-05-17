@@ -1,0 +1,216 @@
+---
+title: "5.5 — RNNs and backpropagation through time (BPTT)"
+chapter: 5
+order: 5
+estimatedMinutes: 26
+goal: "Define the vanilla RNN recurrence, derive backpropagation through time, and prove the vanishing/exploding gradient result of Bengio, Simard & Frasconi (1994) that ultimately motivates abandoning recurrence for attention."
+prerequisites: ["ch5-sequence-modeling/5.3-language-modeling-objective", "ch2-mlps-backprop/2.9-vanishing-exploding-gradients"]
+---
+
+## 1. Why this session exists
+
+The $n$-gram model of [5.4](/session/ch5-sequence-modeling/5.4-ngram-baseline) was crushed by a fixed-range Markov assumption. The first family of neural architectures designed to escape that constraint was the **recurrent neural network** (RNN), introduced in modern form by Elman (1990).
+
+The mathematical hope of an RNN is elegant: instead of conditioning on a fixed-length window, maintain a *hidden state* $h_t$ that summarises the entire history $x_{<t}$, and update it sequentially as new tokens arrive. In principle, an RNN can model arbitrary-range dependencies — the conditioning context is *all of the past*.
+
+In practice, RNNs hit a structural wall that took two decades to fully diagnose: the **vanishing/exploding gradient problem**, formalised by Bengio, Simard, and Frasconi (1994). That problem isn't a bug — it's a consequence of the recurrence structure, and it is the single most important reason modern LLMs abandoned recurrence in favour of attention.
+
+This session does three things:
+
+1. Define the vanilla RNN and write down its forward pass.
+2. Derive backpropagation through time (BPTT).
+3. Prove the vanishing/exploding gradient bound and quantify what it costs.
+
+---
+
+## 2. The vanilla RNN
+
+Fix a hidden-state dimension $d_h$ and an input dimension $d_x$ (the embedding dimension from [5.2](/session/ch5-sequence-modeling/5.2-embeddings-word2vec)). The **Elman RNN** is defined by three weight matrices, one bias vector, and an initial state:
+
+$$
+W \in \mathbb{R}^{d_h \times d_h}, \quad U \in \mathbb{R}^{d_h \times d_x}, \quad V \in \mathbb{R}^{V \times d_h}, \quad b \in \mathbb{R}^{d_h}, \quad h_0 \in \mathbb{R}^{d_h}.
+$$
+
+For a sequence of input embeddings $x_1, \dots, x_T \in \mathbb{R}^{d_x}$, the recurrence is:
+
+$$
+\boxed{\ h_t = \phi(W h_{t-1} + U x_t + b), \qquad z_t = V h_t, \ }
+$$
+
+where $\phi$ is a per-coordinate non-linearity (typically $\tanh$ in early RNN papers, though ReLU is also used). The logits $z_t \in \mathbb{R}^V$ go through softmax to produce $p(x_{t+1} \mid x_{\le t})$, and the cross-entropy loss of [5.3](/session/ch5-sequence-modeling/5.3-language-modeling-objective) is summed over time.
+
+### 2.1 The unrolled computation graph
+
+The recurrence defines a computation graph that, *unrolled over time*, looks like a deep feedforward network in which:
+
+- Each "layer" corresponds to one time step.
+- All "layers" share the same weights $W, U, V, b$.
+- Each layer also receives an external input $x_t$.
+- Each layer also produces an output $z_t$ that contributes to the total loss.
+
+A 4-step unroll has the structure
+
+$$
+h_0 \xrightarrow{x_1} h_1 \xrightarrow{x_2} h_2 \xrightarrow{x_3} h_3 \xrightarrow{x_4} h_4,
+$$
+
+with $z_t$ branching off from each $h_t$. This is a depth-$T$ network with **weight sharing** across depth — structurally similar to a CNN sharing weights across space (4.2), but here the sharing is across *time*.
+
+### 2.2 Parameter counts
+
+For a hidden size $d_h$ and an input/output dimension $d_x = V$ (treating embeddings as part of the model):
+
+$$
+\#\theta = \underbrace{d_h^2}_{W} + \underbrace{d_h d_x}_{U} + \underbrace{V d_h}_{V_\text{out}} + \underbrace{d_h}_{b}.
+$$
+
+For an RNN with $d_h = 1024$ and $V = 50{,}000$, this is around $10^8$ — comparable in size to a modest Transformer, but as we'll see, dramatically less expressive.
+
+---
+
+## 3. Backpropagation through time
+
+The loss is the sum of per-step cross-entropies:
+
+$$
+L = \sum_{t = 1}^{T} \ell_t(z_t, x_{t+1}).
+$$
+
+We need $\partial L / \partial W$, $\partial L / \partial U$, $\partial L / \partial b$, $\partial L / \partial V$.
+
+The easy ones first. $V$ appears only in $z_t = V h_t$, so by [1.8 §4](/session/ch1-linear-models-perceptron/1.8-multiclass-ce-gradient):
+
+$$
+\frac{\partial L}{\partial V} = \sum_t \frac{\partial \ell_t}{\partial z_t}\, h_t^\top.
+$$
+
+The hard ones are $W$ and $U$, which are used at *every* time step. Define the "delta at time $t$":
+
+$$
+\delta_t := \frac{\partial L}{\partial h_t} \in \mathbb{R}^{d_h}.
+$$
+
+Two sources feed $h_t$'s effect on the loss:
+
+1. **Directly through $z_t$.** $h_t$ produces $z_t$, which produces $\ell_t$.
+2. **Through the next state $h_{t+1}$.** $h_t$ enters $h_{t+1} = \phi(W h_t + U x_{t+1} + b)$, which then influences $\ell_{t+1}, \dots, \ell_T$.
+
+So the **backward recurrence** for $\delta_t$ is:
+
+$$
+\boxed{\ \delta_t = V^\top\,\frac{\partial \ell_t}{\partial z_t}\ +\ W^\top\, \mathrm{diag}\!\left(\phi'(a_{t+1})\right)\, \delta_{t+1}, \ }
+$$
+
+where $a_{t+1} = W h_t + U x_{t+1} + b$ is the pre-activation at step $t + 1$, and $\delta_{T+1} := 0$. Read it the way you read the backprop recursion of [2.6 §3](/session/ch2-mlps-backprop/2.6-backprop-recursion): the gradient flows backward through time, multiplied by $W^\top$ and the activation-derivative diagonal at each step.
+
+Once you have $\delta_t$ for every $t$, the parameter gradients are sums over time:
+
+$$
+\frac{\partial L}{\partial W} = \sum_{t=1}^{T} \mathrm{diag}\!\left(\phi'(a_t)\right) \delta_t\, h_{t-1}^\top, \qquad \frac{\partial L}{\partial U} = \sum_{t=1}^{T} \mathrm{diag}\!\left(\phi'(a_t)\right) \delta_t\, x_t^\top.
+$$
+
+(The diagonal $\phi'(a_t)$ comes from differentiating $h_t = \phi(a_t)$.)
+
+Because the weights are shared across all $T$ time steps, every parameter gradient is a *sum of contributions from every time step* — not the average or the most recent. This is the discrete-time analogue of weight sharing in a CNN.
+
+### 3.1 Truncated BPTT
+
+The full BPTT in §3 needs to store every $h_t$ for $t = 1, \dots, T$ during the forward pass so that the backward pass can use them. Memory is $O(T \cdot d_h)$. For long documents (millions of tokens for an LLM-scale corpus), this is infeasible.
+
+In practice, RNN training uses **truncated BPTT** (TBPTT): break the sequence into chunks of $k$ tokens, run the forward and backward pass within each chunk treating $h_0$ as the previous chunk's final state (no gradient flows across chunk boundaries). Common values: $k \in [20, 200]$. The cost: any dependency longer than $k$ steps gets no gradient signal at all, which compounds the vanishing problem we're about to derive.
+
+---
+
+## 4. Vanishing and exploding gradients
+
+The backward recurrence in §3 is a *product*: $\delta_t$ depends on $\delta_{t+1}$ multiplied by $W^\top \mathrm{diag}(\phi'(a_{t+1}))$. Unrolling this product backwards from time $T$ to time $\tau$:
+
+$$
+\delta_\tau \supset \left( \prod_{t = \tau+1}^{T} W^\top\, \mathrm{diag}\!\left(\phi'(a_t)\right) \right) \delta_T^\text{(local)},
+$$
+
+where $\delta_T^\text{(local)} = V^\top \partial \ell_T / \partial z_T$ is the local contribution at time $T$.
+
+The gradient signal from a *distant* time step $T$ has to be multiplied by $T - \tau$ copies of the same kind of matrix. Take the spectral (operator) 2-norm:
+
+$$
+\left\| \prod_{t = \tau+1}^{T} W^\top\, \mathrm{diag}\!\left(\phi'(a_t)\right) \right\|_2 \ \le\ \prod_{t = \tau+1}^{T} \|W^\top\|_2\, \cdot\, \|\mathrm{diag}(\phi'(a_t))\|_2.
+$$
+
+Let $\sigma_\max(W)$ denote the largest singular value of $W$. For $\phi = \tanh$, $\phi'(a) \in (0, 1]$, so $\|\mathrm{diag}(\phi'(a_t))\|_2 \le 1$ — call this bound $\gamma_t$.
+
+Two qualitatively different regimes:
+
+**(a) $\sigma_\max(W) \cdot \gamma_t < 1$.** Each factor shrinks the gradient by at most a constant $< 1$. After $T - \tau$ steps:
+
+$$
+\|\delta_\tau\|_\text{from-$T$} \le (\sigma_\max(W) \cdot \gamma)^{T - \tau}\, \|\delta_T^\text{(local)}\| \to 0 \quad \text{exponentially in } T - \tau.
+$$
+
+This is the **vanishing gradient**: information from a distant future loss can't reach far-past hidden states.
+
+**(b) $\sigma_\max(W) \cdot \gamma_t > 1$.** The bound is in the wrong direction — the norm can *grow*, and empirically often does:
+
+$$
+\|\delta_\tau\|_\text{from-$T$} \sim (\sigma_\max(W) \cdot \gamma)^{T - \tau}\, \|\delta_T^\text{(local)}\| \to \infty \quad \text{exponentially in } T - \tau.
+$$
+
+This is the **exploding gradient**.
+
+### 4.1 The Bengio–Simard–Frasconi theorem
+
+Bengio, Simard, and Frasconi (1994) proved a clean version: for a non-linearity $\phi$ with $|\phi'(\cdot)| \le \gamma$, if $\sigma_\max(W) \cdot \gamma < 1$, then $\partial h_T / \partial h_\tau \to 0$ exponentially as $T - \tau \to \infty$. Conversely, if $\sigma_\max(W) \cdot \gamma > 1$, the product can grow without bound.
+
+The killer corollary: **there is no choice of $W$ that simultaneously preserves gradient norm and lets the RNN compute non-trivial functions of long contexts.** The same matrix that we need to grow representations over time has to *not* blow them up, and the boundary $\sigma_\max(W) \cdot \gamma = 1$ is unstable — small perturbations push the system into vanishing or exploding regimes.
+
+### 4.2 Mitigations and their limits
+
+**(a) Gradient clipping** (Pascanu, Mikolov, Bengio, 2013; already covered in [3.7](/session/ch3-optimization-regularization/3.7-lr-schedules-and-clipping)): rescale the gradient if $\|\nabla L\| > c$. This bounds the *exploding* side but does nothing for vanishing.
+
+**(b) Careful initialisation.** Initialising $W$ to be (approximately) orthogonal sets $\sigma_\max(W) \approx 1$, putting you on the boundary. Helps in practice but doesn't change the asymptotic behaviour.
+
+**(c) Gated architectures (LSTM, GRU).** Replace the simple multiplicative recurrence with a *gated* one whose default behaviour is the *identity* — see [Appendix 5.A](/session/ch5-sequence-modeling/5.A-lstm-gru). This was the dominant mitigation from 1997 until the Transformer in 2017 and substantially extends the practical range of recurrence, but does not eliminate the asymptotic problem.
+
+**(d) Attention.** The radical solution: replace the recurrent product with a *single* one-hop dependency from every position to every other. We will see in [5.6](/session/ch5-sequence-modeling/5.6-why-abandon-recurrence) and Chapter 6 why this is qualitatively different from any RNN fix.
+
+<Aside type="history">
+The vanishing-gradient problem in RNNs was first noticed by Sepp Hochreiter in his 1991 diploma thesis and formally analysed by Bengio, Simard, and Frasconi in 1994 (both already cited in [2.9](/session/ch2-mlps-backprop/2.9-vanishing-exploding-gradients)). Hochreiter & Schmidhuber's 1997 LSTM was the direct response: design a recurrence whose *default* path is the identity, so gradients can flow through long sequences without exponential decay. The LSTM dominated sequence modelling for two decades. The Transformer (Vaswani et al., 2017) did not "fix" recurrence — it sidestepped it entirely.
+</Aside>
+
+---
+
+## 5. The other architectural constraint: no parallelism
+
+The vanishing-gradient analysis above is a *learning* limit. There is a second, often-overlooked limit that is a *systems* problem.
+
+The RNN forward pass is, by definition, **sequential**: $h_t$ cannot be computed until $h_{t-1}$ is known. For a sequence of length $T$, the GPU must do $T$ matrix-vector multiplies in series, each waiting for the previous one.
+
+Compare this with an MLP block on the same sequence. If you pack the $T$ embeddings into a matrix $X \in \mathbb{R}^{T \times d}$, then a "no-recurrence" feed-forward layer $\phi(X W)$ is *one* GEMM that the GPU can parallelise across the $T$-axis. The wall-clock cost is dominated by the matrix size, not by the number of time steps.
+
+This second limit is what makes recurrent models *practically* untrainable at LLM scale even when LSTMs partially solve the gradient problem. Modern Transformer pretraining processes context windows of 4k–1M tokens in parallel per forward pass. A vanilla RNN would need 4k–1M sequential matrix multiplies per forward pass; there is no GPU large enough or fast enough to make this competitive.
+
+5.6 collects this argument and the long-range argument into a single brief that motivates attention.
+
+---
+
+## 6. What we keep going forward
+
+Three durable ideas from RNNs survive into modern LLMs:
+
+1. **Stateful sequential generation at inference.** Even Transformer LLMs generate one token at a time *at inference* — they maintain an analog of $h_t$ (the KV cache) and update it autoregressively. The inference loop *is* recurrent in a meaningful sense, even though the training-time forward pass is not.
+2. **The autoregressive loss** carries over verbatim from §5.3 — it doesn't depend on the architecture.
+3. **The vanishing-gradient lesson** generalises beyond RNNs. Every very deep network (CNN, MLP, Transformer) faces a related issue, mitigated by [residual connections](/session/ch2-mlps-backprop/2.5-backprop-output-delta) and [layer normalisation](/session/ch3-optimization-regularization/3.8-layernorm-rmsnorm). The structural pattern is the same: design the network so that the gradient has a clean, near-identity path through depth.
+
+<SelfTest>
+
+**(a)** Write out the forward pass of a 3-step Elman RNN explicitly: given $h_0, x_1, x_2, x_3$ and weight matrices $W, U$, write $h_1, h_2, h_3$ as nested functions. Then write $\partial h_3 / \partial h_1$ using the chain rule.
+
+**(b)** Suppose $W = c \cdot I$ for a scalar $c$ and $\phi = \tanh$ with $\phi'(0) = 1$. What is the behaviour of $\|\partial h_T / \partial h_1\|$ as $T \to \infty$ for $c = 0.9, c = 1.0, c = 1.1$? Identify which case is vanishing, which is exploding, which is the boundary.
+
+**(c)** Why does gradient clipping help with exploding but not with vanishing? Sketch the bias it introduces if the true gradient is consistently rescaled down by clipping.
+
+**(d)** Argue, using §5, that a recurrent network with sequence length $T = 4096$ would have at least $T$ sequential GPU operations per forward pass. Compare with a Transformer that needs $O(\log T)$ kernel launches at most. (Don't compute exact wall-clock; just give the qualitative comparison.)
+
+**(e)** The KV-cache in a Transformer at inference time stores $O(T \cdot d)$ tensors and updates incrementally. Argue that this is structurally similar to maintaining an RNN's hidden state $h_t$ at inference — and dissimilar from how a Transformer trains. Why is this not a contradiction with §5?
+
+</SelfTest>

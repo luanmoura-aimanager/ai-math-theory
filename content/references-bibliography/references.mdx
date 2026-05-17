@@ -147,7 +147,59 @@ prerequisites: []
 
 ---
 
-## Chapters 5–12
+## Chapter 5 — Sequence modeling and embeddings
+
+**Textbooks.**
+
+- **Jurafsky, D., & Martin, J. H.** (2024). *Speech and Language Processing* (3rd ed., draft). — Canonical reference for tokenisation (5.1), n-grams and smoothing (5.4), and language-modeling fundamentals (5.3). [stanford.edu/~jurafsky/slp3](https://web.stanford.edu/~jurafsky/slp3/)
+- **Goodfellow, I., Bengio, Y., & Courville, A.** (2016). *Deep Learning,* §10 (Sequence Modeling: Recurrent and Recursive Nets). MIT Press. — RNN, BPTT, LSTM/GRU (5.5, Appendix 5.A).
+- **Prince, S. J. D.** (2023). *Understanding Deep Learning,* §12 (Sequence-to-Sequence Models) and §15 (Recurrent Networks). MIT Press. — Embeddings (5.2), RNN treatment (5.5).
+- **Raschka, S.** (2024). *Build a Large Language Model (From Scratch).* Manning. — Chapter 2 on tokenisation (5.1) and the practitioner-level walk-through of BPE.
+
+**Primary papers — tokenisation.**
+
+- **Gage, P.** (1994). "A new algorithm for data compression". *The C Users Journal,* 12(2), 23–38. — Original BPE algorithm as a compression scheme (5.1).
+- **Sennrich, R., Haddow, B., & Birch, A.** (2016). "Neural machine translation of rare words with subword units". *ACL*. [arXiv:1508.07909](https://arxiv.org/abs/1508.07909) — Adapted BPE to neural sequence models; the paper that put BPE on the LLM map (5.1).
+- **Schuster, M., & Nakajima, K.** (2012). "Japanese and Korean voice search". *ICASSP*. — WordPiece tokeniser (used by BERT) (5.1 §5).
+- **Kudo, T., & Richardson, J.** (2018). "SentencePiece: A simple and language-independent subword tokenizer and detokenizer for neural text processing". [arXiv:1808.06226](https://arxiv.org/abs/1808.06226) — SentencePiece tokeniser (LLaMA, T5) (5.1 §5).
+- **Radford, A., Wu, J., Child, R., et al.** (2019). "Language models are unsupervised multitask learners". OpenAI technical report. — GPT-2 and the introduction of byte-level BPE (5.1 §5).
+
+**Primary papers — embeddings.**
+
+- **Firth, J. R.** (1957). "A synopsis of linguistic theory, 1930–1955". *Studies in Linguistic Analysis,* 1–32. — Distributional hypothesis (5.2 §3).
+- **Harris, Z. S.** (1954). "Distributional structure". *Word,* 10(2–3), 146–162. — Distributional hypothesis (5.2 §3).
+- **Bengio, Y., Ducharme, R., Vincent, P., & Jauvin, C.** (2003). "A neural probabilistic language model". *JMLR,* 3, 1137–1155. — First neural LM with learned word embeddings; the conceptual ancestor of every modern LLM (5.2, 5.4).
+- **Mikolov, T., Chen, K., Corrado, G., & Dean, J.** (2013). "Efficient estimation of word representations in vector space". [arXiv:1301.3781](https://arxiv.org/abs/1301.3781) — Word2Vec architectures (CBOW, skip-gram) (5.2).
+- **Mikolov, T., Sutskever, I., Chen, K., Corrado, G., & Dean, J.** (2013). "Distributed representations of words and phrases and their compositionality". *NeurIPS*. [arXiv:1310.4546](https://arxiv.org/abs/1310.4546) — Skip-gram with negative sampling; the linear-analogy result (5.2 §4–§5).
+- **Pennington, J., Socher, R., & Manning, C. D.** (2014). "GloVe: Global vectors for word representation". *EMNLP*. — Co-occurrence-matrix factorisation as an alternative to word2vec (5.2 §3).
+- **Levy, O., & Goldberg, Y.** (2014). "Neural word embedding as implicit matrix factorization". *NeurIPS*. — Proves that SGNS factorises the shifted PMI matrix (5.2 Aside).
+- **Press, O., & Wolf, L.** (2017). "Using the output embedding to improve language models". *EACL*. [arXiv:1608.05859](https://arxiv.org/abs/1608.05859) — Weight tying between input embedding and output projection (5.2 §6.1).
+
+**Primary papers — RNNs and BPTT.**
+
+- **Elman, J. L.** (1990). "Finding structure in time". *Cognitive Science,* 14(2), 179–211. — The modern (Elman) RNN (5.5).
+- **Hochreiter, S.** (1991). *Untersuchungen zu dynamischen neuronalen Netzen.* Diploma thesis, TU Munich. — First analysis of vanishing gradients in RNNs (already cited in Cap 2; recalled in 5.5).
+- **Bengio, Y., Simard, P., & Frasconi, P.** (1994). "Learning long-term dependencies with gradient descent is difficult". *IEEE Trans. Neural Networks,* 5(2), 157–166. — Formal vanishing/exploding gradient theorem for RNNs (5.5 §4.1).
+- **Werbos, P. J.** (1990). "Backpropagation through time: What it does and how to do it". *Proceedings of the IEEE,* 78(10), 1550–1560. — BPTT (5.5 §3).
+
+**Primary papers — gated RNNs (Appendix 5.A).**
+
+- **Hochreiter, S., & Schmidhuber, J.** (1997). "Long short-term memory". *Neural Computation,* 9(8), 1735–1780. — LSTM cell (Appendix 5.A §3).
+- **Gers, F. A., Schmidhuber, J., & Cummins, F.** (2000). "Learning to forget: Continual prediction with LSTM". *Neural Computation,* 12(10), 2451–2471. — Forget gate (Appendix 5.A Aside).
+- **Cho, K., van Merriënboer, B., Gulcehre, C., et al.** (2014). "Learning phrase representations using RNN encoder–decoder for statistical machine translation". *EMNLP*. [arXiv:1406.1078](https://arxiv.org/abs/1406.1078) — GRU (Appendix 5.A §5).
+- **Chung, J., Gulcehre, C., Cho, K., & Bengio, Y.** (2014). "Empirical evaluation of gated recurrent neural networks on sequence modeling". [arXiv:1412.3555](https://arxiv.org/abs/1412.3555) — LSTM/GRU empirical comparison (Appendix 5.A §5).
+- **Jozefowicz, R., Zaremba, W., & Sutskever, I.** (2015). "An empirical exploration of recurrent network architectures". *ICML*. — Architecture search over gated RNN variants (Appendix 5.A §5).
+- **Srivastava, R. K., Greff, K., & Schmidhuber, J.** (2015). "Highway networks". [arXiv:1505.00387](https://arxiv.org/abs/1505.00387) — Gated residual feed-forward networks; conceptual bridge from LSTM to ResNet (Appendix 5.A §7).
+
+**Lecture series and online resources.**
+
+- **Karpathy, A.** "Neural Networks: Zero to Hero" lecture series, especially *makemore* (Lectures 2–5). [karpathy.ai/zero-to-hero](https://karpathy.ai/zero-to-hero.html) — Worked examples of bigrams, embeddings, and character-level LMs (5.4).
+- **Karpathy, A.** (2015). "The unreasonable effectiveness of recurrent neural networks". [karpathy.github.io](https://karpathy.github.io/2015/05/21/rnn-effectiveness/) — Cultural-historical reference for LSTM in language modelling (Appendix 5.A Aside).
+- **Manning, C., et al.** *CS224N: Natural Language Processing with Deep Learning.* Stanford. — Lectures on subword tokenisation and language modelling (5.1, 5.3).
+
+---
+
+## Chapters 6–12
 
 *To be populated as those chapters are written. The convention is to list, for each chapter, the textbooks used, primary papers cited, lecture series referenced, and any online resources that the chapter draws from.*
 

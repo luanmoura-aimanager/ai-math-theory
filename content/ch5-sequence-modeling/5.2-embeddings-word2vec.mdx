@@ -1,0 +1,212 @@
+---
+title: "5.2 — Embeddings: word2vec, geometry, and the modern picture"
+chapter: 5
+order: 2
+estimatedMinutes: 24
+goal: "Understand the embedding matrix as a learned lookup table, derive the skip-gram-with-negative-sampling objective that put 'embedding' into the deep-learning vocabulary, and place word2vec inside the modern picture where embeddings are trained end-to-end with the language model."
+prerequisites: ["ch5-sequence-modeling/5.1-tokenization", "ch1-linear-models-perceptron/1.7-softmax"]
+---
+
+## 1. Why this session exists
+
+Section 5.1 ended with the input to the model being a sequence of integer token IDs. Integers are not a useful representation: arithmetic on them ($\text{ID}(\text{cat}) + 1 = \text{ID}(\text{?})$) is meaningless, and a neural network cannot extract structure from arbitrary categorical labels. We need to map each token ID to a dense vector — its **embedding** — and we want those vectors to capture semantic structure: tokens that mean similar things should map to nearby points; analogies should be linear; co-occurring tokens should align.
+
+This session does three things:
+
+1. Define the embedding matrix and the lookup operation.
+2. Derive Mikolov's **skip-gram-with-negative-sampling** (SGNS) objective, the algorithm behind word2vec, and see *why* it produces the linear-analogy geometry that made embeddings famous.
+3. Place word2vec inside the modern picture: in LLMs, embeddings are *not* trained with a separate skip-gram step. They are part of the language model and are updated jointly with everything else. Word2vec is the conceptual ancestor and the geometric intuition, not the implementation.
+
+---
+
+## 2. The embedding matrix
+
+Fix a vocabulary $\mathcal{V}$ of size $V$ from §5.1 and an embedding dimension $d$. The **embedding matrix** is a learnable parameter
+
+$$
+\boxed{\ E \in \mathbb{R}^{V \times d}. \ }
+$$
+
+For token ID $i \in \{1, \dots, V\}$, the embedding of token $i$ is the $i$-th row $E_i \in \mathbb{R}^d$:
+
+$$
+\text{embed}(i) = E_i.
+$$
+
+Equivalently: if $\mathbf{1}_i \in \{0, 1\}^V$ is the one-hot vector with a 1 at coordinate $i$, then $\text{embed}(i) = \mathbf{1}_i^\top E$. The embedding *layer* is therefore a linear map from one-hot vectors to dense vectors — the simplest possible learnable function from categorical inputs.
+
+For a sequence of token IDs $(x_1, \dots, x_T)$, the embedded input is a matrix $X \in \mathbb{R}^{T \times d}$ with rows $X_t = E_{x_t}$. This is the tensor that every subsequent layer of the model consumes.
+
+**Parameter count.** $V \cdot d$. For $V = 50{,}000, d = 4096$ (LLaMA-scale), the embedding matrix alone is $\sim 2 \times 10^8$ parameters — comparable to a few Transformer blocks.
+
+### 2.1 What we want from embeddings
+
+We want $E_i \approx E_j$ when tokens $i, j$ have similar meaning, and more ambitiously we want **linear semantic structure**: relations between concepts should correspond to consistent vector offsets. The famous empirical observation:
+
+$$
+E_\text{king} - E_\text{man} + E_\text{woman} \approx E_\text{queen}.
+$$
+
+That such a relation could be *learned* from raw co-occurrence statistics, with no human supervision, was a small revolution in 2013 and is still the cleanest demonstration of why distributed representations are powerful.
+
+---
+
+## 3. The distributional hypothesis
+
+The conceptual backbone of every embedding method since Bengio et al. (2003) is the **distributional hypothesis**, due to Harris (1954) and Firth (1957):
+
+> *"You shall know a word by the company it keeps."* — Firth
+
+Concretely: two words that appear in the same kinds of contexts (the words around them) tend to have similar meanings. If *"dog"* and *"cat"* are surrounded by similar neighbours (*"pet"*, *"walk"*, *"vet"*), they should be close in embedding space — even if the algorithm never sees a dictionary or an ontology.
+
+Every embedding method since then can be read as: *"design an objective whose optimum forces vectors of tokens with similar contexts to be similar."* Word2vec is one such design; GloVe (Pennington et al., 2014) is another; the LLM's own forward pass is a third. The conceptual unity is the distributional hypothesis.
+
+---
+
+## 4. Skip-gram with negative sampling (SGNS)
+
+Mikolov et al. (2013) introduced two related architectures (CBOW and skip-gram); skip-gram with negative sampling, the more commonly used variant, is what we derive here.
+
+### 4.1 The skip-gram setup
+
+Two embedding matrices: a **target** embedding $E \in \mathbb{R}^{V \times d}$ and a **context** embedding $\tilde E \in \mathbb{R}^{V \times d}$. Each token $w$ has two vectors — one for when it appears as a "centre word" ($E_w$) and one for when it appears as a "neighbour" ($\tilde E_c$).
+
+Given a corpus tokenised as $w_1, w_2, \dots, w_N$, define **positive (centre, context) pairs** by sliding a window of half-width $m$:
+
+$$
+\mathcal{D}_+ = \{ (w_t, w_{t + j}) : t = 1, \dots, N, \ j \in \{-m, \dots, m\} \setminus \{0\} \}.
+$$
+
+A typical window is $m = 5$; each occurrence of a word in the corpus generates up to $2m$ positive pairs.
+
+### 4.2 The objective
+
+For each positive pair $(w, c) \in \mathcal{D}_+$ and $K$ negative samples $c_1^-, \dots, c_K^-$ drawn i.i.d. from a noise distribution $P_n$ over the vocabulary, SGNS minimises:
+
+$$
+\mathcal{L}_\text{SGNS}(w, c) = -\log \sigma(E_w^\top \tilde E_c) - \sum_{k=1}^{K} \log \sigma(- E_w^\top \tilde E_{c_k^-}),
+$$
+
+where $\sigma(z) = 1 / (1 + e^{-z})$ is the logistic sigmoid. Summing over all positive pairs in the corpus:
+
+$$
+\boxed{\ \mathcal{L}_\text{SGNS} = -\sum_{(w, c) \in \mathcal{D}_+} \left[\ \log \sigma(E_w^\top \tilde E_c) + \sum_{k=1}^{K} \mathbb{E}_{c^- \sim P_n}\, \log \sigma(-E_w^\top \tilde E_{c^-})\ \right]. \ }
+$$
+
+Read the two terms:
+
+- **First term — positive pair.** Push $E_w^\top \tilde E_c$ up (so $\sigma(\cdot)$ approaches 1) — make the centre and a real context look "the same direction."
+- **Second term — $K$ negative samples.** Push $E_w^\top \tilde E_{c^-}$ down (so $\sigma(-\cdot)$ approaches 1) — make the centre look *unlike* random tokens.
+
+That is *exactly* a binary classifier with logistic loss (1.2 §3): "is $(w, c)$ a real corpus pair or a noise pair?" The clever idea was framing the multi-class "predict the context" problem as a series of binary classifications, sidestepping the prohibitive $V$-way softmax that the original "hierarchical softmax" version needed.
+
+### 4.3 The noise distribution
+
+Mikolov found empirically that $P_n(c) \propto U(c)^{3/4}$, where $U(c)$ is the unigram frequency of token $c$ in the corpus, works far better than the unigram distribution or the uniform distribution. The $3/4$ exponent downweights very frequent words (function words like *"the"*) and upweights rare content words; the resulting negative-sample distribution is more informative.
+
+### 4.4 The hyperparameters
+
+- $d$ — embedding dimension. 100–300 for word2vec; 4096+ for modern LLMs.
+- $m$ — window half-width. Larger windows pick up topical similarity; smaller windows pick up syntactic similarity.
+- $K$ — number of negative samples per positive. Typically 5–20.
+
+### 4.5 What you get out
+
+After training, the **target embedding $E$** is the artefact people use downstream. The context matrix $\tilde E$ is discarded. The result: a $V \times d$ matrix where similar-meaning tokens are nearby and (empirically) where linear analogies hold.
+
+<Aside type="note">
+**SGNS is implicit matrix factorisation.** Levy & Goldberg (2014) proved that, in the limit of infinite data and dimension, SGNS factorises the **shifted positive pointwise mutual information** (SPPMI) matrix:
+
+$$
+E_w^\top \tilde E_c \approx \text{PMI}(w, c) - \log K, \quad \text{PMI}(w, c) = \log \frac{P(w, c)}{P(w) P(c)}.
+$$
+
+The result is theoretically beautiful: word2vec is co-occurrence statistics in disguise. The mystery of "why does it work" reduces to "PMI is a good measure of association, and low-rank approximations of it preserve that structure."
+</Aside>
+
+---
+
+## 5. Why linear analogies emerge
+
+The famous *king − man + woman ≈ queen* relation is **empirical**, not a theorem. But there is a clean heuristic argument.
+
+Consider the analogy "*man* is to *woman* as *king* is to *queen*." Both pairs differ by the same semantic feature — gender. If embeddings encode each independent semantic dimension as an approximately *linear direction* in the embedding space (a feature axis), then the gender axis $\hat{\mathbf{g}}$ should satisfy
+
+$$
+E_\text{woman} - E_\text{man} \approx \alpha\, \hat{\mathbf{g}}, \qquad E_\text{queen} - E_\text{king} \approx \alpha\, \hat{\mathbf{g}},
+$$
+
+for similar $\alpha > 0$. Adding the first equation to $E_\text{king}$:
+
+$$
+E_\text{king} + (E_\text{woman} - E_\text{man}) \approx E_\text{king} + \alpha\, \hat{\mathbf{g}} \approx E_\text{queen}.
+$$
+
+The success of this prediction at scale empirically validates the claim that SGNS (and successor methods) produces a representation whose principal directions roughly correspond to interpretable semantic axes. The structure is approximate — analogy accuracy on benchmark sets like Google Analogy is 60–70%, not 100% — but it is real, and it is the cleanest experimental evidence that distributed representations encode meaning *geometrically*.
+
+<Aside type="history">
+Word2vec (Mikolov et al., 2013) was not the first method to produce semantic embeddings — Bengio et al. (2003) had a neural language model with learned embeddings, and methods based on co-occurrence matrices (LSI, HAL) date to the 1990s. What word2vec contributed was: (1) speed (the SGNS objective scales linearly in corpus size, no SVD), (2) public release of a high-quality 300-dim embedding for 3M English words trained on Google News, and (3) the discovery of linear analogies, which became the cultural meme that put representation learning on every NLP researcher's screen.
+</Aside>
+
+---
+
+## 6. The modern picture: embeddings are part of the model
+
+Every word2vec-style method has one structural feature that LLMs *do not share*: it trains embeddings as a **standalone** artefact, using an objective (SGNS) that is *not* the language-modelling objective we will define in 5.3.
+
+In an LLM, the embedding matrix $E$ is simply the first layer of the network. It is initialised randomly (typically $\mathcal{N}(0, 1/d)$ or similar) and updated by backprop from the next-token cross-entropy loss, jointly with every other parameter. There is no separate "pre-train embeddings, then train the model" step.
+
+This matters for two reasons:
+
+**(a) The embeddings are task-specific.** An LLM's embedding for "*bank*" is shaped by the contexts in which the *language model* must distinguish meanings — they are tuned to whatever the rest of the model needs them to be. Word2vec embeddings are tuned to one specific co-occurrence objective. Modern LLM embeddings *do* still exhibit the linear-analogy structure (you can probe a frozen LLM and find it), but they are richer.
+
+**(b) The dimension is much larger.** Word2vec used $d \in [100, 300]$. LLaMA-3-70B uses $d = 8192$. The embedding matrix grows linearly with this hidden size and is a non-trivial fraction of the parameter budget.
+
+### 6.1 Weight tying
+
+A trick used by almost every LLM (introduced by Press & Wolf, 2017): the **output projection** that maps the final hidden state to logits over the vocabulary uses the *same* matrix as the embedding, transposed:
+
+$$
+\boxed{\ \text{logits} = h_T\, E^\top \in \mathbb{R}^V, \quad \text{with } E \text{ the same matrix as the input embedding.} \ }
+$$
+
+This halves the parameter count of the vocabulary-facing matrices (you keep one $V \times d$ instead of two), and empirically improves perplexity slightly: the input and output representations of a token are forced to live in the same space, which makes pretraining sample-efficient.
+
+LLaMA-1/2/3 tie embeddings. GPT-2 and GPT-3 tied them. Some larger models untie them again for capacity reasons; this is an architectural choice rather than a settled matter.
+
+### 6.2 What the embedding contains
+
+After pretraining, $E_i$ is a $d$-vector that the rest of the model knows how to interpret. Empirically, even from a fully trained LLM:
+
+- Similar tokens are nearby in $\cos$ similarity. "Cat" and "feline" cluster.
+- Subword pieces of related words cluster (e.g. the `er` token from §5.1 sits near other suffix-like fragments).
+- Syntactic categories cluster (verbs near verbs, prepositions near prepositions).
+- The first few principal directions encode coarse semantic axes: gender, sentiment, topic.
+
+These properties are emergent — no part of the loss function explicitly asks for them. They arise because the rest of the network is doing useful prediction work, and a useful embedding is one whose geometry makes that work easier.
+
+---
+
+## 7. What we keep going forward
+
+Three durable lessons:
+
+1. The first layer of every LLM is a learnable lookup table $E \in \mathbb{R}^{V \times d}$.
+2. The geometry of that lookup table — distances, directions, linear analogies — emerges from training and encodes semantic structure without being explicitly programmed.
+3. Word2vec is the *historical* artefact that established the picture; the modern *implementation* is end-to-end training of $E$ jointly with the rest of the model.
+
+5.3 will give the loss function that pulls all these knobs at once: next-token cross-entropy.
+
+<SelfTest>
+
+**(a)** Write the embedding-layer forward and backward passes explicitly. Given a one-hot input $\mathbf{1}_i$ and an upstream gradient $\partial L / \partial E_i \in \mathbb{R}^d$, what is $\partial L / \partial E_j$ for $j \neq i$? What does this imply for the sparsity of embedding-matrix updates?
+
+**(b)** Suppose the SGNS objective uses one positive pair $(w, c)$ and one negative sample $c^-$. Derive $\partial \mathcal{L}_\text{SGNS} / \partial E_w$ explicitly using $\frac{d}{dz} \log \sigma(z) = 1 - \sigma(z)$. Interpret the sign of each term.
+
+**(c)** Show that under weight tying $\text{logits} = h_T\, E^\top$, the gradient of the cross-entropy loss with respect to $E_i$ has *two* contributions: one from $E_i$'s role as input embedding and one from its role in the output projection. Sketch this without full derivation.
+
+**(d)** SGNS factorises the SPPMI matrix (the Aside in §4.5). Compute PMI for the pairs $(w, c) = (\text{the}, \text{a})$ and $(w, c) = (\text{rain}, \text{umbrella})$ in a hypothetical corpus where $P(\text{the}) = 0.05$, $P(\text{a}) = 0.02$, $P(\text{the}, \text{a}) = 0.0011$, $P(\text{rain}) = 0.0008$, $P(\text{umbrella}) = 0.0001$, $P(\text{rain}, \text{umbrella}) = 0.00007$. Which pair is more "associated"?
+
+**(e)** Sketch why a model with $V = 100{,}000, d = 4096$ benefits significantly more from weight tying than a model with $V = 256, d = 4096$.
+
+</SelfTest>

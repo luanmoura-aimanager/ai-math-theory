@@ -1,0 +1,174 @@
+---
+title: "5.A — LSTM and GRU: gating as a learned residual path (appendix)"
+chapter: 5
+order: 100
+estimatedMinutes: 20
+goal: "Derive the LSTM cell and the GRU as mitigations of the vanishing-gradient problem, see why an additive cell-state path is the key, and recognise the same gated-residual pattern in modern Transformer FFNs and state-space models."
+prerequisites: ["ch5-sequence-modeling/5.5-rnn-bptt"]
+---
+
+## 1. Why this appendix exists
+
+The vanilla RNN of [5.5](/session/ch5-sequence-modeling/5.5-rnn-bptt) suffers vanishing/exploding gradients (Bengio, Simard & Frasconi, 1994). For two decades, the field's response was a single architectural family: **gated recurrent cells**, of which the LSTM (Hochreiter & Schmidhuber, 1997) and the GRU (Cho et al., 2014) are the canonical members.
+
+These cells are no longer used in modern LLMs. We retire them — gracefully — by understanding *why they worked* and *which of their ideas survived*. The "gated residual" pattern reappears in three downstream places:
+
+- Transformer FFN blocks with gated activations (GLU, SwiGLU, GeGLU — see [2.3](/session/ch2-mlps-backprop/2.3-activations)).
+- Highway networks and the residual stream of Transformers more broadly (foreshadowed in Chapter 6).
+- Selective state-space models (Mamba — coming in Chapter 8).
+
+Read this appendix as cultural literacy and as motivation for why "additive paths with learnable gates" is one of the most important architectural primitives in deep learning, even after the specific cell types fell out of fashion.
+
+---
+
+## 2. Diagnosis: why vanilla RNNs vanish
+
+Recall from [5.5 §4](/session/ch5-sequence-modeling/5.5-rnn-bptt) that the vanilla-RNN backward recurrence
+
+$$
+\delta_t = V^\top \frac{\partial \ell_t}{\partial z_t} + W^\top \mathrm{diag}\!\left(\phi'(a_{t+1})\right)\, \delta_{t+1}
+$$
+
+multiplies $\delta_{t+1}$ by a factor whose spectral norm is bounded by $\sigma_\max(W) \cdot \max_t |\phi'(\cdot)|$. For $\phi = \tanh$, $|\phi'| \le 1$, so unless $\sigma_\max(W) = 1$ *exactly*, the product over many time steps either vanishes or explodes.
+
+The structural fix is: **design the recurrence so the default backward Jacobian is the identity matrix.** If $\partial h_t / \partial h_{t-1} = I$ in the absence of any update, then the product $\partial h_T / \partial h_\tau = I$ and gradients pass through losslessly. The LSTM does exactly this — but only on a designated "memory" path, the **cell state $c_t$**, which is separate from the visible hidden state $h_t$.
+
+---
+
+## 3. The LSTM cell
+
+For a hidden size $d_h$ and an input embedding $x_t \in \mathbb{R}^{d_x}$, the LSTM maintains *two* state vectors: the **cell state** $c_t \in \mathbb{R}^{d_h}$ and the **hidden state** $h_t \in \mathbb{R}^{d_h}$.
+
+Four gates, each a linear-then-sigmoid layer:
+
+$$
+\begin{aligned}
+f_t &= \sigma(W_f h_{t-1} + U_f x_t + b_f) && \text{(forget gate)} \\
+i_t &= \sigma(W_i h_{t-1} + U_i x_t + b_i) && \text{(input gate)} \\
+o_t &= \sigma(W_o h_{t-1} + U_o x_t + b_o) && \text{(output gate)} \\
+\tilde c_t &= \tanh(W_c h_{t-1} + U_c x_t + b_c) && \text{(candidate cell update)}
+\end{aligned}
+$$
+
+The cell state update is the key piece:
+
+$$
+\boxed{\ c_t = f_t \odot c_{t-1} + i_t \odot \tilde c_t, \ }
+$$
+
+where $\odot$ is element-wise multiplication. And the hidden state is a *gated read* of the cell state:
+
+$$
+\boxed{\ h_t = o_t \odot \tanh(c_t). \ }
+$$
+
+Read it: the cell state is updated by *forgetting* a fraction $f_t \in [0, 1]^{d_h}$ of its previous value and *adding* a fraction $i_t \in [0, 1]^{d_h}$ of a new candidate. The hidden state is what the rest of the network *sees* of the cell, gated by $o_t$.
+
+### 3.1 Parameter count
+
+Four gate matrices each of shape $d_h \times (d_h + d_x + 1)$ (combining $W$, $U$, $b$). Total:
+
+$$
+\#\theta_\text{LSTM} = 4 \cdot d_h \cdot (d_h + d_x + 1) = 4 d_h^2 + 4 d_h d_x + 4 d_h.
+$$
+
+An LSTM has roughly $4\times$ more parameters than a vanilla RNN with the same hidden size.
+
+---
+
+## 4. Why gating mitigates vanishing
+
+Differentiate the cell-state recurrence with respect to the previous cell state:
+
+$$
+\frac{\partial c_t}{\partial c_{t-1}} = \mathrm{diag}(f_t).
+$$
+
+(Other terms — from $f_t$, $i_t$, $\tilde c_t$ also depending on $h_{t-1}$, which depends on $c_{t-1}$ — contribute additional smaller terms, but the *dominant* path is just $\mathrm{diag}(f_t)$.) If the forget gate is open ($f_t \approx \mathbf{1}$), then $\partial c_t / \partial c_{t-1} \approx I$ and the cell state passes through the time step *additively*, with the gradient multiplied by approximately 1.
+
+Compare with the vanilla RNN where $\partial h_t / \partial h_{t-1} = W^\top \mathrm{diag}(\phi'(a_t))$ — a full matrix whose norm is hard to control. The LSTM's $\mathrm{diag}(f_t)$ is *diagonal* and *bounded in $[0, 1]$*, and most importantly, the network *learns* to set $f_t$ near 1 wherever long-range memory matters.
+
+Unrolling: the gradient from time $T$ to time $\tau$ along the cell-state path picks up the product
+
+$$
+\prod_{t = \tau + 1}^{T} f_t,
+$$
+
+which is at most 1 per step and is preserved when $f_t \approx 1$. The exponential decay of the vanilla RNN is gone; vanishing happens only when the network *chooses* to forget. The same reasoning explains why exploding is less of an issue too — each per-step Jacobian is bounded by 1 along the dominant path.
+
+<Aside type="note">
+**"Constant error carousel."** Hochreiter & Schmidhuber's 1997 paper called the additive cell-state path the **constant error carousel** (CEC): a path along which the error signal can be carried indefinitely without exponential decay. Modern terminology calls this a *gated residual*, but the conceptual content is the same. Note also that the original 1997 LSTM did *not* include a forget gate — the cell state was simply $c_t = c_{t-1} + i_t \odot \tilde c_t$. The forget gate was added by Gers, Schmidhuber, and Cummins (2000) and quickly became standard.
+</Aside>
+
+---
+
+## 5. The GRU
+
+Cho et al. (2014) proposed a simpler gated cell with only *two* gates and a *single* state (no separate cell):
+
+$$
+\begin{aligned}
+r_t &= \sigma(W_r h_{t-1} + U_r x_t + b_r) && \text{(reset gate)} \\
+z_t &= \sigma(W_z h_{t-1} + U_z x_t + b_z) && \text{(update gate)} \\
+\tilde h_t &= \tanh(W_h (r_t \odot h_{t-1}) + U_h x_t + b_h) && \text{(candidate state)} \\
+h_t &= (1 - z_t) \odot h_{t-1} + z_t \odot \tilde h_t && \text{(state update)}
+\end{aligned}
+$$
+
+The update equation $h_t = (1 - z_t) \odot h_{t-1} + z_t \odot \tilde h_t$ is a **convex combination** of the previous state and a candidate update. Setting $z_t = 0$ (close to 1 in the gate's $1 - z_t$ form, the opposite convention) passes $h_{t-1}$ through unchanged; setting $z_t = 1$ replaces it with the candidate.
+
+This is structurally the same idea as the LSTM's cell-state update — a *gated additive path* through time — but with fewer parameters (the GRU has $3 \cdot d_h \cdot (d_h + d_x + 1)$ vs $4$ for LSTM) and no separate cell state.
+
+Empirical comparisons (Chung et al., 2014; Jozefowicz, Zaremba & Sutskever, 2015) found LSTMs and GRUs roughly equivalent on most sequence tasks; the GRU's lower parameter count is a small efficiency win.
+
+---
+
+## 6. Why we still abandoned them
+
+Gating fixes the asymptotic vanishing problem on the *additive memory path*, but it does not fix the two problems that ultimately retired recurrence ([5.6](/session/ch5-sequence-modeling/5.6-why-abandon-recurrence)):
+
+**(a) Effective range is still finite.** Gated cells substantially extend the practical memory horizon — LSTMs comfortably handle dependencies of 50–100 tokens, sometimes more — but not arbitrarily. The cell state has finite capacity $d_h$, and over very long sequences, older information gets gradually overwritten by newer updates. Sufficient depth and gating can't make the cell state magically infinite-capacity.
+
+**(b) The sequential bottleneck is unchanged.** LSTM and GRU forward passes are *still* sequential in $t$ — the cell state at time $t$ depends on $c_{t-1}$, period. No amount of gating fixes the GPU parallelism problem. This is the structural cost that Transformer pretraining at trillion-token scale could not absorb, and it is the bigger of the two reasons we moved on.
+
+By 2018 the field had largely settled: LSTMs continued in production for smaller sequence tasks (small-vocabulary speech, time-series forecasting) where their inference-time efficiency mattered, but pretraining a language model on a web-scale corpus was Transformer-only.
+
+---
+
+## 7. Where the idea survives
+
+The *implementation* — gated cells with cell states and forget gates — is gone from LLMs. The *idea* — an additive path with a learned gate — is everywhere.
+
+**Highway networks (Srivastava, Greff & Schmidhuber, 2015).** A direct generalisation of the LSTM gating idea to *feed-forward* networks: each layer outputs $(1 - g) \odot \text{input} + g \odot \text{layer}(input)$. This is the immediate predecessor of the residual connection.
+
+**Residual connections (He et al., 2015 — ResNet).** Drop the gate and always pass the input through: $\text{output} = \text{input} + \text{layer}(input)$. The residual stream of a Transformer is exactly this pattern at every block, and it is the reason a 100-layer Transformer trains stably where a 100-layer plain MLP would not (cf. [2.9 / 2.10](/session/ch2-mlps-backprop/2.10-weight-initialization)).
+
+**Gated FFN variants in Transformers (Shazeer, 2020).** Replace the standard FFN $W_2\, \phi(W_1 x)$ with a gated version:
+
+$$
+\text{GLU}(x) = (W_1 x) \odot \sigma(W_2 x), \quad \text{SwiGLU}(x) = (W_1 x) \odot \text{Swish}(W_2 x).
+$$
+
+This is exactly the "multiplicative gate on an information path" idea from LSTMs, now applied inside a Transformer block. SwiGLU is the FFN of choice in LLaMA, Mistral, and most LLMs from 2023 onward.
+
+**Selective state-space models (Mamba, Gu & Dao, 2023).** Modern linear-recurrence architectures revive the recurrence idea with carefully chosen transition matrices and *selective* (input-dependent) gating. The "selective" mechanism is structurally an LSTM forget-gate, designed for parallel computation via the parallel-scan algorithm. We will see this in Chapter 8.
+
+So the LSTM is gone, but its DNA pervades every modern architecture. The cell type was retired; the design principle was promoted.
+
+<Aside type="history">
+The LSTM was published in 1997 and remained the dominant sequence model until 2017 — twenty years as the field standard, longer than any neural architecture before or since. Hochreiter went on to a long career in computational biology; Schmidhuber became famously vocal about the historical credit for deep learning. The forget gate added by Gers, Schmidhuber & Cummins (2000) is what made the model truly useful in practice, and Karpathy's 2015 blog post *The Unreasonable Effectiveness of Recurrent Neural Networks* — which trained character-level LSTMs on Shakespeare and Linux kernel source — was the proximate cause of LSTM going mainstream. The Transformer paper arrived two years later.
+</Aside>
+
+<SelfTest>
+
+**(a)** Write out the LSTM cell update for one time step explicitly: given $h_{t-1}, c_{t-1}, x_t$ and all eight weight/bias matrices, compute $c_t$ and $h_t$.
+
+**(b)** Show that $\partial c_t / \partial c_{t-1} = \mathrm{diag}(f_t)$ (the dominant term). Then write $\partial c_T / \partial c_\tau$ along the dominant path as a product and explain why it does not vanish exponentially when $f_t \approx \mathbf{1}$.
+
+**(c)** Compare the parameter counts of a vanilla RNN, an LSTM, and a GRU with the same hidden size $d_h$ and input size $d_x$. Express each in terms of $d_h$ and $d_x$.
+
+**(d)** The GRU's update $h_t = (1 - z_t) \odot h_{t-1} + z_t \odot \tilde h_t$ is a convex combination. Argue that this guarantees $\|h_t\| \le \max(\|h_{t-1}\|, \|\tilde h_t\|)$ in the element-wise sense. Why does this help stability?
+
+**(e)** Identify the LSTM/GRU "gated residual" pattern in the SwiGLU FFN and in the Transformer residual connection. In each case, what plays the role of "previous state" and what plays the role of "candidate update"?
+
+</SelfTest>

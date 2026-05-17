@@ -1,0 +1,218 @@
+---
+title: "5.4 — N-gram models as a baseline"
+chapter: 5
+order: 4
+estimatedMinutes: 18
+goal: "Build an n-gram language model from scratch, compute it on a toy corpus, and quantify the structural reasons it cannot scale: data sparsity, exponential parameter growth, and a fixed range that throws away any longer dependency."
+prerequisites: ["ch5-sequence-modeling/5.3-language-modeling-objective"]
+---
+
+## 1. Why this session exists
+
+Before we deploy neural language models, we should know what the simplest baseline gives. An **$n$-gram model** parameterises $p(x_t \mid x_{<t})$ by truncating the conditioning context to the last $n - 1$ tokens and using an empirical estimate from a corpus. It has no parameters to *train* in the gradient-descent sense: the "training" is just counting.
+
+Computing one on a toy corpus reveals the three reasons $n$-grams can't be the answer:
+
+1. **Sparsity.** Most $n$-grams never appear, even in massive corpora.
+2. **Parameter explosion.** Storage is $\Theta(V^n)$, useless for $n \ge 3$ at LLM-scale vocabularies.
+3. **Fixed range.** Any dependency longer than $n - 1$ tokens is mathematically inaccessible to the model.
+
+These limits — and how badly they bite — are *exactly* what a neural language model has to overcome.
+
+---
+
+## 2. The Markov assumption
+
+Section 5.3 gave the universal autoregressive factorisation:
+
+$$
+p(x_1, \dots, x_T) = \prod_{t=1}^{T} p(x_t \mid x_{<t}).
+$$
+
+The conditional $p(x_t \mid x_{<t})$ in principle depends on the *entire* prefix $x_1, \dots, x_{t-1}$. The **$n$-gram approximation** truncates this conditioning to the last $n - 1$ tokens:
+
+$$
+\boxed{\ p(x_t \mid x_{<t}) \approx p(x_t \mid x_{t - n + 1}, x_{t - n + 2}, \dots, x_{t - 1}). \ }
+$$
+
+This is the **Markov assumption** of order $n - 1$. Names:
+
+- $n = 1$: **unigram.** $p(x_t)$ — no conditioning at all. Bag of words.
+- $n = 2$: **bigram.** $p(x_t \mid x_{t-1})$ — depends on the immediately preceding token.
+- $n = 3$: **trigram.** $p(x_t \mid x_{t-2}, x_{t-1})$.
+
+The full conditioning is recovered only in the limit $n \to T$, which is not a useful model.
+
+### 2.1 Parameter count
+
+Under the bigram assumption, $p(x_t \mid x_{t-1})$ is a $V \times V$ matrix: one row per possible $x_{t-1}$, each row a distribution over $V$ next-token possibilities. Number of free parameters (after the $\sum_k p(\cdot \mid x_{t-1}) = 1$ constraint per row): $V(V - 1)$.
+
+For an $n$-gram, the conditioning context $(x_{t-n+1}, \dots, x_{t-1})$ takes $V^{n-1}$ values, and each value has a $V$-way distribution. Free parameters: $V^{n-1}(V - 1) \approx V^n$ for $V$ large.
+
+For $V = 50{,}000$, even a trigram has $\sim 10^{14}$ parameters. Practical $n$-grams use much smaller vocabularies (characters, or word-level with $V \approx 10{,}000$).
+
+---
+
+## 3. Maximum-likelihood estimation: counting
+
+For a fixed corpus $\mathcal{C}$, define the **count** of any contiguous $k$-token sequence $(w_1, \dots, w_k)$ as
+
+$$
+c(w_1, \dots, w_k) = \text{number of times } (w_1, \dots, w_k) \text{ appears in } \mathcal{C}.
+$$
+
+The **MLE** for the bigram probability is the ratio:
+
+$$
+\boxed{\ \hat p(x_t = b \mid x_{t-1} = a) = \frac{c(a, b)}{c(a)}. \ }
+$$
+
+(Compare with the multinomial MLE of [0.7 §4](/session/ch0-math-foundations/0.7-cross-entropy-mle): given counts, the maximum-likelihood probability is the count proportion.) For a general $n$-gram:
+
+$$
+\hat p(x_t \mid x_{t-n+1}, \dots, x_{t-1}) = \frac{c(x_{t-n+1}, \dots, x_t)}{c(x_{t-n+1}, \dots, x_{t-1})}.
+$$
+
+This is the entire "training" procedure. Count the $n$-grams in the corpus, divide by the $(n-1)$-gram counts in the conditioning context, store the table.
+
+### 3.1 Special sentence-boundary tokens
+
+To make the model handle the *start* and *end* of a sentence, prepend $n - 1$ copies of a special `<bos>` token and append one `<eos>`. Bigram example: the sentence "*the cat sat*" becomes the token sequence
+
+$$
+\langle\text{bos}\rangle,\ \text{the},\ \text{cat},\ \text{sat},\ \langle\text{eos}\rangle,
+$$
+
+generating four bigrams: $(\text{bos}, \text{the})$, $(\text{the}, \text{cat})$, $(\text{cat}, \text{sat})$, $(\text{sat}, \text{eos})$. The $\langle\text{eos}\rangle$ token makes the model assign a probability to "the sentence ends here" — necessary so that the joint $p(x_1, \dots, x_T)$ is a normalised distribution over sequences of *any* length.
+
+---
+
+## 4. A worked bigram
+
+Take the toy corpus (sentence boundaries already inserted):
+
+$$
+\mathcal{C} = \{\ \langle\text{bos}\rangle,\ \text{I},\ \text{am},\ \text{Sam},\ \langle\text{eos}\rangle,\ \langle\text{bos}\rangle,\ \text{Sam},\ \text{I},\ \text{am},\ \langle\text{eos}\rangle,\ \langle\text{bos}\rangle,\ \text{I},\ \text{do},\ \text{not},\ \text{like},\ \text{green},\ \text{eggs},\ \text{and},\ \text{ham},\ \langle\text{eos}\rangle\ \}.
+$$
+
+(Three sentences, 18 tokens excluding boundaries.) Count unigrams and bigrams:
+
+$$
+\begin{aligned}
+c(\langle\text{bos}\rangle) &= 3, & c(\text{I}) &= 3, & c(\text{am}) &= 2, & c(\text{Sam}) &= 2, \\
+c(\text{do}) &= 1, & c(\text{not}) &= 1, & c(\text{like}) &= 1, & c(\text{green}) &= 1, \\
+c(\text{eggs}) &= 1, & c(\text{and}) &= 1, & c(\text{ham}) &= 1, & c(\langle\text{eos}\rangle) &= 3.
+\end{aligned}
+$$
+
+Some bigrams of interest:
+
+$$
+\begin{aligned}
+c(\langle\text{bos}\rangle, \text{I}) &= 2, & c(\langle\text{bos}\rangle, \text{Sam}) &= 1, \\
+c(\text{I}, \text{am}) &= 2, & c(\text{I}, \text{do}) &= 1, \\
+c(\text{am}, \text{Sam}) &= 1, & c(\text{am}, \langle\text{eos}\rangle) &= 1, \\
+c(\text{Sam}, \text{I}) &= 1, & c(\text{Sam}, \langle\text{eos}\rangle) &= 1.
+\end{aligned}
+$$
+
+Bigram MLEs:
+
+$$
+\hat p(\text{I} \mid \langle\text{bos}\rangle) = \frac{2}{3}, \qquad \hat p(\text{Sam} \mid \langle\text{bos}\rangle) = \frac{1}{3}.
+$$
+
+$$
+\hat p(\text{am} \mid \text{I}) = \frac{2}{3}, \qquad \hat p(\text{do} \mid \text{I}) = \frac{1}{3}.
+$$
+
+$$
+\hat p(\text{Sam} \mid \text{am}) = \frac{1}{2}, \qquad \hat p(\langle\text{eos}\rangle \mid \text{am}) = \frac{1}{2}.
+$$
+
+### 4.1 Probability of a new sentence
+
+Use the model to score the candidate sentence "*Sam I am*":
+
+$$
+\hat p(\langle\text{bos}\rangle,\ \text{Sam},\ \text{I},\ \text{am},\ \langle\text{eos}\rangle) = \hat p(\text{Sam} \mid \langle\text{bos}\rangle) \cdot \hat p(\text{I} \mid \text{Sam}) \cdot \hat p(\text{am} \mid \text{I}) \cdot \hat p(\langle\text{eos}\rangle \mid \text{am}).
+$$
+
+All four bigrams appear in the corpus, with counts $1, 1, 2, 1$ respectively and denominator counts $3, 2, 3, 2$:
+
+$$
+= \frac{1}{3} \cdot \frac{1}{2} \cdot \frac{2}{3} \cdot \frac{1}{2} = \frac{1}{18}.
+$$
+
+### 4.2 Probability of an unseen bigram
+
+Now try "*I like ham*":
+
+$$
+\hat p(\text{like} \mid \text{I}) = \frac{c(\text{I}, \text{like})}{c(\text{I})} = \frac{0}{3} = 0.
+$$
+
+The model assigns probability **zero** to any sentence containing the bigram $(\text{I}, \text{like})$ — even though both "I" and "like" appear in the corpus, just never adjacent. The joint probability of the sentence is exactly zero, and the cross-entropy loss is $+\infty$. This is the **sparsity problem**.
+
+---
+
+## 5. Why MLE breaks: sparsity and smoothing
+
+Most $n$-grams of length $n \ge 2$ never appear in any finite corpus. **Heaps' law** estimates the number of distinct $n$-grams in a corpus of size $N$ at $\propto N^\beta$ with $\beta \in (0, 1)$: vocabulary growth is sub-linear, but $V^n$ grows exponentially in $n$. By $n = 3$ the fraction of valid trigrams in even a billion-token corpus is tiny.
+
+The classical fix is **smoothing** — redistribute a small amount of probability mass to unseen events. The simplest is **Laplace add-one**:
+
+$$
+\hat p_\text{add-1}(b \mid a) = \frac{c(a, b) + 1}{c(a) + V}.
+$$
+
+This guarantees every bigram gets positive probability, at the cost of a heavy bias toward unseen events. More sophisticated methods — **Kneser–Ney smoothing**, **interpolation**, **backoff** — improved the state of the art through the 1990s and 2000s. None of them solve the underlying structural problem: probability mass for unseen $n$-grams is allocated by *prior* (uniform, or based on lower-order counts), not by *generalisation from similar contexts*.
+
+A neural language model, by contrast, generalises through the embedding geometry of [5.2](/session/ch5-sequence-modeling/5.2-embeddings-word2vec): tokens that play similar grammatical or semantic roles get similar embeddings, and the network *interpolates* its predictions across the embedding space. An unseen bigram still receives a meaningful probability because the embeddings of its constituents place them near seen patterns. That single capability — generalisation via continuous representations rather than discrete counting — is the qualitative jump from $n$-grams to neural LMs.
+
+<Aside type="history">
+Bengio et al. (2003), *A Neural Probabilistic Language Model*, was the first paper to articulate this argument and to demonstrate that a feed-forward network with learned word embeddings could outperform a smoothed trigram on perplexity. The architecture (a fixed-window feedforward LM with 30M parameters by 2000s standards) is now a historical footnote, but its central observation — that distributed representations dissolve the curse of dimensionality of $n$-gram models — is the foundation of everything that came after.
+</Aside>
+
+---
+
+## 6. Structural limits of $n$-grams
+
+Beyond sparsity, three structural facts box $n$-grams in:
+
+**(a) Fixed range.** The Markov assumption *guarantees* that any dependency longer than $n - 1$ tokens is invisible. The model cannot resolve
+
+> *The trophy did not fit in the suitcase because $\rule{1cm}{0.4pt}$ was too big.*
+
+The disambiguator (whether $\rule{1cm}{0.4pt}$ is *"it"* referring to the trophy or the suitcase) depends on the verb *"big"* nine tokens later and the noun *"trophy"* eight tokens earlier. No $n$-gram with $n \le 8$ can see the relevant context. Increasing $n$ to fix this triggers parameter explosion.
+
+**(b) No compositionality.** $(\text{the},\ \text{red},\ \text{car})$ and $(\text{a},\ \text{red},\ \text{car})$ are *unrelated* trigrams to the model. There is no notion that the determiner and the noun phrase have separate roles. Neural models share representations across context via the embedding matrix; $n$-grams cannot.
+
+**(c) No syntactic generalisation.** If the corpus contains $(\text{the},\ \text{cat},\ \text{sat})$ but not $(\text{the},\ \text{dog},\ \text{sat})$, the model has no reason to assign similar probabilities. Embeddings give the second a "similar" distribution because $\text{dog}$ and $\text{cat}$ are nearby in embedding space.
+
+These three deficits motivate the move to neural language models, which Bengio et al. (2003) pioneered and which became the universal architecture by the late 2010s.
+
+---
+
+## 7. What we keep going forward
+
+Two durable lessons from the $n$-gram era:
+
+1. The **left-to-right autoregressive factorisation** is correct and reusable — neural LMs inherit it directly.
+2. **Perplexity as a comparison metric** comes from this era. Smoothed-trigram perplexities on news text were $\sim 200$; modern LLMs achieve $\sim 10$.
+
+The $n$-gram baseline gives us a number to beat. Every architecture from Chapter 5.5 onward is, mathematically, a parameterisation of $p(x_t \mid x_{<t})$ designed to fix the limitations above — *parameter sharing* across contexts (embeddings), *unbounded conditioning* (RNNs in §5.5, attention in §6), and *generalisation* via continuous representations.
+
+<SelfTest>
+
+**(a)** Compute the bigram MLE table $\hat p(b \mid a)$ for *all* $a, b$ pairs that have $c(a) > 0$ in the toy corpus of §4. Verify that each row sums to 1.
+
+**(b)** Compute the probability of the sentence "*I am Sam*" under the bigram MLE, and compare it to the probability of "*Sam I am*" computed in §4.1. Which sentence does the model prefer? Why?
+
+**(c)** Suppose you train a bigram on a corpus of $N$ tokens with vocabulary size $V$. Approximately how many of the $V^2$ possible bigrams will have non-zero count when $V = 10^4$ and $N = 10^6$? (Use Heaps' law or an order-of-magnitude estimate.)
+
+**(d)** Apply Laplace add-one smoothing to the bigram $(\text{I}, \text{like})$ in the toy corpus with $V = 12$ (counting all the distinct tokens in §4 including boundaries). What probability does the smoothed model assign? What probability does an unsmoothed bigram assign?
+
+**(e)** A trigram language model on a vocabulary of size $V = 50{,}000$ would have how many parameters in principle? How many of those are realistically estimable from a 1 trillion-token corpus, if Heaps' law says the count of distinct trigrams is $\sim (10^{12})^{0.6} \approx 4 \cdot 10^7$? What does this imply about the usefulness of an MLE trigram at LLM scale?
+
+</SelfTest>

@@ -19,6 +19,10 @@
     "title": "Chapter 4 — CNN bridge",
     "order": 4
   },
+  "ch5-sequence-modeling": {
+    "title": "Chapter 5 — Sequence modeling and embeddings",
+    "order": 5
+  },
   "references-bibliography": {
     "title": "References & bibliography",
     "order": 99
