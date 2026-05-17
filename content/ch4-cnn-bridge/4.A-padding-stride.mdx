@@ -1,0 +1,90 @@
+---
+title: "4.A — Padding, stride, and output-size formulas (appendix)"
+chapter: 4
+order: 100
+estimatedMinutes: 12
+goal: "Derive the general output-size formula H_out = floor((H_in + 2P − K)/S) + 1, the three standard padding modes (valid, same, full), and the dilation generalisation."
+prerequisites: ["ch4-cnn-bridge/4.1-discrete-convolution"]
+---
+
+## 1. Why this appendix exists
+
+The forward formula in 4.1 §4 assumed no padding and stride 1. Real conv layers expose two extra knobs — **padding $P$** and **stride $S$** — that control output size and how aggressively the layer downsamples. The formulas are simple but produce off-by-one bugs when you misremember which way to round.
+
+---
+
+## 2. Stride
+
+A convolution with stride $S$ shifts the kernel by $S$ positions between consecutive outputs instead of by 1. The forward formula becomes
+
+$$
+z[i, j] = \sum_{k, l} w[k, l]\, x[S i + k,\, S j + l].
+$$
+
+For $S = 1$ this reduces to the standard cross-correlation. For $S = 2$ the output is roughly half the input size in each spatial dimension — i.e. it downsamples by a factor of 2.
+
+---
+
+## 3. Padding
+
+**Padding** wraps the input with $P$ extra rows and columns of zeros on each side before convolving. This serves two purposes: it lets the kernel "fit" at boundary pixels (otherwise the output is strictly smaller), and it gives precise control over output size.
+
+Three padding choices appear constantly:
+
+- **Valid padding** ($P = 0$). No padding. Output is strictly smaller than input.
+- **Same padding** ($P$ chosen so output size $=$ input size). For stride 1, this means $P = (K - 1)/2$, which is only an integer when $K$ is odd — one of the two reasons odd kernel sizes ($3, 5, 7$) are standard.
+- **Full padding** ($P = K - 1$). The kernel touches every input position at least once and the output is *larger* than the input. Rarely used in CNN forward passes; appears naturally in the *backward* pass of conv ([Appendix 4.C](/session/ch4-cnn-bridge/4.C-backprop-through-conv)).
+
+---
+
+## 4. The general output-size formula
+
+With padding $P$ on each side and stride $S$, the output spatial size is:
+
+$$
+\boxed{\ H_\text{out} = \left\lfloor \frac{H_\text{in} + 2P - K}{S} \right\rfloor + 1. \ }
+$$
+
+**Derivation.** After padding, the effective input length is $H_\text{in} + 2P$. The kernel of size $K$ has $H_\text{in} + 2P - K + 1$ valid starting positions on a unit-stride grid. With stride $S$, we take every $S$-th starting position, giving $\lfloor (H_\text{in} + 2P - K) / S \rfloor + 1$ outputs (the $+1$ counts the position at offset 0).
+
+The same formula applies to width. For 1D convolutions, $H_\text{in}$ is the sequence length.
+
+### 4.1 Sanity checks
+
+- **Valid, stride 1.** $P = 0, S = 1$: $H_\text{out} = H_\text{in} - K + 1$. Matches 4.1 §4.
+- **Same, stride 1, odd $K$.** $P = (K - 1)/2, S = 1$: $H_\text{out} = (H_\text{in} + (K - 1) - K)/1 + 1 = H_\text{in}$. ✓
+- **Stride 2, $K = 3, P = 1$.** $H_\text{out} = \lfloor (H_\text{in} + 2 - 3)/2 \rfloor + 1 = \lfloor (H_\text{in} - 1)/2 \rfloor + 1$. For $H_\text{in} = 32$: $\lfloor 31/2 \rfloor + 1 = 15 + 1 = 16$. Halved, as expected.
+
+<Aside type="warning">
+**Two definitions of "same".** Some frameworks (TensorFlow's `padding='SAME'`) interpret "same" as *output size $= \lceil H_\text{in}/S \rceil$* regardless of stride, padding asymmetrically if needed. PyTorch's `padding='same'` (PyTorch 1.9+) does the same but only for stride 1; with stride $> 1$ you must compute $P$ yourself. When porting code between frameworks, always recompute output sizes from the formula above — don't trust the string `"same"` alone.
+</Aside>
+
+---
+
+## 5. Dilation
+
+A kernel with **dilation $d$** inserts $d - 1$ implicit zeros between adjacent kernel weights. The kernel covers a span of $(K - 1) d + 1$ input positions while using only $K$ learnable weights.
+
+The output-size formula generalises to:
+
+$$
+\boxed{\ H_\text{out} = \left\lfloor \frac{H_\text{in} + 2P - d (K - 1) - 1}{S} \right\rfloor + 1. \ }
+$$
+
+Set $d = 1$ to recover §4. Dilated stacks (WaveNet, dilated TCNs) use this to grow receptive field exponentially with depth without any extra parameters or strides — see 4.3 §2 and the Aside in 4.2.
+
+---
+
+## 6. Practical defaults
+
+For Transformer-era engineers who pass through a conv layer occasionally (vision encoders, audio frontends), the default is $K = 3$, stride 1, same padding, dilation 1. Downsampling uses stride 2 with same padding (or, in vision backbones, a separate pooling layer). Almost every "off the shelf" CNN block can be reconstructed from this with at most two extra knobs.
+
+<SelfTest>
+
+**(a)** Compute $H_\text{out}$ for $H_\text{in} = 64, K = 5, S = 1, P = 2$. Then for $H_\text{in} = 64, K = 5, S = 2, P = 2$.
+
+**(b)** Show that the choice $P = (K - 1)/2$ gives "same" padding for any *odd* $K$ when $S = 1$. What goes wrong for even $K$?
+
+**(c)** A dilated 1D conv has $K = 3, d = 4, S = 1, P = 4$. What is the output size for $H_\text{in} = 16$? What span of inputs does each output depend on?
+
+</SelfTest>

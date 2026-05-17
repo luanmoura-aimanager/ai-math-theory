@@ -1,0 +1,196 @@
+---
+title: "4.1 — Discrete convolution and cross-correlation"
+chapter: 4
+order: 1
+estimatedMinutes: 22
+goal: "Define discrete convolution and cross-correlation, see why deep learning's 'convolution' is mathematically cross-correlation, and write down the multi-channel formula used in every CNN library."
+prerequisites: ["ch2-mlps-backprop/2.4-forward-pass-batched"]
+---
+
+## 1. Why this session exists
+
+A fully-connected layer between two vectors of size $n$ has $n^2$ weights. For an image of $224 \times 224 = 50{,}176$ pixels, that's $\sim 2.5 \times 10^9$ parameters in a *single* layer — before we have anything resembling a network. Beyond cost, the dense layer also throws away a structural fact that the data screams at us: in images, in audio, in spectra, *patterns of interest are local and translation-stable*. The same edge detector should work whether the edge sits at coordinate $(50, 50)$ or $(150, 150)$.
+
+Convolution is the linear operator that hard-codes this prior. It replaces a dense matrix-vector product with a small, *shared* kernel that slides across the input. Three sessions are enough to extract what we need from CNNs before moving on to attention:
+
+- **4.1 (this session)** — the operation itself.
+- **[4.2](/session/ch4-cnn-bridge/4.2-equivariance-receptive-fields)** — why convolution is the *right* operator for images, and how far it can see.
+- **[4.3](/session/ch4-cnn-bridge/4.3-bridge-to-sequences)** — where convolution runs out of road, and why language pushes us to attention.
+
+Engineering details — padding, stride, output sizes, pooling, backprop — live in the optional appendices [4.A](/session/ch4-cnn-bridge/4.A-padding-stride), [4.B](/session/ch4-cnn-bridge/4.B-pooling), and [4.C](/session/ch4-cnn-bridge/4.C-backprop-through-conv).
+
+---
+
+## 2. The continuous convolution (for reference)
+
+Convolution is an operation between two real-valued functions on the same domain. In one dimension:
+
+$$
+(f * g)(t) = \int_{-\infty}^{\infty} f(\tau)\, g(t - \tau)\, d\tau.
+$$
+
+The product $f(\tau)\, g(t - \tau)$ is the "sliding overlap": at time $t$, multiply $f$ by a *flipped, shifted* copy of $g$, then integrate. The flip is the signature of true convolution.
+
+Convolution shows up everywhere — Green's functions, probability of sums of independent variables, the response of a linear time-invariant system to an input — for a single reason: it is **the** linear operator that commutes with translations on the underlying domain. We make this rigorous in 4.2.
+
+---
+
+## 3. Discrete convolution
+
+For sequences $f[n], g[n]$ indexed over $\mathbb{Z}$, the discrete analogue of the integral is a sum:
+
+$$
+\boxed{\ (f * g)[n] = \sum_{m = -\infty}^{\infty} f[m]\, g[n - m]. \ }
+$$
+
+The kernel $g$ is reflected ($m \mapsto -m$), shifted by $n$, and inner-producted with $f$. In practice $g$ has compact support — say $g[m] = 0$ for $|m| > K$ — so the sum is finite.
+
+### 3.1 Cross-correlation: the same operation without the flip
+
+Cross-correlation is convolution *without* the kernel flip:
+
+$$
+\boxed{\ (f \star g)[n] = \sum_{m = -\infty}^{\infty} f[m]\, g[n + m]. \ }
+$$
+
+Read the two formulas side by side: the only difference is the sign of $m$ inside $g$. Relabel $\tilde g[m] = g[-m]$; then cross-correlation with $\tilde g$ equals convolution with $g$. The two operations are inter-convertible by flipping the kernel.
+
+<Aside type="note">
+**Deep learning's "convolution" is cross-correlation.** Every framework (PyTorch's `Conv2d`, TensorFlow's `tf.nn.conv2d`, JAX's `lax.conv_general_dilated`) implements cross-correlation but calls it convolution. Why is this fine? Because the kernel is *learned*. Whatever shape the network needs, gradient descent finds it, and a flipped version of the optimal kernel is just as good a parameter vector as the unflipped one. The mathematical distinction matters when you read signal-processing papers; in ML, the names are used interchangeably.
+</Aside>
+
+For the rest of this chapter, "convolution" means cross-correlation (the ML convention). The flip *will* re-appear when we derive backprop in [Appendix 4.C](/session/ch4-cnn-bridge/4.C-backprop-through-conv), where it shows up naturally in the gradient with respect to the input.
+
+---
+
+## 4. Two-dimensional convolution
+
+For an input image $x \in \mathbb{R}^{H \times W}$ and a kernel $w \in \mathbb{R}^{K_h \times K_w}$, the 2D cross-correlation is:
+
+$$
+\boxed{\ z[i, j] = \sum_{k = 0}^{K_h - 1} \sum_{l = 0}^{K_w - 1} w[k, l]\, x[i + k,\, j + l]. \ }
+$$
+
+Read it as: at output position $(i, j)$, take the $K_h \times K_w$ patch of $x$ whose top-left corner is at $(i, j)$, multiply it element-wise by $w$, and sum. Slide $(i, j)$ over the image to build $z$.
+
+Output size with no padding and unit stride:
+
+$$
+H_\text{out} = H - K_h + 1, \qquad W_\text{out} = W - K_w + 1.
+$$
+
+The general formula, with padding $P$ and stride $S$, is derived in [Appendix 4.A](/session/ch4-cnn-bridge/4.A-padding-stride).
+
+### 4.1 A worked 1D example
+
+Take a 1D input and a 1D kernel:
+
+$$
+x = (1,\ 2,\ 3,\ 4,\ 5), \qquad w = (1,\ 0,\ -1).
+$$
+
+The output is $z[i] = \sum_{k = 0}^{2} w[k]\, x[i + k]$, for $i = 0, 1, 2$:
+
+$$
+\begin{aligned}
+z[0] &= 1 \cdot 1 + 0 \cdot 2 + (-1) \cdot 3 = -2, \\
+z[1] &= 1 \cdot 2 + 0 \cdot 3 + (-1) \cdot 4 = -2, \\
+z[2] &= 1 \cdot 3 + 0 \cdot 4 + (-1) \cdot 5 = -2.
+\end{aligned}
+$$
+
+So $z = (-2, -2, -2)$. The kernel $(1, 0, -1)$ measures a finite-difference between positions two apart — a discrete first-derivative detector. On a linear ramp like $(1, 2, 3, 4, 5)$ the derivative is constant, so $z$ is constant. That kernel is one of the classic edge detectors; in a real CNN it would be *learned*.
+
+---
+
+## 5. Multi-channel, multi-filter convolution
+
+Real CNNs operate on tensors with a channel axis. An RGB image is $x \in \mathbb{R}^{C_\text{in} \times H \times W}$ with $C_\text{in} = 3$. The convolutional layer maps it to $z \in \mathbb{R}^{C_\text{out} \times H_\text{out} \times W_\text{out}}$ using $C_\text{out}$ separate filters, each with its own bias.
+
+The kernel tensor is $W \in \mathbb{R}^{C_\text{out} \times C_\text{in} \times K_h \times K_w}$ and the bias vector is $b \in \mathbb{R}^{C_\text{out}}$. The forward pass is:
+
+$$
+\boxed{\ z^{c'}[i, j] = b^{c'} + \sum_{c = 1}^{C_\text{in}} \sum_{k = 0}^{K_h - 1} \sum_{l = 0}^{K_w - 1} W^{c', c}[k, l]\, x^{c}[i + k,\, j + l]. \ }
+$$
+
+In words: filter $c'$ has its own bias $b^{c'}$ and its own $C_\text{in}$-channel kernel $W^{c', \cdot}$. To produce output channel $c'$ at position $(i, j)$, sum the 2D cross-correlations of $W^{c', c}$ with $x^{c}$ across all input channels $c$, then add the bias.
+
+There is *no* cross-talk between output channels in the formula — each $c'$ is computed independently. Channels mix only through the input dimension $c$. Stacking many layers lets the network mix output channels of one layer with input channels of the next, but a single conv layer is, per output channel, just a $C_\text{in}$-channel filter sliding over the image.
+
+### 5.1 Parameter count
+
+A conv layer has
+
+$$
+\boxed{\ \#\text{params} = C_\text{out} \cdot C_\text{in} \cdot K_h \cdot K_w \;+\; C_\text{out}. \ }
+$$
+
+Compare this with what a fully-connected layer mapping $C_\text{in} \cdot H \cdot W \to C_\text{out} \cdot H \cdot W$ would cost: $(C_\text{in} H W)(C_\text{out} H W) = C_\text{in} C_\text{out} H^2 W^2$ weights. For a $224 \times 224 \times 3$ image and a layer with $C_\text{out} = 64$ and $K = 3$ the conv layer has
+
+$$
+64 \cdot 3 \cdot 9 + 64 = 1{,}792 \text{ parameters},
+$$
+
+while the dense alternative would have
+
+$$
+3 \cdot 64 \cdot 224^2 \cdot 224^2 \approx 4.8 \times 10^{11} \text{ parameters}.
+$$
+
+A factor of $\sim 10^8$. *That* is the bargain convolution offers. The cost is the structural assumption — locality plus translation-stability — that we dissect in 4.2.
+
+---
+
+## 6. One-dimensional convolution
+
+For sequence data — audio waveforms, spectra, character streams — the convolution collapses to one spatial axis:
+
+$$
+\boxed{\ z^{c'}[i] = b^{c'} + \sum_{c = 1}^{C_\text{in}} \sum_{k = 0}^{K - 1} W^{c', c}[k]\, x^{c}[i + k]. \ }
+$$
+
+The kernel tensor is now $W \in \mathbb{R}^{C_\text{out} \times C_\text{in} \times K}$. Everything else is identical to the 2D case.
+
+1D convs are the natural choice for any signal where samples have a single ordered index. In language models we *won't* use them as our main backbone — Chapter 6 shows why — but they're the operation underneath WaveNet, ByteNet, and many early sequence models, and they're the cleanest setting in which to develop receptive-field intuition (4.2).
+
+---
+
+## 7. Matrix view: `im2col`
+
+Although the forward formula is a multi-index sum, you can rewrite it as a single matrix multiplication. Reshape each $K_h \times K_w$ patch of $x$ as a row, stacked into a matrix $X \in \mathbb{R}^{(H_\text{out} W_\text{out}) \times (C_\text{in} K_h K_w)}$ — this rearrangement is called **`im2col`**. Reshape the kernel into a matrix $W \in \mathbb{R}^{(C_\text{in} K_h K_w) \times C_\text{out}}$. Then
+
+$$
+Z = X W + \mathbf{1}\, b^\top,
+$$
+
+with $Z \in \mathbb{R}^{(H_\text{out} W_\text{out}) \times C_\text{out}}$, and a final reshape recovers $z^{c'}[i, j]$.
+
+This is more than a trick: the `im2col` view explains why CNN forward passes are dominated by GEMM (general matrix multiply) calls on GPUs, and why the backward pass (in [Appendix 4.C](/session/ch4-cnn-bridge/4.C-backprop-through-conv)) also reduces to two matrix multiplies. It also reveals that *every conv layer is a special case of a dense linear map* — one whose matrix has shared, banded entries, with most positions tied to zero by the kernel's support.
+
+<Aside type="note">
+**`im2col` is a memory/time trade-off.** Materialising the patch matrix duplicates each input pixel $K_h K_w$ times, so memory usage grows. Modern implementations (cuDNN, oneDNN) often use *implicit* `im2col` — they compute the matrix multiply without ever building the patch matrix explicitly — to keep both fast and memory-efficient.
+</Aside>
+
+---
+
+## 8. What we keep going forward
+
+For Chapter 6 and beyond, the load-bearing facts from this session are:
+
+1. The forward formula $z^{c'}[i, j] = b^{c'} + \sum_{c, k, l} W^{c', c}[k, l]\, x^{c}[i + k, j + l]$.
+2. The parameter count $C_\text{out} C_\text{in} K_h K_w + C_\text{out}$ — independent of $H, W$.
+3. The fact that convolution is a single linear map, so it can be written either as a multi-index sum or as a matrix product (`im2col`).
+
+Equivariance and receptive fields — the *reason* convolution works at all — are in 4.2.
+
+<SelfTest>
+
+**(a)** Write out the 1D cross-correlation of $x = (2, -1, 3, 0, 1)$ with the kernel $w = (1, 1)$ (no padding, stride 1). What are the entries of $z$?
+
+**(b)** A conv layer takes an input of shape $(C_\text{in}, H, W) = (3, 32, 32)$ and uses $C_\text{out} = 16$ filters of size $5 \times 5$ with no padding and stride 1. What is the output shape? How many learnable parameters does the layer have?
+
+**(c)** Show explicitly that ML "convolution" (cross-correlation with kernel $w$) and signal-processing convolution (with kernel $w$) produce identical outputs when the kernel $w$ is symmetric, i.e. $w[k, l] = w[-k, -l]$.
+
+**(d)** Suppose you replace a conv layer with kernel $K \times K$ by a dense layer that uses the `im2col` matrix $X$ but lets *every* entry of $W$ be free (no kernel sharing across positions). How many parameters does this dense layer have, in terms of $C_\text{in}, C_\text{out}, K, H_\text{out}, W_\text{out}$? Why is it no longer translation-equivariant? (Sketch the reason; 4.2 makes it rigorous.)
+
+</SelfTest>

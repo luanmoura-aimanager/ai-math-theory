@@ -1,0 +1,168 @@
+---
+title: "4.2 — Equivariance, weight sharing, receptive fields"
+chapter: 4
+order: 2
+estimatedMinutes: 22
+goal: "State translation equivariance precisely, prove convolution is the canonical translation-equivariant linear map, and quantify the receptive-field cost of seeing far through a stack of convs."
+prerequisites: ["ch4-cnn-bridge/4.1-discrete-convolution"]
+---
+
+## 1. Why this session exists
+
+Convolution isn't an arbitrary trick. It is, in a precise sense, the *unique* family of linear maps that respects translations of the input. Stating this carefully — and computing how far a stack of convolutions can see — is what makes the leap to attention in Chapter 6 motivated rather than mysterious. Two convolutions can see eleven pixels. Sixteen can see 65. To mix every pair of tokens in a 1024-long sequence, vanilla convolution forces depth that buys nothing else.
+
+We do three things here:
+
+1. Define translation equivariance.
+2. Prove that 1D and 2D convolutions are translation-equivariant, and identify *weight sharing* as the reason.
+3. Compute receptive fields exactly and see the "depth tax" that motivates attention.
+
+---
+
+## 2. Equivariance vs invariance
+
+Let $T_h$ denote the translation operator that shifts an input by $h$ positions:
+
+$$
+(T_h x)[n] = x[n - h].
+$$
+
+(For images, $T_{(h_y, h_x)} x[i, j] = x[i - h_y,\, j - h_x]$.)
+
+A map $f$ is **translation-equivariant** if shifting the input shifts the output by the same amount:
+
+$$
+\boxed{\ f(T_h x) = T_h\, f(x) \quad \text{for all } x \text{ and all shifts } h. \ }
+$$
+
+It is **translation-invariant** if shifting the input doesn't change the output at all:
+
+$$
+f(T_h x) = f(x).
+$$
+
+The slogan: *equivariance preserves the "where"; invariance throws it away.* A classifier that says "cat" no matter where the cat is in the image is invariant. A feature map that says "cat-snout-here" and moves the "here" along with the cat is equivariant. CNNs build up equivariance layer by layer, then a final global pooling step turns it into invariance.
+
+<Aside type="note">
+**Invariance is usually a composition.** Pure invariance is hard to learn directly; it is much easier to learn an equivariant feature map and then aggregate it with an invariant readout (e.g. max-pool or sum over space). This is the standard CNN recipe: a stack of equivariant convs, ending in a global pool.
+</Aside>
+
+---
+
+## 3. Convolution is translation-equivariant
+
+We prove this for 1D; the 2D case is identical with two indices.
+
+**Claim.** Let $C_w(x)[i] = \sum_k w[k]\, x[i + k]$ be 1D cross-correlation with kernel $w$. Then $C_w(T_h x) = T_h\, C_w(x)$.
+
+**Proof.** Compute the left side directly:
+
+$$
+C_w(T_h x)[i] = \sum_k w[k]\, (T_h x)[i + k] = \sum_k w[k]\, x[(i + k) - h] = \sum_k w[k]\, x[(i - h) + k].
+$$
+
+The last expression is $C_w(x)[i - h]$, which is $T_h\, C_w(x)[i]$. So
+
+$$
+C_w(T_h x)[i] = T_h\, C_w(x)[i] \quad \text{for every } i,
+$$
+
+and equivariance is established. $\blacksquare$
+
+The proof took one line because the convolution formula has *exactly* the structure needed: the kernel only sees *relative offsets* between input and output positions, never the absolute position $i$.
+
+### 3.1 Why a generic linear map fails
+
+A generic linear map $L : \mathbb{R}^N \to \mathbb{R}^N$ has a matrix $L[i, j]$ with no constraints. Equivariance would require $L[i, j] = L[i - h, j - h]$ for all $i, j, h$ — i.e. the matrix is constant along diagonals. A matrix constant along diagonals is exactly a **Toeplitz matrix** (1D) or a *block-Toeplitz with Toeplitz blocks* matrix (2D). And Toeplitz matrices acting on finite sequences are exactly discrete convolutions.
+
+In other words: **the space of linear translation-equivariant maps on $\mathbb{Z}^d$ is precisely the space of convolutions.** Convolution isn't *a* good translation-equivariant operator; it is *the* one.
+
+---
+
+## 4. Weight sharing as the source
+
+The proof in §3 says it cleanly: convolution is equivariant because $w[k]$ depends only on the *offset* $k$, not on the output position $i$. The same numeric kernel is used at every output location.
+
+This is called **weight sharing**, and it is the structural reason convolutions have $O(C_\text{in} C_\text{out} K_h K_w)$ parameters independent of $H \times W$. Each entry of $W$ is a parameter *re-used* at $H_\text{out} \cdot W_\text{out}$ different output positions. The dense layer of 4.1 §5.1 had one parameter *per* output position; the conv layer ties them all together.
+
+Weight sharing also enforces translation equivariance during *learning*: gradient updates to $w[k]$ are sums over every output location, so the same kernel improves uniformly across the image. There is no way for the optimiser to "specialise" weights for the top-left corner versus the bottom-right.
+
+<Aside type="history">
+The biological inspiration came from Hubel & Wiesel (1962), whose recordings of cat visual cortex revealed neurons with localised receptive fields that responded to oriented edges and translated their preferred stimulus along the cortex. Fukushima's Neocognitron (1980) built the first multi-layer model with hand-wired weight sharing. LeCun et al. (1989, 1998) tied weight sharing to gradient-based learning and made it a layer of a trained neural network — that is when CNNs as we know them began.
+</Aside>
+
+---
+
+## 5. Receptive fields
+
+A neuron in a deep network responds to a *region* of the input — its **receptive field**. Larger receptive fields are needed to detect larger patterns and to mix information from far apart. The question: given a stack of convolutions, how big is the receptive field at depth $L$?
+
+### 5.1 Definition and recursion
+
+Index layers $1, 2, \dots, L$. Layer $\ell$ uses a kernel of size $K_\ell$ and stride $s_\ell$. Define $r_\ell$ as the receptive field of a single neuron at depth $\ell$, measured in *input* pixels.
+
+At the input, $r_0 = 1$ (the identity).
+
+After one conv with kernel $K_1$ (stride 1), a neuron at depth 1 sees a window of $K_1$ inputs: $r_1 = K_1$.
+
+After a second conv with kernel $K_2$ (stride 1), each output sees $K_2$ neurons at depth 1, each of which already covered $K_1$ inputs — but adjacent depth-1 neurons share all but one input. Counting carefully, the depth-2 receptive field is $r_2 = K_1 + (K_2 - 1)$. The recursion in general is
+
+$$
+\boxed{\ r_\ell = r_{\ell - 1} + (K_\ell - 1) \prod_{j = 1}^{\ell - 1} s_j. \ }
+$$
+
+The product of upstream strides is the "jump" of layer $\ell$: at depth $\ell$, neighbouring neurons are $\prod_{j < \ell} s_j$ input pixels apart, so adding a kernel of size $K_\ell$ adds $(K_\ell - 1)$ such jumps to the receptive field.
+
+### 5.2 Special cases
+
+**All stride 1, all kernels $K$.** The product of upstream strides is always 1, and
+
+$$
+r_L = 1 + L (K - 1).
+$$
+
+For $K = 3$: $r_L = 1 + 2L$ — the receptive field grows *linearly* in depth. To reach $r = 1024$ you need $L = 512$ layers. To reach $r = 64$ you need $L = 32$.
+
+**Stride 2 at every layer, all kernels $K$.** $\prod_{j < \ell} s_j = 2^{\ell - 1}$, and
+
+$$
+r_L = 1 + (K - 1)(2^L - 1).
+$$
+
+For $K = 3$: $r_L = 1 + 2(2^L - 1) = 2^{L + 1} - 1$ — *exponential* growth in depth. To reach $r = 1024$ you need only $L \approx 9$ layers.
+
+The lesson is sharp: **without striding or dilation, a stack of small kernels needs depth proportional to the desired receptive field.**
+
+### 5.3 Effective vs theoretical receptive field
+
+The recursion above gives the *theoretical* receptive field — the set of input pixels that *could* influence a given output. But not all of them influence it equally. Luo et al. (2016) showed that, even at full theoretical depth, the *effective* receptive field — the region whose pixels meaningfully contribute to the output — is dramatically smaller and approximately Gaussian, with a standard deviation that grows like $\sqrt{L}$ instead of $L$ for stride-1 stacks. So the picture is even less favourable for CNNs than the count above suggests: doubling depth doesn't double the part of the input the network actually *uses*.
+
+---
+
+## 6. The depth tax that motivates attention
+
+Pull the threads together. To make every output position aware of every input position in a sequence of length $T$ using stride-1 convolutions of kernel $K$:
+
+$$
+r_L \ge T \quad \iff \quad L \ge \frac{T - 1}{K - 1}.
+$$
+
+For $T = 1024$ and $K = 3$: $L \ge 512$. For $K = 7$: $L \ge 171$. Even with stride or dilation tricks (WaveNet's dilated stack scales receptive field as $2^L$, which is much better), the *architectural* fact remains: a conv layer mixes only inputs in a small fixed neighbourhood. Global mixing requires depth, parameters, and careful engineering of strides or dilations.
+
+This is the gap attention closes. A single attention layer mixes every position with every position in one matrix product — $O(T^2)$ in compute but $O(1)$ in depth. Chapter 6 builds it from scratch. Session 4.3 collects the remaining structural reasons (positional flexibility, content-addressing) before we get there.
+
+<Aside type="note">
+**Dilated convolutions** are a workaround. A kernel of size $K$ with dilation $d$ inserts $d - 1$ zeros between weights, giving an effective kernel that spans $(K - 1) d + 1$ inputs with no extra parameters. Stacking dilations $1, 2, 4, \dots, 2^{L - 1}$ (WaveNet) makes the receptive field grow as $2^L$. The cost: dilated convs still cannot interact with arbitrary positions in *one* layer, only with positions on the dilation grid, and the inductive bias of "local-stable mixing" is preserved (fine for audio, less ideal for language).
+</Aside>
+
+<SelfTest>
+
+**(a)** Verify the recursion $r_\ell = r_{\ell - 1} + (K_\ell - 1) \prod_{j < \ell} s_j$ by hand for two layers with $K_1 = 3, s_1 = 2, K_2 = 3, s_2 = 1$. Sketch which input pixels feed a single depth-2 neuron.
+
+**(b)** A stride-1 stack of $L$ conv layers each with kernel 3 has receptive field $r_L = 1 + 2L$. How many layers are needed to give every output a receptive field $\ge 4096$? Compare with a dilated stack $d_\ell = 2^{\ell - 1}$.
+
+**(c)** Prove that the 2D map $z[i, j] = \sum_{k, l} w[k, l]\, x[i + k, j + l]$ is *separately* equivariant under horizontal and vertical translations. Is it equivariant under rotations? Why or why not?
+
+**(d)** Suppose you replace each kernel weight $w[k, l]$ by a *position-dependent* weight $w_{ij}[k, l]$ (one kernel per output location, no sharing). Show that this layer is no longer translation-equivariant by exhibiting a specific $w_{ij}$ and a specific $h$ where $f(T_h x) \neq T_h f(x)$.
+
+</SelfTest>

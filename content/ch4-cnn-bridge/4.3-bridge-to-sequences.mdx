@@ -1,0 +1,109 @@
+---
+title: "4.3 — Bridge to sequences: why CNNs are limited for language"
+chapter: 4
+order: 3
+estimatedMinutes: 18
+goal: "Articulate the three structural reasons convolutional architectures are a poor fit for language modelling, and motivate the move to attention without yet defining it."
+prerequisites: ["ch4-cnn-bridge/4.2-equivariance-receptive-fields"]
+---
+
+## 1. Why this session exists
+
+Chapter 4 has been a quick consolidation. We have one operation (convolution), one symmetry argument (translation equivariance), and one cost (depth tax for large receptive fields). That kit is *brilliant* for natural images and waveforms. It is *not* what language needs. Before Chapter 5 introduces tokenisation and embeddings — and Chapter 6 builds attention — we will spell out exactly why.
+
+There are three structural mismatches, in increasing order of seriousness. Once they're on the table, the design of attention will look like the obvious response.
+
+---
+
+## 2. Limitation 1 — Long-range mixing requires deep stacks
+
+Section 4.2 showed: with stride-1 convs of kernel $K = 3$, the receptive field grows as $r_L = 1 + 2L$. A context window of $T = 2048$ tokens needs $L \ge 1024$ such layers for the *last* token to be able to influence the *first*. With dilation $d_\ell = 2^{\ell - 1}$ (WaveNet-style) you can do it in $\log_2 T$ layers, but you pay for it in two ways:
+
+- The receptive field is now structured on a *dilation grid*: positions $t$ and $t + d$ interact only if their relative offset is reachable through the dilation pattern. Arbitrary pairs $(t_1, t_2)$ are not freely available.
+- Information that has to travel from position $1$ to position $T$ goes through $\log_2 T$ non-linearities, each of which *loses* information. By the time it arrives, the receptive field is "wide" in name only — see the effective-receptive-field result of Luo et al. (2016), recalled at the end of 4.2.
+
+In a Transformer, by contrast, every layer is a single matrix multiply that mixes all $T$ positions in *one* shot. Depth is then used for *abstraction*, not for *reach*.
+
+---
+
+## 3. Limitation 2 — Equivariance is the wrong symmetry for language
+
+Translation equivariance is a feature in vision: a cat at $(50, 50)$ should fire the same detector as a cat at $(150, 150)$. The semantics of an image are largely translation-stable.
+
+Language is the opposite. The same word in different sentence positions plays *different roles*:
+
+> *"The dog bit the man"* vs *"The man bit the dog"*
+
+These two sentences have identical token multisets. A purely translation-equivariant model — one whose response to a shifted input is just a shifted response — cannot, by construction, prefer one over the other. To distinguish them, the network must *break* translation symmetry: it must care about *which* position a word is in, not just *whether* a word is in some neighbourhood.
+
+In CNNs the symmetry can only be broken after global pooling (which is invariant, not symmetry-breaking) or by ad-hoc positional features added to the input. Attention takes the opposite stance: it bakes position-awareness into the input via *positional encodings* (Chapter 6.5) and lets the attention weights mix tokens *however they want*, with no built-in translation symmetry to fight against.
+
+<Aside type="note">
+**1D convs are still translation-equivariant on sequences.** Sliding a kernel along a token sequence treats position 5 and position 500 symmetrically: the same kernel, the same parameters, the same response. That is exactly the structure we *don't* want for language, where the verb usually lives mid-sentence and the subject before it.
+</Aside>
+
+---
+
+## 4. Limitation 3 — Convolution mixes by position, attention mixes by content
+
+This is the deepest of the three. A conv layer combines a token with *its neighbours by index*. Whether the neighbours are semantically relevant or not, they get the same weight. In:
+
+> *"The bank by the river was muddy."*
+
+the meaning of *bank* depends on *river*, two tokens away. In:
+
+> *"The bank on Main Street was closed."*
+
+the meaning of *bank* depends on *Street*, three tokens away. The disambiguating word lives at a *different* index in each sentence. A conv kernel of fixed width and fixed weights cannot route information conditionally on what's there; it always combines positions $[i, i + 1, \dots, i + K - 1]$ with the same coefficients.
+
+What language needs is a *content-addressed* mixing rule: at every position, choose which other positions to attend to *based on what's at them*. That is the one-line definition of attention — a learned, query-dependent weighted sum.
+
+A way to see the contrast quantitatively: a conv layer's output is
+
+$$
+z[i] = \sum_{k} w[k]\, x[i + k] \qquad \text{(weights $w[k]$ fixed at training time)},
+$$
+
+while an attention layer's output will turn out to be
+
+$$
+z[i] = \sum_{j} \alpha_{ij}(x)\, x[j] \qquad \text{(weights $\alpha_{ij}$ computed from $x$ itself)}.
+$$
+
+The conv kernel is a *parameter*. The attention weights are an *activation*. That single change — making the mixing coefficients depend on the input — is the algorithmic shift behind every modern LLM.
+
+---
+
+## 5. What language needs, in three lines
+
+The diagnosis above implies three desiderata for the operator that replaces convolution:
+
+1. **Global receptive field in one layer.** No depth tax, so depth can buy abstraction rather than reach.
+2. **No built-in translation symmetry.** Position is allowed to matter, and must be encoded explicitly when it does.
+3. **Content-addressed mixing.** The weights with which tokens combine should be functions of the tokens themselves.
+
+Attention satisfies all three. Chapter 6 derives it from scratch and shows that the entire Transformer architecture is essentially attention plus an MLP, repeated.
+
+---
+
+## 6. Where CNNs still earn their keep
+
+It would be misleading to leave the impression that CNNs are obsolete. They are alive and well in three places that matter for modern LLM systems:
+
+- **Vision encoders for multimodal models.** Many vision-language models still use convolutional backbones — or hybrid conv-attention encoders — as the image-side tower. Convolutions are extremely strong on natural images, where translation equivariance *is* the right prior.
+- **Audio and biosignals.** Spectrograms, raw audio, ECG, Raman spectra: 1D and 2D convolutions remain the workhorse for any signal whose local statistics are stationary and whose patterns are translation-stable.
+- **Efficient sequence-model variants.** Several "linear-time" alternatives to attention — gated convolutions, state-space models with convolutional kernels (Mamba's discretised form), Hyena — are essentially clever 1D convolutions with learned, content-dependent kernels. They live downstream in Chapter 8.
+
+The result of Chapter 4 isn't *"CNNs are bad."* It is the more precise statement: **for language modelling, the convolutional inductive bias is the wrong shape, and attention is the right shape.** What we keep from Chapter 4 are (a) the abstract notion of equivariance and weight sharing, (b) the fact that compute and parameter counts can be controlled by clever structure, and (c) the explicit cost of a "local-only" operator. Those threads recur in every architecture we meet from now on.
+
+<SelfTest>
+
+**(a)** A CNN classifier with a final global max-pool is translation-*invariant* (its output is unchanged by any input shift). Argue from the definitions in 4.2 that the *intermediate* feature maps are translation-equivariant, and that only the final pool breaks the symmetry. Where exactly does invariance enter?
+
+**(b)** Give two distinct concrete English sentences whose token *multisets* are identical but whose *meanings* differ, and explain in one sentence why a purely translation-equivariant model cannot distinguish them.
+
+**(c)** Sketch why the "content-addressed" formulation $z[i] = \sum_j \alpha_{ij}(x)\, x[j]$ cannot be written as a convolution $z[i] = \sum_k w[k]\, x[i + k]$ for any fixed $w$. (Hint: what is $\alpha_{ij}$ allowed to depend on?)
+
+**(d)** WaveNet stacks $L$ dilated 1D convs with dilations $1, 2, 4, \dots, 2^{L - 1}$. Compute the resulting receptive field. For $T = 1024$, what is the smallest $L$ that lets the model mix every position with every other? Compare with the smallest $L$ for a single attention layer.
+
+</SelfTest>

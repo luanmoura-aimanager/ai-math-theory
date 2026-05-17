@@ -15,6 +15,10 @@
     "title": "Chapter 3 — Optimization and regularization",
     "order": 3
   },
+  "ch4-cnn-bridge": {
+    "title": "Chapter 4 — CNN bridge",
+    "order": 4
+  },
   "references-bibliography": {
     "title": "References & bibliography",
     "order": 99

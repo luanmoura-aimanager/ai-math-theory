@@ -1,0 +1,140 @@
+---
+title: "4.C — Backpropagation through convolution (appendix)"
+chapter: 4
+order: 102
+estimatedMinutes: 18
+goal: "Derive the backward pass of a convolutional layer and recognise both ∂L/∂W and ∂L/∂x as themselves convolutions."
+prerequisites: ["ch4-cnn-bridge/4.1-discrete-convolution", "ch2-mlps-backprop/2.7-backprop-weight-gradients"]
+---
+
+## 1. Why this appendix exists
+
+Backprop through convolution is a famously satisfying calculation: the gradient of a convolution with respect to its weights is *itself* a convolution, and the gradient with respect to its input is also a convolution (with the kernel flipped). This is the structural reason CNNs can be trained efficiently — every step in both directions uses the same primitive that is already heavily optimised for the forward pass.
+
+We derive the result for a 1D, single-channel, stride-1, no-padding convolution, then state the multi-channel generalisation.
+
+---
+
+## 2. Setup
+
+Forward pass:
+
+$$
+z[i] = \sum_{k = 0}^{K - 1} w[k]\, x[i + k], \qquad i = 0, 1, \dots, N - K.
+$$
+
+Suppose the next layers produce a scalar loss $L$, and assume we already know the upstream gradient $\partial L / \partial z[i]$ for every output index $i$. The two quantities we need are:
+
+- $\partial L / \partial w[k]$ — to update the parameters.
+- $\partial L / \partial x[a]$ — to keep backprop going into earlier layers.
+
+Both come straight from the chain rule of [2.7](/session/ch2-mlps-backprop/2.7-backprop-weight-gradients) applied to the forward formula.
+
+---
+
+## 3. Gradient with respect to the weights
+
+For each kernel entry $w[k]$:
+
+$$
+\frac{\partial L}{\partial w[k]} = \sum_{i} \frac{\partial L}{\partial z[i]} \cdot \frac{\partial z[i]}{\partial w[k]}.
+$$
+
+From the forward formula, $\partial z[i] / \partial w[k] = x[i + k]$. So
+
+$$
+\boxed{\ \frac{\partial L}{\partial w[k]} = \sum_{i = 0}^{N - K} \frac{\partial L}{\partial z[i]}\, x[i + k]. \ }
+$$
+
+This is a **cross-correlation** between the *input* $x$ and the *upstream gradient* $\partial L / \partial z$. In the ML sense (cross-correlation), it has *exactly* the same shape as a forward conv: the upstream gradient plays the role of the kernel, and we slide it over the input.
+
+**Why this is elegant.** Forward and weight-gradient passes are both implemented by the same primitive. On a GPU, both reduce to a GEMM via `im2col` (4.1 §7), and the highly tuned matrix-multiply kernels in cuDNN serve double duty.
+
+---
+
+## 4. Gradient with respect to the input
+
+The upstream signal at output position $i$ flows into input positions $\{i, i + 1, \dots, i + K - 1\}$. Reversing the direction: input position $a$ feeds into output positions $\{a - K + 1, a - K + 2, \dots, a\}$, restricted to valid indices.
+
+Chain rule:
+
+$$
+\frac{\partial L}{\partial x[a]} = \sum_{i} \frac{\partial L}{\partial z[i]} \cdot \frac{\partial z[i]}{\partial x[a]}.
+$$
+
+From the forward formula, $\partial z[i] / \partial x[a]$ is non-zero only when $a = i + k$ for some $k \in \{0, \dots, K - 1\}$, in which case it equals $w[k] = w[a - i]$. So
+
+$$
+\frac{\partial L}{\partial x[a]} = \sum_{i \,:\, 0 \le a - i \le K - 1} \frac{\partial L}{\partial z[i]}\, w[a - i] = \sum_{m = 0}^{K - 1} \frac{\partial L}{\partial z[a - m]}\, w[m].
+$$
+
+Substitute $m = K - 1 - k$ and define the **flipped kernel** $\tilde w[k] = w[K - 1 - k]$:
+
+$$
+\boxed{\ \frac{\partial L}{\partial x[a]} = \sum_{k = 0}^{K - 1} \tilde w[k]\, \frac{\partial L}{\partial z[a - K + 1 + k]}. \ }
+$$
+
+This is a **true convolution** (with the flip!) of the upstream gradient with the kernel, restricted to valid indices. Equivalently, it is the cross-correlation of the upstream gradient with the *flipped* kernel — i.e. the forward conv operation applied to $\partial L / \partial z$ with kernel $\tilde w$, padded with $K - 1$ zeros on each side ("full" padding from [Appendix 4.A](/session/ch4-cnn-bridge/4.A-padding-stride) §3).
+
+So the input gradient is *also* a convolution. The kernel flip — irrelevant on the forward pass when the kernel is learned — re-appears here, naturally, as the signature of true convolution.
+
+<Aside type="note">
+**Grad of conv is conv.** The two boxed formulas in §3 and §4 are the punchline. Together they imply that a CNN's *entire* backward pass — both the weight gradient and the input gradient — is implemented by the same convolution primitive used on the forward pass. There is no separate "transposed" operator to maintain. Frameworks expose this as `conv2d_input`, `conv2d_weight`, and `conv2d` all calling into the same underlying GEMM kernels.
+</Aside>
+
+---
+
+## 5. The multi-channel, multi-filter generalisation
+
+For the multi-channel forward (4.1 §5)
+
+$$
+z^{c'}[i, j] = \sum_c \sum_{k, l} W^{c', c}[k, l]\, x^{c}[i + k,\, j + l],
+$$
+
+the two backward formulas become:
+
+$$
+\boxed{\ \frac{\partial L}{\partial W^{c', c}[k, l]} = \sum_{i, j} \frac{\partial L}{\partial z^{c'}[i, j]}\, x^{c}[i + k,\, j + l]. \ }
+$$
+
+A cross-correlation of $x^c$ with $\partial L / \partial z^{c'}$, summed over the spatial axes. The kernel-gradient tensor has the same shape as $W$.
+
+$$
+\boxed{\ \frac{\partial L}{\partial x^{c}[a, b]} = \sum_{c'} \sum_{k, l} \tilde W^{c', c}[k, l]\, \frac{\partial L}{\partial z^{c'}[a - K_h + 1 + k,\, b - K_w + 1 + l]}, \ }
+$$
+
+with $\tilde W^{c', c}[k, l] = W^{c', c}[K_h - 1 - k,\, K_w - 1 - l]$. Read it as: for each input channel $c$, sum over all output channels $c'$ a "full" cross-correlation between the flipped kernel $\tilde W^{c', c}$ and the upstream gradient $\partial L / \partial z^{c'}$.
+
+The bias gradient is the per-channel sum:
+
+$$
+\frac{\partial L}{\partial b^{c'}} = \sum_{i, j} \frac{\partial L}{\partial z^{c'}[i, j]}.
+$$
+
+These three formulas are everything a conv-layer backward implementation needs.
+
+---
+
+## 6. Stride and dilation
+
+Stride and dilation in the forward pass complicate the backward formula only by changing which $(i, j)$ outputs depend on which $(a, b)$ inputs. The general rule:
+
+- **The weight-gradient backward becomes a *dilated* cross-correlation**, where the dilation factor equals the forward *stride*.
+- **The input-gradient backward becomes a *strided* (or "transposed") cross-correlation**, where the stride equals the forward stride and zeros are inserted between upstream-gradient entries.
+
+This is why a "transposed convolution" (or "deconvolution") layer is *exactly* the backward of a strided forward conv with no kernel flip — frameworks expose it as a primitive in its own right because it is also useful in generative models for upsampling.
+
+We will not need stride/dilation backward formulas for the main path in Chapters 5–12, so we stop here.
+
+<SelfTest>
+
+**(a)** Reproduce the 1D weight-gradient formula by writing out $\partial z[i] / \partial w[k]$ for the forward formula $z[i] = \sum_k w[k]\, x[i + k]$ and summing.
+
+**(b)** For a 1D conv with $N = 5, K = 3$, upstream gradient $\partial L / \partial z = (g_0, g_1, g_2)$, and kernel $w = (w_0, w_1, w_2)$, compute $\partial L / \partial x[a]$ for every $a \in \{0, 1, 2, 3, 4\}$ explicitly. Identify which entries correspond to the "full padding" of $\partial L / \partial z$.
+
+**(c)** Verify by direct computation that "the gradient of conv with respect to input is a convolution with the flipped kernel" by writing the linear map $x \mapsto z$ as a Toeplitz matrix $T$ and observing that $T^\top$ is also a Toeplitz matrix, whose generating sequence is the flipped kernel.
+
+**(d)** Show that the bias gradient $\partial L / \partial b^{c'} = \sum_{i, j} \partial L / \partial z^{c'}[i, j]$ follows from $z^{c'}[i, j] = b^{c'} + (\cdots)$ by direct differentiation. Why doesn't the bias have a "convolutional structure"?
+
+</SelfTest>

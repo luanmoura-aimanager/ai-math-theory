@@ -119,7 +119,35 @@ prerequisites: []
 
 ---
 
-## Chapters 4–12
+## Chapter 4 — CNN bridge
+
+**Textbooks.**
+
+- **Goodfellow, I., Bengio, Y., & Courville, A.** (2016). *Deep Learning,* §9 (Convolutional Networks). MIT Press. — Convolution, pooling, and CNN architectures, used throughout Cap 4. [deeplearningbook.org](https://www.deeplearningbook.org/)
+- **Prince, S. J. D.** (2023). *Understanding Deep Learning,* §10 (Convolutional Networks). MIT Press. — Receptive fields and equivariance treatment (4.2). [udlbook.github.io](https://udlbook.github.io/udlbook/)
+
+**Primary papers — CNNs.**
+
+- **Hubel, D. H., & Wiesel, T. N.** (1962). "Receptive fields, binocular interaction and functional architecture in the cat's visual cortex". *Journal of Physiology*, 160, 106–154. — Biological origin of local receptive fields (4.2).
+- **Fukushima, K.** (1980). "Neocognitron: A self-organizing neural network model for a mechanism of pattern recognition unaffected by shift in position". *Biological Cybernetics*, 36, 193–202. — First hierarchical model with weight sharing (4.2).
+- **LeCun, Y., Boser, B., Denker, J. S., et al.** (1989). "Backpropagation applied to handwritten zip code recognition". *Neural Computation*, 1(4), 541–551. — First end-to-end trained CNN (4.1).
+- **LeCun, Y., Bottou, L., Bengio, Y., & Haffner, P.** (1998). "Gradient-based learning applied to document recognition". *Proceedings of the IEEE*, 86(11), 2278–2324. — LeNet-5 and the modern conv-pool-conv-pool template (4.1, Appendix 4.B).
+- **Krizhevsky, A., Sutskever, I., & Hinton, G. E.** (2012). "ImageNet classification with deep convolutional neural networks". *NeurIPS*. — AlexNet; also cited in Cap 2 §2.3.
+- **Luo, W., Li, Y., Urtasun, R., & Zemel, R.** (2016). "Understanding the effective receptive field in deep convolutional neural networks". *NeurIPS*. [arXiv:1701.04128](https://arxiv.org/abs/1701.04128) — Effective vs theoretical receptive field; Gaussian shape (4.2 §5.3).
+- **He, K., Zhang, X., Ren, S., & Sun, J.** (2016). "Deep residual learning for image recognition". *CVPR*. [arXiv:1512.03385](https://arxiv.org/abs/1512.03385) — ResNet; deep stacks of small kernels (referenced in 4.2 §5).
+
+**Primary papers — convolutional sequence models.**
+
+- **van den Oord, A., Dieleman, S., Zen, H., et al.** (2016). "WaveNet: A generative model for raw audio". [arXiv:1609.03499](https://arxiv.org/abs/1609.03499) — Dilated 1D convolutions for sequences (4.2 Aside, 4.3 §2).
+- **Bai, S., Kolter, J. Z., & Koltun, V.** (2018). "An empirical evaluation of generic convolutional and recurrent networks for sequence modeling". [arXiv:1803.01271](https://arxiv.org/abs/1803.01271) — Temporal convolutional networks; competitive with RNNs but limited at long range (4.3 §2).
+
+**Implementation references.**
+
+- **Dumoulin, V., & Visin, F.** (2016). "A guide to convolution arithmetic for deep learning". [arXiv:1603.07285](https://arxiv.org/abs/1603.07285) — Definitive reference for padding, stride, dilation, and transposed convolutions (Appendices 4.A, 4.C).
+
+---
+
+## Chapters 5–12
 
 *To be populated as those chapters are written. The convention is to list, for each chapter, the textbooks used, primary papers cited, lecture series referenced, and any online resources that the chapter draws from.*
 

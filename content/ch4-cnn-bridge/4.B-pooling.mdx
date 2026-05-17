@@ -1,0 +1,103 @@
+---
+title: "4.B — Pooling: max and average (appendix)"
+chapter: 4
+order: 101
+estimatedMinutes: 10
+goal: "State max-pool and average-pool forward and backward passes, explain how pooling produces local translation invariance and downsamples activations."
+prerequisites: ["ch4-cnn-bridge/4.1-discrete-convolution"]
+---
+
+## 1. Why this appendix exists
+
+Pooling is the second pillar of a classical CNN — convolution provides equivariant feature extraction, pooling provides local *invariance* and downsampling. Pooling layers have no learnable parameters, but they shape the receptive-field calculation and they have a slightly subtle backward pass that is worth writing once.
+
+---
+
+## 2. The pooling forward pass
+
+Pooling slides a window of size $P_h \times P_w$ over the spatial dimensions of the input — without crossing channels — and outputs a single number per window.
+
+**Max-pool:**
+
+$$
+\boxed{\ z^{c}[i, j] = \max_{0 \le k < P_h,\, 0 \le l < P_w} x^{c}[S i + k,\, S j + l]. \ }
+$$
+
+**Average-pool:**
+
+$$
+\boxed{\ z^{c}[i, j] = \frac{1}{P_h P_w} \sum_{k = 0}^{P_h - 1} \sum_{l = 0}^{P_w - 1} x^{c}[S i + k,\, S j + l]. \ }
+$$
+
+Both operate independently per channel — there is no learned mixing between channels in a pooling layer. The stride $S$ is typically equal to the window size so that pooling windows don't overlap (the "standard" $2 \times 2$ max-pool with stride 2).
+
+Output size follows the same formula as in [Appendix 4.A](/session/ch4-cnn-bridge/4.A-padding-stride):
+
+$$
+H_\text{out} = \left\lfloor \frac{H_\text{in} + 2P - P_h}{S} \right\rfloor + 1,
+$$
+
+with $P = 0$ for "valid" pooling, the usual choice.
+
+---
+
+## 3. Local translation invariance
+
+Pooling provides *local* translation invariance — the output is unchanged by small shifts of the input *within* a pool window — at the cost of throwing away spatial resolution.
+
+To see this: if you shift the input by less than the pool size, the *set* of values inside each window is (usually) unchanged. Max-pool depends only on the set, so its output is unchanged. Average-pool changes slightly because the averaged values are weighted equally, but only by what enters and leaves the window at the boundary. The shift the layer can absorb is bounded by $P_h$ or $P_w$.
+
+A stack of pooling layers compounds: $L$ pool layers of size 2 with stride 2 are invariant to shifts up to $\sim 2^L$ pixels. This is exactly the behaviour required of an image classifier, where small object translations should not change the class label.
+
+<Aside type="note">
+**Global pooling** is the limit case: take a single window covering the whole spatial extent. This converts an equivariant feature map into an invariant feature vector and is the standard last spatial operation in classification CNNs (ResNet, EfficientNet). It also closes the link with 4.3 §6: equivariance is built up, then "cashed in" as invariance with one global pool.
+</Aside>
+
+---
+
+## 4. The backward pass
+
+Both pooling layers are non-linear maps with **no learnable parameters**, but they still need a backward pass to propagate gradients to the input.
+
+### 4.1 Max-pool backward
+
+Max is sub-differentiable, but at any input where the maximiser is unique, the gradient routes the upstream signal entirely to that single position:
+
+$$
+\frac{\partial L}{\partial x^{c}[a, b]} = \begin{cases}
+\dfrac{\partial L}{\partial z^{c}[i, j]} & \text{if } (a, b) = \arg\max \text{ of window } (i, j), \\
+0 & \text{otherwise.}
+\end{cases}
+$$
+
+In code: cache the argmax during the forward pass and use it as a routing table on the backward.
+
+If the maximiser is not unique, *any* selection works (the layer is non-differentiable on a measure-zero set; we already lived with this for ReLU in [0.9](/session/ch0-math-foundations/0.9-ae-differentiability-relu)). Frameworks pick one deterministically and move on.
+
+### 4.2 Average-pool backward
+
+Average-pool is linear, so its backward is just the linearisation:
+
+$$
+\frac{\partial L}{\partial x^{c}[S i + k,\, S j + l]} = \frac{1}{P_h P_w}\, \frac{\partial L}{\partial z^{c}[i, j]},
+$$
+
+for every $(k, l)$ in the pool window of $(i, j)$ (and zero outside any window if windows are non-overlapping).
+
+Average-pool's gradient is *spread* uniformly over the pool window; max-pool's gradient is *concentrated* on the maximiser. This is the structural difference between the two layers and is why max-pool is occasionally said to "harden" features while average-pool "softens" them.
+
+---
+
+## 5. Modern practice
+
+In LLM-era architectures, pooling has largely fallen out of favour. Vision Transformers replace pooling with patch tokenisation plus attention. ResNet-style CNNs still use one or two pool or strided-conv layers near the input. In NLP, pooling never had much currency to begin with — the only common operation is "pool over the sequence dimension" to summarise a variable-length sequence into a single vector, which is what attention's `[CLS]` token or final-token readout does instead.
+
+<SelfTest>
+
+**(a)** A $4 \times 4$ feature map is passed through a $2 \times 2$ max-pool with stride 2 and no padding. What is the output size? Sketch the four windows.
+
+**(b)** Compare the gradient flowing into a max-pool input position versus an average-pool input position. Why might max-pool make optimisation slightly noisier in early training?
+
+**(c)** Show that average-pool over a window of size $P \times P$ followed by upsampling by $P$ (nearest neighbour) is a linear map. Write its Jacobian for the 1D case $P = 2, H = 4$.
+
+</SelfTest>
