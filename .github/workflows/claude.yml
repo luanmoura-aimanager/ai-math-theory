@@ -1,0 +1,25 @@
+name: Claude Issue Responder
+
+on:
+  issues:
+    types: [opened]
+  issue_comment:
+    types: [created]
+
+jobs:
+  respond:
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+    steps:
+      - uses: anthropics/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          # Scope Claude's context to this study-site repo
+          custom_instructions: |
+            This is "Do perceptron aos LLMs" — a math-first deep-learning
+            study site built with Next.js 16, Tailwind v4, and MDX+KaTeX.
+            Content lives in content/; platform code in src/.
+            Be concise and technical. The author is a physicist / ML MSc.
