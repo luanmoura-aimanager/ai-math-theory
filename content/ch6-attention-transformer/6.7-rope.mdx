@@ -1,0 +1,219 @@
+---
+title: "6.7 — Rotary Position Embedding (RoPE)"
+chapter: 6
+order: 7
+estimatedMinutes: 28
+goal: "Derive RoPE from the requirement that the q·k dot product depend only on the relative position n − m. Build the operation in the 2D case, lift to general d via block-diagonal rotations, and identify the choice of frequencies θᵢ = 10000^{−2i/d}."
+prerequisites: ["ch6-attention-transformer/6.6-why-positional-info"]
+---
+
+## 1. Why this session exists
+
+[6.6](/session/ch6-attention-transformer/6.6-why-positional-info) ended with the claim: rotate $Q$ and $K$ in 2D planes by angles proportional to position, and the dot product $q_m^\top k_n$ becomes a function of $n - m$ alone. This session makes that claim precise.
+
+The construction has three layers:
+
+1. **2D core.** A single 2D rotation $R(\theta)$ has the property $R(\alpha)^\top R(\beta) = R(\beta - \alpha)$, which is the entire mechanism RoPE uses.
+2. **High-dimensional lift.** Split $\mathbb{R}^d$ (with $d$ even) into $d/2$ pairs, each rotated independently at its own frequency.
+3. **Frequency schedule.** Pick the per-pair frequencies $\theta_i = 10000^{-2i/d}$ so that the network has access to a wide spectrum of "positional wavelengths" — short ones for local order, long ones for global position.
+
+RoPE is the dominant positional encoding in modern LLMs (LLaMA, Mistral, Qwen, Gemini, and most production LLMs from 2023 onward). The derivation is short and the result has a clean geometric interpretation. Both are below.
+
+---
+
+## 2. The 2D rotation identity
+
+The 2D rotation matrix by angle $\theta$ is
+
+$$
+R(\theta) = \begin{pmatrix} \cos\theta & -\sin\theta \\ \sin\theta & \phantom{-}\cos\theta \end{pmatrix}.
+$$
+
+It is **orthogonal**: $R(\theta)^\top R(\theta) = I$. And it has the **composition rule** $R(\alpha) R(\beta) = R(\alpha + \beta)$ — rotations form a one-parameter group. Combining these:
+
+$$
+\boxed{\ R(\alpha)^\top R(\beta) = R(-\alpha) R(\beta) = R(\beta - \alpha). \ }
+$$
+
+This is the entire identity RoPE uses. The rest is bookkeeping.
+
+### 2.1 Applying to attention
+
+Let $q, k \in \mathbb{R}^2$ be a single query and key (we'll lift to higher dimension in §3). Define the **position-rotated** vectors at positions $m$ and $n$:
+
+$$
+\tilde q_m = R(m\theta)\, q, \qquad \tilde k_n = R(n\theta)\, k,
+$$
+
+with $\theta$ a fixed "base frequency" (we will pick it in §4). Compute the dot product:
+
+$$
+\tilde q_m^\top \tilde k_n = (R(m\theta) q)^\top (R(n\theta) k) = q^\top R(m\theta)^\top R(n\theta) k = q^\top R((n - m)\theta) k.
+$$
+
+The dependence on $m$ and $n$ has collapsed into dependence on $(n - m)$ alone. **The dot product of the rotated query and key depends only on their *relative* position.** This is exactly the property [6.6 §4.3](/session/ch6-attention-transformer/6.6-why-positional-info) asked for.
+
+There are no learnable parameters in this construction. The rotations are deterministic functions of $m$ and $n$.
+
+---
+
+## 3. Lifting to general $d$
+
+A single 2D plane is too narrow for a useful attention head; the standard head dimension is $d_h = 64$ or $128$ (6.4). Lift to general $d$ (even) by **splitting the head dimension into $d / 2$ pairs of coordinates** and rotating each pair independently with its own frequency.
+
+Let $q = (q^{(0)}, q^{(1)}, \dots, q^{(d-1)}) \in \mathbb{R}^d$, and group coordinates as
+
+$$
+q = \big(\, (q^{(0)}, q^{(1)}),\ (q^{(2)}, q^{(3)}),\ \dots,\ (q^{(d-2)}, q^{(d-1)})\,\big),
+$$
+
+with the $i$-th pair living in the plane spanned by coordinates $(2i, 2i + 1)$ for $i = 0, 1, \dots, d/2 - 1$. Pick $d/2$ frequencies $\theta_0, \theta_1, \dots, \theta_{d/2 - 1}$.
+
+Define the **block-diagonal rotation** at position $m$:
+
+$$
+\boxed{\ R_m = \text{block-diag}\!\Big(R(m \theta_0),\ R(m \theta_1),\ \dots,\ R(m \theta_{d/2 - 1})\Big) \in \mathbb{R}^{d \times d}. \ }
+$$
+
+Each $2 \times 2$ block rotates its pair of coordinates by $m \theta_i$. The full matrix is orthogonal and has determinant 1.
+
+The rotated query and key at positions $m$ and $n$ are
+
+$$
+\tilde q_m = R_m\, q, \qquad \tilde k_n = R_n\, k.
+$$
+
+The dot product expands as a sum over pairs:
+
+$$
+\tilde q_m^\top \tilde k_n = \sum_{i = 0}^{d/2 - 1} \big( q^{(2i, 2i+1)} \big)^\top R\!\big((n - m)\theta_i\big)\, k^{(2i, 2i+1)},
+$$
+
+where $q^{(2i, 2i+1)}$ denotes the 2D restriction of $q$ to coordinates $(2i, 2i+1)$. Each pair contributes a term that depends only on $n - m$, scaled by the pair's own frequency $\theta_i$.
+
+The full dot product is therefore a sum of $d/2$ "relative-position responses" at different frequencies. This is the key structural property of RoPE: it doesn't encode position as one number per token; it encodes it as a *spectrum* of $d/2$ independent rotations, each contributing to a different range of relative offsets.
+
+---
+
+## 4. The frequency schedule $\theta_i = 10000^{-2i/d}$
+
+The construction so far works for any choice of $\theta_i$. The choice in the RoPE paper (Su et al., 2021) mimics the sinusoidal positional encoding of AIAYN:
+
+$$
+\boxed{\ \theta_i = b^{-2i/d}, \qquad b = 10000,\ i = 0, 1, \dots, d/2 - 1. \ }
+$$
+
+The base $b = 10000$ is conventional (and adjustable — long-context fine-tuning often changes it; see 7.13). The resulting frequencies span a wide geometric range:
+
+- **$i = 0$:** $\theta_0 = 1$. Highest frequency. Period $2\pi$ — captures very short-range positional differences ($n - m$ of order 1).
+- **$i = d/2 - 1$:** $\theta_{d/2 - 1} = 10000^{-(d-2)/d} \approx 10^{-4}$. Lowest frequency. Period $\approx 2\pi \cdot 10^{4}$ — captures very long-range positional differences.
+
+The spectrum lets the model attend to relative position at multiple "scales." Short-range patterns (n-gram-style) use high-frequency pairs; long-range patterns (document structure) use low-frequency pairs. Different attention heads, and different pairs within a head, end up using different parts of the spectrum.
+
+### 4.1 The connection to sinusoidal encoding
+
+The sinusoidal positional encoding of AIAYN (see [Appendix 6.A](/session/ch6-attention-transformer/6.A-sinusoidal-pe)) sets the $(2i, 2i+1)$ coordinates of $\text{PE}(t)$ to $(\sin(t \theta_i), \cos(t \theta_i))$ with the same $\theta_i = 10000^{-2i/d}$ frequencies. The relation is structural: applying $R(t \theta_i)$ to a 2D vector $v$ rotates it through the same angle that $\sin/\cos$ would sweep. RoPE inherits the frequency schedule but applies it as a *rotation of $Q, K$* rather than as an *additive shift of embeddings*.
+
+---
+
+## 5. The full RoPE forward pass
+
+Putting the pieces together, RoPE-modified self-attention is:
+
+$$
+\boxed{
+\begin{aligned}
+Q &= X W_Q, \\
+K &= X W_K, \\
+V &= X W_V, \\
+\tilde Q_m &= R_m\, Q_m \quad \text{(rotate query at position } m \text{)} \\
+\tilde K_n &= R_n\, K_n \quad \text{(rotate key at position } n \text{)} \\
+A &= \text{softmax}\!\left( \frac{\tilde Q \tilde K^\top}{\sqrt{d_k}} + M \right), \\
+Y &= A V.
+\end{aligned}
+}
+$$
+
+Note carefully: **values $V$ are NOT rotated.** RoPE applies *only* to $Q$ and $K$. The rotation's purpose is to make the dot product positional-dependent; the values are then mixed by an attention weight that already carries the position information.
+
+### 5.1 Efficient implementation
+
+The block-diagonal rotation $R_m$ has a clean coordinate form. Pair $i$ at position $m$ acts as:
+
+$$
+\begin{pmatrix} \tilde q^{(2i)}_m \\ \tilde q^{(2i+1)}_m \end{pmatrix} = \begin{pmatrix} \cos(m \theta_i) & -\sin(m \theta_i) \\ \sin(m \theta_i) & \phantom{-}\cos(m \theta_i) \end{pmatrix} \begin{pmatrix} q^{(2i)} \\ q^{(2i+1)} \end{pmatrix}.
+$$
+
+In implementations, this is computed as two element-wise multiplications using pre-computed $\cos$ and $\sin$ tables: with $C_m \in \mathbb{R}^{d}$ and $S_m \in \mathbb{R}^{d}$ holding the cosines and sines at position $m$, the rotation is
+
+$$
+\tilde Q_m = Q_m \odot C_m + \text{rotate}(Q_m) \odot S_m,
+$$
+
+where $\text{rotate}(\cdot)$ swaps adjacent coordinates with a sign flip (the "negate-then-swap" trick). The cost is two element-wise multiplies plus a swap, all $\Theta(T d)$. Trivial compared to the attention dot product.
+
+---
+
+## 6. Geometric reading
+
+A clean way to picture what RoPE does:
+
+> *"At every position, twist the query and key vectors. The angle of the twist grows linearly with position, and different coordinate pairs are twisted at different rates."*
+
+Two queries at *the same* position have the same twist applied — so RoPE preserves the relative orientation of *queries at the same position*. Two queries at *different* positions are twisted by different angles, so their inner products with a fixed key become position-dependent.
+
+The dot product $\tilde q_m^\top \tilde k_n$ depends only on the *relative twist angle* $(n - m) \theta_i$ in each pair, summed across pairs. The model sees "position" through this spectrum of relative-twist responses, and learns to use the spectrum to express positional patterns of various kinds.
+
+---
+
+## 7. Properties: why this design wins
+
+Five properties make RoPE the modern default:
+
+**(a) Relative-only.** The attention score $\tilde q_m^\top \tilde k_n$ depends only on $n - m$. This is *exactly* what we want from a positional encoding for language.
+
+**(b) No learnable parameters.** The rotations are fixed; the schedule is fixed. No "positional embedding matrix" to size up with context length.
+
+**(c) Decays with distance, controllably.** For each frequency $\theta_i$, the rotation $R((n-m)\theta_i)$ oscillates. Empirically, larger $|n - m|$ tends to produce a smaller mean attention score at random initialisation — a "soft locality prior" that helps training but does not forbid long-range attention.
+
+**(d) Decoupled from values.** Position only affects the *attention weights*, not the values being mixed. The residual stream of [6.10](/session/ch6-attention-transformer/6.10-pre-vs-post-norm) (Part 2) stays clean.
+
+**(e) Tractable extrapolation.** The rotation angles are continuous in position, so the model has *some* signal at positions beyond the training context. Position interpolation, NTK-aware scaling, and YaRN (Peng et al., 2023) all build on this — see 7.13. Compare with learned absolute positional embeddings, which have no defined behaviour at out-of-distribution positions.
+
+<Aside type="note">
+**Apply RoPE before the dot product, not in the embedding.** A common confusion: RoPE is *not* added to the input embeddings. It is applied to $Q$ and $K$ *after* their linear projections. This matters: if RoPE were added at the embedding, the FFN block (6.8) would receive positional-modified inputs, and the rotation interpretation would break (rotations don't commute with element-wise non-linearities). Keeping RoPE inside the attention sub-layer is what preserves the clean relative-position structure.
+</Aside>
+
+---
+
+## 8. The base $b = 10000$ and modern long-context training
+
+The base $b$ controls the spread of frequencies. $b = 10000$ was the choice in AIAYN and the original RoPE paper. Two adjustments are common in modern training:
+
+- **Increase $b$ for longer contexts.** LLaMA-2 used $b = 10000$ at 4k context; LLaMA-3 uses $b = 500000$ at 8k context; Qwen-2-72B-1M uses $b \approx 10^7$ at 1M context. Larger $b$ pushes more frequencies into the low-frequency regime, providing finer positional discrimination at longer distances. This is the simplest way to extend context length and is now standard in pretraining.
+
+- **NTK-aware scaling / YaRN.** When *extending* a model's context window without retraining from scratch (e.g. extending a 4k LLaMA to 128k), one can rescale the frequencies $\theta_i$ post hoc by a position-interpolation-like rule. The math is in 7.13.
+
+Both adjustments are downstream of the RoPE construction itself — they are choices of $\{\theta_i\}$, not of the structural form $R_m Q$.
+
+---
+
+## 9. What we keep going forward
+
+RoPE in one line: **rotate $q$ and $k$ in $d/2$ separate 2D planes by angles proportional to position $m$, with frequencies $\theta_i = 10000^{-2i/d}$.** The dot product becomes a function of $n - m$ alone.
+
+We have now specified every part of the attention sub-layer: similarity (6.2), wiring (6.3), heads (6.4), mask (6.5), and position (6.6, 6.7). 6.8 introduces the FFN sub-layer that completes one Transformer block.
+
+<SelfTest>
+
+**(a)** Prove the identity $R(\alpha)^\top R(\beta) = R(\beta - \alpha)$ directly from the matrix form of $R(\theta)$ using $\cos$/$\sin$ addition formulas.
+
+**(b)** For $d = 4$ and a single frequency $\theta_0 = 1, \theta_1 = 0.1$, write the block-diagonal rotation matrix $R_m$ for $m = 0, 1, 2$. Verify that $R_0 = I$.
+
+**(c)** Show that $R_m R_n = R_{m + n}$ (the block-diagonal rotations form a one-parameter group). Why does this imply that "RoPE is consistent with absolute position shifts"?
+
+**(d)** A query $q = (1, 0, 1, 0) \in \mathbb{R}^4$ is at position $m = 5$ with frequencies $\theta_0 = 1, \theta_1 = 0.1$. Compute $\tilde q_m$ explicitly. Then a key $k = (1, 0, 1, 0)$ is at position $n = 7$. Compute $\tilde k_n$ and the dot product $\tilde q_m^\top \tilde k_n$. Verify that the answer is what you would get from $q^\top R((n-m)\theta_0) k_{\text{pair 0}} + q^\top R((n-m)\theta_1) k_{\text{pair 1}}$.
+
+**(e)** Sketch why applying RoPE to the *values* (not just $Q, K$) would *break* the relative-position property. (Hint: the values appear in $A V$ without a second rotation; the position rotations would propagate into the output and contaminate the residual stream.)
+
+</SelfTest>

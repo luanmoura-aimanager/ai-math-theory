@@ -23,6 +23,10 @@
     "title": "Chapter 5 — Sequence modeling and embeddings",
     "order": 5
   },
+  "ch6-attention-transformer": {
+    "title": "Chapter 6 — Attention and the Transformer",
+    "order": 6
+  },
   "references-bibliography": {
     "title": "References & bibliography",
     "order": 99

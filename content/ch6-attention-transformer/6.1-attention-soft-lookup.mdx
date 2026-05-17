@@ -1,0 +1,144 @@
+---
+title: "6.1 — Attention as a soft, differentiable dictionary lookup"
+chapter: 6
+order: 1
+estimatedMinutes: 18
+goal: "Build the attention operation from first principles, starting from a hard dictionary lookup and softening it through softmax until we reach attn(q, K, V) = Σᵢ softmax(s(q, kᵢ)) vᵢ."
+prerequisites: ["ch5-sequence-modeling/5.6-why-abandon-recurrence", "ch1-linear-models-perceptron/1.7-softmax"]
+---
+
+## 1. Why this session exists
+
+[Chapter 5.6](/session/ch5-sequence-modeling/5.6-why-abandon-recurrence) ended with three structural requirements for the operator that would replace recurrence:
+
+1. **Unbounded conditioning** — no fixed-length window.
+2. **Constant-length gradient paths** — no exponential decay over distance.
+3. **Parallel forward pass** — every position computable in one batched matrix multiply.
+
+Together with the fourth desideratum from [4.3 §5](/session/ch4-cnn-bridge/4.3-bridge-to-sequences) — **content-addressed mixing**, where weights depend on the tokens themselves — these four properties almost uniquely specify the operation we are about to build.
+
+This session derives the *shape* of attention from a single starting point: the **dictionary lookup**, a fundamental operation in computer science. Softening it into a differentiable function gives us attention. The specific similarity score and the batched matrix form come in 6.2.
+
+---
+
+## 2. A hard dictionary lookup
+
+A dictionary $\mathcal{D} = \{ (k_1, v_1), (k_2, v_2), \dots, (k_m, v_m) \}$ stores $m$ key-value pairs. A **lookup with query $q$** returns the value $v_i$ whose key $k_i$ exactly matches $q$:
+
+$$
+\text{lookup}(q, \mathcal{D}) = v_{i^\star}, \qquad i^\star = \arg\max_i \mathbb{1}[k_i = q].
+$$
+
+If no key matches, the lookup returns nothing (or a default). This is what every hash map, Python `dict`, and database does.
+
+For a neural network, hard lookup is useless for two reasons:
+
+1. **It is discrete.** $\arg\max$ has zero gradient almost everywhere. Backprop cannot pass through it.
+2. **It assumes exact match.** In a learned model, the query and keys are continuous vectors. We need *graded* matching — "this key is *somewhat* like this query" — not exact equality.
+
+We need a continuous, gradient-friendly relaxation.
+
+---
+
+## 3. Softening the lookup
+
+Replace "the single best matching key" with "a weighted average over all keys, weighted by how well each key matches the query."
+
+First, replace exact equality by a continuous **similarity score** $s(q, k_i) \in \mathbb{R}$: large when the query and key are close, small (or negative) when they disagree. The specific functional form of $s$ is a design choice — 6.2 will pick the scaled dot product. For now, $s$ is any function we like.
+
+Next, turn the $m$ similarity scores $s(q, k_1), \dots, s(q, k_m)$ into a probability distribution over keys with **softmax** (see [1.7](/session/ch1-linear-models-perceptron/1.7-softmax)):
+
+$$
+\alpha_i = \frac{\exp(s(q, k_i))}{\sum_{j=1}^{m} \exp(s(q, k_j))}, \qquad i = 1, \dots, m.
+$$
+
+The weights satisfy $\alpha_i \ge 0$ and $\sum_i \alpha_i = 1$. They are a *soft assignment* of the query to the keys: $\alpha_i \approx 1$ if key $i$ stands out, $\alpha_i \approx 1/m$ if all keys look similar.
+
+Finally, return the weighted average of values:
+
+$$
+\boxed{\ \text{attn}(q,\, K,\, V) = \sum_{i=1}^{m} \alpha_i\, v_i, \qquad \alpha_i = \frac{\exp(s(q, k_i))}{\sum_{j=1}^{m} \exp(s(q, k_j))}. \ }
+$$
+
+That is **attention**. The query $q$ produces a distribution over keys via softmax of similarities, and the output is the values, averaged under that distribution.
+
+---
+
+## 4. Reading the formula
+
+Three useful ways to see what this does:
+
+**(a) Soft argmax.** As $s$ scales up (multiply every similarity by a large constant), softmax sharpens. In the limit, $\alpha_i \to \mathbb{1}[i = i^\star]$, where $i^\star = \arg\max_i s(q, k_i)$, and attention reduces to the hard lookup. Attention is the *differentiable* version of "pick the best key, return its value."
+
+**(b) Convex combination.** $\text{attn}(q, K, V) = \sum_i \alpha_i v_i$ with $\alpha \in \Delta^{m-1}$ (the probability simplex). The output always lies in the convex hull of the values $\{v_1, \dots, v_m\}$. It cannot extrapolate beyond what the values express — it can only mix them.
+
+**(c) Kernel smoothing.** If $s(q, k) = -\|q - k\|^2 / 2 \sigma^2$, the weights $\alpha_i$ are exactly the kernel weights of **Nadaraya–Watson regression** (Nadaraya, 1964; Watson, 1964) with a Gaussian kernel. Attention is, structurally, kernel-smoothing regression where the kernel is parameterised by the score function $s$ and the data are the $(k_i, v_i)$ pairs. The connection is more than analogy: many recent papers re-derive attention from this nonparametric-regression view.
+
+---
+
+## 5. Why this satisfies our four desiderata
+
+Look at the four requirements from §1 against the attention formula:
+
+1. **Unbounded conditioning.** The sum is over *all* $m$ keys; nothing is fixed-length. To make the input prefix $x_{<t}$ available at position $t$, we will set keys and values from positions $1$ through $t - 1$, and the entire prefix participates in computing the output.
+2. **Constant-length gradient paths.** The output at any query position is a *single weighted sum* of all values. Backprop from the output to any $v_i$ traverses exactly one multiplicative step (the weight $\alpha_i$) and one softmax derivative. There is no exponential decay with $m$.
+3. **Parallel forward pass.** When we batch the formula across $n$ queries simultaneously — say $Q \in \mathbb{R}^{n \times d_k}, K \in \mathbb{R}^{m \times d_k}, V \in \mathbb{R}^{m \times d_v}$ — it becomes two matrix multiplies and one softmax (the derivation is in 6.2). One large GEMM, fully parallelisable on the GPU.
+4. **Content-addressed mixing.** The weights $\alpha_i = \text{softmax}(s(q, k_i))$ depend on *what is in $q$ and $k_i$*, not on any fixed offset. This is the structural shift from convolution that 4.3 §4 anticipated.
+
+All four properties come "for free" from the soft-lookup formulation. Attention is not designed to satisfy them one by one — it satisfies them simultaneously by being the right shape.
+
+---
+
+## 6. The roles: query, key, value
+
+Three slots, each with its own job:
+
+- **Query $q$.** The "what am I looking for?" vector. Produced by the position that is *receiving* information.
+- **Key $k_i$.** The "what do I represent?" vector. Produced by the position that is *being looked at*. The query–key inner product is the similarity score.
+- **Value $v_i$.** The "what should I contribute if selected?" vector. The output is a weighted sum of values.
+
+In a hard dictionary, keys and values are tied: the key identifies a slot and the value is the slot's content. In attention, **they are decoupled**. The same source token will produce one $k$ vector for the matching role and a separate $v$ vector for the content role, via two different learnable linear projections (6.3). This separation is what gives the attention layer the flexibility to express different patterns at different layers — a token can be a strong "match target" without contributing strongly to the output, and vice versa.
+
+---
+
+## 7. The cost of softmax
+
+The softmax in attention is the *only* non-trivially non-linear operation in the layer (everything else is matrix multiplies). It has three structural consequences worth noting now and revisiting later:
+
+**(a) Quadratic memory.** Computing $\alpha_{ij}$ for all $(i, j)$ pairs of $n$ queries and $m$ keys requires the $n \times m$ matrix of similarity scores in memory. This is the $O(T^2)$ memory cost that all "efficient attention" variants in [6.13](/session/ch6-attention-transformer/6.13-long-context) (coming in Part 2) attack.
+
+**(b) Saturation risk.** Softmax saturates: if one similarity score is much larger than the others, the corresponding $\alpha_i \to 1$ and the rest $\to 0$. Gradients with respect to the "losing" keys go to zero. The $\sqrt{d_k}$ scaling in 6.2 is the design choice that keeps softmax in its non-saturated regime by default.
+
+**(c) Always nonzero.** A perfect "hard match" (zero weight on all non-matching keys) is unattainable for finite scores. Attention always mixes in a little bit of every value. This is a feature for differentiability — gradients flow everywhere — and a cost for capacity, because no single value can be selected exactly.
+
+---
+
+## 8. What we keep going forward
+
+The shape of attention is fixed:
+
+$$
+\text{attn}(q,\, K,\, V) = \sum_{i=1}^{m} \frac{\exp(s(q, k_i))}{\sum_j \exp(s(q, k_j))}\, v_i.
+$$
+
+What remains is to specify three things:
+
+- **The similarity function $s$** (6.2 — scaled dot product).
+- **Where $Q, K, V$ come from** (6.3 — three learned linear projections of the same input, for self-attention).
+- **The autoregressive / parallelism wiring** (6.4 multi-head, 6.5 causal mask, 6.6 positional info, 6.7 RoPE) plus the per-position non-linearity (6.8 FFN).
+
+By the end of Part 1 (session 6.8) you will have every piece of one Transformer block in matrix form. Part 2 stacks the blocks, adds normalisation and residuals, and walks through `nanoGPT` line by line.
+
+<SelfTest>
+
+**(a)** Show that softmax with similarity scores $s' = c \cdot s$ approaches a hard argmax as $c \to \infty$. What happens as $c \to 0$? Use the two limits to argue that softmax interpolates between "uniform mixture" and "hard lookup."
+
+**(b)** Suppose the query $q$ matches key $k_1$ exactly, $s(q, k_1) = 5$, and all other keys score $0$. Compute $\alpha_1, \alpha_2, \dots, \alpha_m$ in closed form for $m = 4$. How close is $\alpha_1$ to $1$?
+
+**(c)** Show that the attention output $\text{attn}(q, K, V) = \sum_i \alpha_i v_i$ always lies in the convex hull of $\{v_1, \dots, v_m\}$. What does this imply about the geometric reach of a single attention layer in the value space?
+
+**(d)** Identify the four desiderata from §1 in the attention formula. For each one, point to the specific piece of the formula that delivers it.
+
+**(e)** In a hard dictionary, the lookup of an unmatched query returns nothing. In soft attention, what is the output when no key strongly matches the query (all $s(q, k_i)$ approximately equal)? Interpret this behaviour geometrically.
+
+</SelfTest>

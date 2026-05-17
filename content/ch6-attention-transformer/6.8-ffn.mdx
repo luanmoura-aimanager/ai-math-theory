@@ -1,0 +1,172 @@
+---
+title: "6.8 — The feed-forward block (position-wise MLP)"
+chapter: 6
+order: 8
+estimatedMinutes: 18
+goal: "Define the FFN sub-layer, FFN(x) = W₂ σ(W₁ x + b₁) + b₂, applied independently per position; understand the standard d_ff = 4d expansion; count its parameters (8 d²) and FLOPs; place it as the per-position counterpart of attention's cross-position mixing."
+prerequisites: ["ch6-attention-transformer/6.7-rope", "ch2-mlps-backprop/2.3-activations"]
+---
+
+## 1. Why this session exists
+
+The attention sub-layer of [6.4–6.7](/session/ch6-attention-transformer/6.4-multi-head-attention) does *one* thing: it lets each token gather a content-addressed mixture of values from across the sequence. That is *cross-position* mixing — a linear operation in the value space, weighted by attention.
+
+That is not enough. A purely-linear cross-position operation cannot, by itself, build complex *per-position* representations: an attention output is a convex combination of values, which lives in the convex hull of the value rows. To make the model represent compositional structure — "this is a noun phrase head with these modifiers" — we need a per-position **non-linear feature transformer** sitting next to attention.
+
+That role is played by the **feed-forward network (FFN)** sub-layer: a two-layer MLP applied **independently at each position**. It is the second of the two sub-layers in every Transformer block. The pair "attention + FFN" is the fundamental computational unit of the architecture, and FFN holds *more parameters* than attention in every standard Transformer — typically 2/3 of the parameters of a block.
+
+This session defines the FFN, motivates the standard "expand-to-$4d$, contract back" shape, counts the parameters and FLOPs, and connects to the per-position role that makes it complementary to attention.
+
+---
+
+## 2. The FFN formula
+
+Let $x \in \mathbb{R}^d$ be the hidden representation of a *single token* at one position. The standard Transformer FFN, as in AIAYN, is a two-layer MLP with a non-linearity in the middle:
+
+$$
+\boxed{\ \text{FFN}(x) = W_2\, \sigma(W_1 x + b_1) + b_2, \ }
+$$
+
+with weight matrices
+
+$$
+W_1 \in \mathbb{R}^{d_\text{ff} \times d}, \qquad W_2 \in \mathbb{R}^{d \times d_\text{ff}},
+$$
+
+and biases $b_1 \in \mathbb{R}^{d_\text{ff}}, b_2 \in \mathbb{R}^{d}$. The non-linearity $\sigma$ in AIAYN was ReLU; modern LLMs use GELU (GPT-3, BERT) or SwiGLU/GeGLU (LLaMA, Mistral) — these gated variants are deferred to [8.4] and slightly change the formula, but the *shape* of the block remains: expand to $d_\text{ff}$, apply non-linearity, contract back to $d$.
+
+### 2.1 "Per-position" — what it means
+
+Although we wrote $\text{FFN}(x)$ for a single position, in practice we apply it to all $T$ positions of a sequence by batching. For an input tensor $X \in \mathbb{R}^{T \times d}$ representing $T$ tokens, the FFN sub-layer computes
+
+$$
+\text{FFN}(X)_t = W_2\, \sigma(W_1 X_t + b_1) + b_2, \qquad t = 1, \dots, T.
+$$
+
+Crucially, **the same $W_1, W_2, b_1, b_2$ are used at every position**, and there is no mixing between positions. The FFN is a *position-wise* operation: it transforms each row of $X$ independently.
+
+This is what makes the FFN structurally orthogonal to attention. Attention mixes across positions but cannot do per-token non-linear transformations; FFN does per-token non-linear transformations but cannot mix across positions. Together, in alternating sub-layers, they cover both axes of the computation.
+
+---
+
+## 3. Why $d_\text{ff} = 4d$?
+
+The standard choice in AIAYN, and in every Transformer since, is
+
+$$
+\boxed{\ d_\text{ff} = 4 d. \ }
+$$
+
+The number 4 is empirical, not derived from a theorem. Three observations make it stable:
+
+**(a) Wider hidden layer = more capacity.** The MLP's expressive power scales with $d_\text{ff}$ (more units in the hidden layer = more learnable features). Increasing $d_\text{ff}$ improves model quality monotonically, but at quadratic cost in parameters: $\#\theta_\text{FFN} = 2 d \cdot d_\text{ff} + d_\text{ff} + d$.
+
+**(b) Compute parity with attention.** With $d_\text{ff} = 4d$, the FFN block has $\sim 8 d^2$ parameters per layer. The attention sub-layer has $\sim 4 d^2$. So the FFN holds about twice the parameter count of attention per block — a 2:1 ratio that the field has settled on. (For models with SwiGLU and three FFN matrices, the ratio is closer to 3:1; see 8.4.)
+
+**(c) Hardware-friendly shape.** $4d$ is a "nice" number for GEMM on GPU. Anything substantially larger costs proportionally more memory; anything smaller hurts quality. Some recent models (PaLM, GPT-NeoX) experimented with $d_\text{ff} \in [2d, 8d]$ but always returned to roughly $4d$ as the sweet spot.
+
+When LLMs were scaled up, the field generally kept $d_\text{ff} = 4d$ and increased both $d$ and the number of layers $L$ together. The Chinchilla scaling laws (7.12) ratify this as the compute-optimal choice.
+
+---
+
+## 4. Parameter count
+
+For the standard FFN with $d_\text{ff} = 4d$:
+
+$$
+\boxed{\ \#\theta_\text{FFN} = 2 \cdot d \cdot 4d \;+\; 4d + d \;=\; 8 d^2 + 5d. \ }
+$$
+
+The bias terms are an additive $\sim d$ correction; in modern LLMs (e.g. LLaMA) they are often omitted, leaving exactly $8 d^2$. Compare with the attention sub-layer's $4 d^2$ (6.4 §3). One Transformer block therefore has
+
+$$
+\#\theta_\text{block} \approx 4 d^2 + 8 d^2 = 12 d^2
+$$
+
+parameters (no biases, no norms). For LLaMA-7B ($d = 4096$): $12 \cdot 4096^2 \approx 2 \times 10^8$ params per block, times 32 layers $\approx 6.4 \times 10^9$. Add the embedding matrix $V \cdot d$ and the output projection (tied with embedding), and you reach $\sim 6.7 \times 10^9$ — the canonical "7B" headline number.
+
+---
+
+## 5. FLOPs and the per-position cost
+
+For a sequence of length $T$:
+
+$$
+\#\text{FLOPs}_\text{FFN} = 2 \cdot T \cdot d \cdot d_\text{ff} + 2 \cdot T \cdot d_\text{ff} \cdot d = 4 T d\, d_\text{ff} = 16 T d^2.
+$$
+
+(Each matrix multiply contributes $2 T d d_\text{ff}$ FLOPs counting multiply+add; the non-linearity is comparatively free.) Compare with attention's $\sim 4 T^2 d$ FLOPs per layer (6.4 §3.1).
+
+The cross-over is at $T = 4d$. For $T < 4d$ the FFN dominates; for $T > 4d$, attention does. For LLaMA-7B ($d = 4096$), this is $T = 16{,}384$ — a longer context than the original training window of 2048. So at standard pretraining context lengths, **FFN compute dominates**. Long-context inference shifts the balance to attention; this is the structural reason "attention is expensive at long context" is the headline cost figure but "FFN is expensive at short context" is the unsung counterpart. We will revisit this when we count compute in 6.12 (Part 2).
+
+---
+
+## 6. The FFN as a "feature memory"
+
+A useful way to read the FFN: each row of $W_1$ is a *pattern detector* on the input $x$ (the row is a vector in $\mathbb{R}^d$; its inner product with $x$ scores a particular feature). The non-linearity $\sigma$ then gates the response. Each column of $W_2$ is a *feature contribution* — when the corresponding hidden unit fires, the column is added (scaled) to the output.
+
+Schematically:
+
+$$
+\text{FFN}(x) = \sum_{i = 1}^{d_\text{ff}} W_2[:, i] \cdot \sigma\big( W_1[i, :]\, x + b_1[i] \big) + b_2.
+$$
+
+The $d_\text{ff}$ hidden units each define a "(detector, contribution)" pair: detect a feature in $x$, contribute a vector to the output. This view has been formalised by Geva, Schuster, Berant & Levy (2021), who showed that FFN weights in trained Transformers behave like an *associative memory*: $W_1$ rows act as keys, $W_2$ columns as values, and the FFN as a key-value lookup mediated by the non-linearity.
+
+This is *exactly* the same structural pattern as attention — a key-value lookup — except the keys and values are *fixed weights* (learned at training time) rather than computed from the input. Attention is a *runtime* lookup against the sequence; FFN is a *parametric* lookup against memorised features.
+
+The two together — runtime cross-position retrieval (attention) and per-position parametric memory (FFN) — are why a Transformer can both "look at what's in the input" and "look at what it knows." Modern interpretability papers (Cap 11) often map model behaviour to these two complementary mechanisms.
+
+<Aside type="note">
+**Modern FFN variants (preview).** Shazeer (2020) proposed replacing the FFN with **GLU variants** — gated linear units whose key form is
+
+$$
+\text{SwiGLU}(x) = (W_3 x) \odot \text{Swish}(W_1 x), \qquad \text{FFN}_\text{SwiGLU}(x) = W_2\, \text{SwiGLU}(x).
+$$
+
+Three matrices instead of two, ~1.5× the parameter count for the same $d_\text{ff}$. Used in LLaMA, Mistral, Qwen, and most LLMs from 2023 onward. The "expand–nonlinearity–contract" shape and the per-position structure are unchanged; only the non-linearity is generalised. Full treatment in 8.4. For the rest of Chapter 6, we use the canonical AIAYN form $W_2 \sigma(W_1 x + b_1) + b_2$.
+</Aside>
+
+---
+
+## 7. Why per-position, not cross-position?
+
+A natural question: why doesn't the FFN mix across positions too? It could, in principle — a "global" FFN would take $X \in \mathbb{R}^{T \times d}$ as a flattened vector of dimension $T d$ and apply a dense MLP to it.
+
+It doesn't, for three reasons:
+
+**(a) Parameter explosion.** A dense MLP from $T d$ to $T d$ has $T^2 d^2$ parameters — *quadratic in sequence length*. For $T = 2048, d = 4096$: $\sim 7 \times 10^{13}$, infeasible.
+
+**(b) Position-coupling is attention's job.** Cross-position mixing is what attention is for. Re-doing it in the FFN would be redundant and would re-introduce the parameter-count and translation-symmetry pathologies that attention was designed to avoid.
+
+**(c) Per-position structure is the right inductive bias.** Once attention has mixed the relevant cross-position information into each position's representation, the FFN's job is to *transform* that representation, position-by-position. The two operations sit naturally on orthogonal axes of the computation.
+
+The discipline is general: in a Transformer block, every operation is either *per-position* (FFN, layer norm, activation) or *cross-position* (attention). Mixing the two would over-couple the design.
+
+---
+
+## 8. What we keep going forward
+
+The FFN sub-layer is one line of math:
+
+$$
+\text{FFN}(x) = W_2\, \sigma(W_1 x + b_1) + b_2, \qquad d_\text{ff} = 4 d.
+$$
+
+Applied position-wise. $\sim 8 d^2$ parameters. Dominates compute at short context; underweighted at long context. Functions as a parametric key-value memory complementary to attention's runtime retrieval.
+
+We now have every piece of one Transformer block. Part 2 stacks them: residual connections (6.9), pre-norm vs post-norm (6.10), the complete block + the *Attention Is All You Need* read (6.11), compute counting (6.12), long-context variants (6.13), KV cache (6.14), hand-written numpy attention (6.15), and the `nanoGPT` walkthrough (6.16).
+
+<SelfTest>
+
+**(a)** Confirm the parameter count $\#\theta_\text{FFN} = 8 d^2 + 5d$ by counting the entries of $W_1, W_2, b_1, b_2$ for $d_\text{ff} = 4d$.
+
+**(b)** Compute the FFN FLOPs for one forward pass of LLaMA-7B ($d = 4096, T = 2048$): $16 T d^2$. Compare with the attention FLOPs $\sim 4 T^2 d$. Which dominates at this $T$? At what $T$ would attention dominate?
+
+**(c)** Write the FFN forward pass for a small example: $d = 2, d_\text{ff} = 4, W_1 = \begin{pmatrix} 1 & 0 \\ 0 & 1 \\ 1 & 1 \\ -1 & 1 \end{pmatrix}, W_2 = \begin{pmatrix} 1 & 0 & 1 & 0 \\ 0 & 1 & 0 & 1 \end{pmatrix}$, biases zero, $\sigma = $ ReLU. Compute $\text{FFN}((1, 0))$ and $\text{FFN}((0, 1))$.
+
+**(d)** Argue why a "global" FFN that mixes across positions would be redundant with attention. What would happen to the Transformer's translation-equivariance/position-handling story?
+
+**(e)** A SwiGLU FFN replaces the single $W_1$ matrix with two parallel matrices $W_1, W_3$ used as $\text{SwiGLU}(x) = (W_3 x) \odot \text{Swish}(W_1 x)$. Argue that this triples the "expand" parameter count relative to standard FFN. To keep the total parameter count constant in modern LLMs, what is typically done to $d_\text{ff}$?
+
+</SelfTest>

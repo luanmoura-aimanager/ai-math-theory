@@ -1,0 +1,150 @@
+---
+title: "6.5 — Causal (autoregressive) masking"
+chapter: 6
+order: 5
+estimatedMinutes: 14
+goal: "Add the causal mask to the attention computation: a triangular pattern of −∞ scores that forbids any query from attending to keys at future positions. Understand how this preserves the autoregressive factorisation while letting the forward pass remain fully parallel."
+prerequisites: ["ch6-attention-transformer/6.4-multi-head-attention", "ch5-sequence-modeling/5.3-language-modeling-objective"]
+---
+
+## 1. Why this session exists
+
+The language-modelling objective of [5.3](/session/ch5-sequence-modeling/5.3-language-modeling-objective) requires the prediction at position $t$ to depend *only* on tokens $x_{<t}$. Self-attention as written in [6.4](/session/ch6-attention-transformer/6.4-multi-head-attention) violates this: every query position $i$ attends to every key position $j \in \{1, \dots, T\}$, including future tokens.
+
+The fix is the **causal mask**: a one-line modification of the score matrix that sets attention to *future* positions to exactly zero, while leaving the attention to past positions free. The mask is what lets a decoder-only Transformer be trained in parallel on all $T$ positions of a sequence from a single forward pass — the trick that makes Transformer pretraining feasible at LLM scale.
+
+This session does two things:
+
+1. Define the causal mask and write it inside the scaled dot-product formula.
+2. Explain why we add to the *pre-softmax scores* rather than zeroing out *post-softmax weights*.
+
+---
+
+## 2. The causal constraint
+
+For an autoregressive language model, the conditional distribution $p_\theta(x_t \mid x_{<t})$ must be a function of $x_1, \dots, x_{t-1}$ only. If a self-attention layer at position $t$ attended to $x_T$ for some $T > t$, then $p_\theta(x_t \mid \dots)$ would depend on future tokens — the factorisation would be invalid, and at inference time we would not be able to *use* the model autoregressively.
+
+Concretely: for query position $i$, the attention weight $A_{ij}$ on key position $j$ must satisfy
+
+$$
+\boxed{\ A_{ij} = 0 \quad \text{whenever } j > i. \ }
+$$
+
+This is the causal mask condition. The output at position $i$ is then a convex combination of values at positions $1, \dots, i$ — never anything from the future.
+
+---
+
+## 3. The mask matrix and where to put it
+
+Define the mask $M \in \mathbb{R}^{T \times T}$:
+
+$$
+M_{ij} = \begin{cases} 0 & \text{if } j \le i, \\ -\infty & \text{if } j > i. \end{cases}
+$$
+
+Pictorially, $M$ is **lower triangular** with zeros on and below the diagonal and $-\infty$ above:
+
+$$
+M = \begin{pmatrix}
+0 & -\infty & -\infty & -\infty \\
+0 & 0 & -\infty & -\infty \\
+0 & 0 & 0 & -\infty \\
+0 & 0 & 0 & 0
+\end{pmatrix}
+$$
+
+(here $T = 4$). Add $M$ to the **pre-softmax scores** $S = Q K^\top / \sqrt{d_k}$:
+
+$$
+\boxed{\ \text{Attn}_\text{causal}(Q, K, V) = \text{softmax}\!\left( \frac{Q K^\top}{\sqrt{d_k}} + M \right) V. \ }
+$$
+
+The exponential of $-\infty$ is exactly $0$, so any entry of the softmax with a $-\infty$ score is zero in the output. The remaining entries are renormalised so that each row sums to $1$ — automatically, by the softmax denominator being computed only over the unmasked positions.
+
+In code, $-\infty$ is replaced by a very large negative number (e.g. $-10^{10}$, or the dtype's most-negative finite value). The result is numerically indistinguishable from $-\infty$ after softmax.
+
+---
+
+## 4. Pre-softmax vs post-softmax masking
+
+A naive alternative would be to *zero out* the post-softmax weights:
+
+$$
+A_{ij}^\text{naive} = \begin{cases} A_{ij}^\text{unmasked} & \text{if } j \le i, \\ 0 & \text{if } j > i. \end{cases}
+$$
+
+This is wrong. Two reasons:
+
+**(a) The rows no longer sum to 1.** The softmax denominator was computed over *all* $T$ positions; removing some entries afterwards breaks normalisation. The output is now a *fraction* of a convex combination, scaled by the total weight that survived the mask. Different rows scale differently. The attention sub-layer's output magnitude varies wildly with the mask, which makes training unstable.
+
+**(b) Gradients still flow to masked positions.** If $A_{ij}^\text{unmasked}$ depended on $Q$ and $K$ at masked positions through the softmax denominator, then $\partial A_{ij'} / \partial K_j$ for $j > i$ is non-zero — gradient leaks to the future. Pre-softmax masking with $-\infty$ stops gradient flow because $\partial \exp(-\infty + \epsilon) / \partial \epsilon = 0$.
+
+Both problems vanish when we add $-\infty$ inside the softmax: the denominator is computed only over unmasked positions, the rows sum to 1 by construction, and the gradients to masked positions are exactly zero.
+
+This is the structural reason every Transformer implementation uses pre-softmax additive masking. Anywhere you see "boolean mask," what's actually being done is "replace masked-out scores by a large negative number before softmax."
+
+<Aside type="note">
+**Boolean masks $\to$ additive $-\infty$.** PyTorch's `scaled_dot_product_attention(..., is_causal=True)` and most other library implementations expose the causal mask as a boolean flag and handle the $-\infty$ substitution internally. When you pass a custom mask, the convention is usually: `True` (or `1`) means "attend"; `False` (or `0`) means "block." The library converts to the additive form. Get this convention wrong by one inversion and your model attends to the future or refuses to attend at all.
+</Aside>
+
+---
+
+## 5. Training-time parallelism
+
+The payoff of pre-softmax masking is the one that motivates the whole design.
+
+Suppose you have a document $x_1, x_2, \dots, x_T$ and you want to train the model to predict $x_t$ from $x_{<t}$ at *every* position $t$. With an RNN ([5.5](/session/ch5-sequence-modeling/5.5-rnn-bptt)), this required $T$ sequential steps of the forward pass. With a Transformer using causal masking, it requires **one** forward pass:
+
+1. Embed the input sequence: $X \in \mathbb{R}^{T \times d}$.
+2. Apply self-attention with the causal mask. Each row $i$ of the output is a function of $x_{\le i}$ only — *guaranteed by the mask* even though all rows were computed in parallel.
+3. Apply the rest of the block (FFN, residuals, norms), all of which are *per-position* operations (6.8) that automatically preserve causality.
+4. Compute the per-position logits and the per-position cross-entropy loss (5.3 §4).
+
+In one pass: $T$ supervised next-token predictions, $T$ corresponding losses, a single backward pass that updates the parameters using all $T$ gradient signals.
+
+This is the trick. RNNs cannot do this — the sequential dependency in the recurrence forbids it. Self-attention can, *because the causal mask makes parallel computation safe*.
+
+### 5.1 Inference is still sequential
+
+The training parallelism does not extend to inference. To generate token $x_{t+1}$ given $x_{\le t}$, we need to feed the model the current prefix, compute the logits at position $t$, sample, append, and repeat. The mask is the same at inference — it just doesn't help: we are computing one new attention row per generation step, and we *have* to do them in order.
+
+The mismatch is the source of the **KV cache** trick we will see in 6.14: at inference, the keys and values at positions $1, \dots, t-1$ never change once computed, so we cache them and only compute the new $k_t, v_t, q_t$ at each step. Training fills the entire $T \times d$ buffer in one pass; inference incrementally appends rows.
+
+---
+
+## 6. Other masks: padding, sliding window, prefix-LM
+
+The causal mask is the canonical one, but the additive-$M$ machinery handles any pattern of "this query may not attend to this key":
+
+- **Padding masks.** When sequences in a batch have different lengths, the shorter ones are padded. The pad tokens must not contribute to attention. Add $-\infty$ to the columns of the score matrix corresponding to padded keys.
+- **Sliding-window mask (Mistral, Longformer).** Each query can attend only to a fixed window of $w$ past tokens. The mask is a "thick diagonal" — block all $(i, j)$ pairs with $j < i - w$ or $j > i$. Cuts attention cost from $O(T^2)$ to $O(T w)$. Detailed in 6.13 (Part 2).
+- **Prefix-LM mask.** The first $k$ tokens of the sequence (the "prefix") attend bidirectionally; positions after $k$ attend causally. The mask is a block matrix: full ones in the prefix block, lower triangular in the autoregressive block. Used by T5 and some instruction-tuned variants.
+- **Cross-attention masks.** When attending between two sequences, masks can express "this target token may attend to these source tokens." Used in encoder-decoder Transformers.
+
+All of these are *additive masks* applied pre-softmax, exactly like the causal one. The only thing that varies is the pattern of zeros vs $-\infty$.
+
+---
+
+## 7. What we keep going forward
+
+The causal mask is the single line of code that turns a self-attention layer into an autoregressive one:
+
+$$
+\text{Attn}_\text{causal}(Q, K, V) = \text{softmax}\!\left( \frac{Q K^\top}{\sqrt{d_k}} + M \right) V, \qquad M_{ij} = \begin{cases} 0 & j \le i \\ -\infty & j > i \end{cases}.
+$$
+
+From this point on, "self-attention in a decoder-only LLM" means this masked form. Everything else — multi-head (6.4), positional encoding (6.6, 6.7), FFN (6.8), residuals and norms (Part 2) — operates *under* the causal-mask assumption.
+
+<SelfTest>
+
+**(a)** Show that applying softmax row-wise to $S + M$ (with $M$ the causal mask) gives a *lower-triangular* attention matrix $A$ whose every row sums to 1. Verify on a $4 \times 4$ example by hand.
+
+**(b)** Show that $\partial A_{ij} / \partial S_{kj}$ for $j > i$ is exactly zero. (Use $\exp(-\infty) = 0$ and the softmax formula.) Why does this mean "no gradient flows to future-position keys"?
+
+**(c)** Suppose you implement causal masking by zeroing out the post-softmax weights for $j > i$. Construct a small example showing that the rows no longer sum to 1, and explain why this breaks the convex-combination interpretation of attention.
+
+**(d)** A document of length $T = 2048$ is trained with the causal-attention objective. How many supervised next-token predictions are made from a single forward + backward pass? Compare with an RNN trained on the same document.
+
+**(e)** Construct the additive mask $M$ for a sliding-window attention with window $w = 4$ and sequence length $T = 8$. Confirm that the mask is sparse (most entries are $-\infty$) and that attention cost drops from $O(T^2) = 64$ entries to $O(T w) = 32$ entries.
+
+</SelfTest>

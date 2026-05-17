@@ -1,0 +1,174 @@
+---
+title: "6.2 — Scaled dot-product attention"
+chapter: 6
+order: 2
+estimatedMinutes: 22
+goal: "Specialise the soft-lookup formula to use the scaled dot product as similarity, derive the batched form Attn(Q, K, V) = softmax(QKᵀ/√d_k) V, and understand why the √d_k scaling is the difference between training and not training."
+prerequisites: ["ch6-attention-transformer/6.1-attention-soft-lookup", "ch0-math-foundations/0.2-matrix-calculus"]
+---
+
+## 1. Why this session exists
+
+[6.1](/session/ch6-attention-transformer/6.1-attention-soft-lookup) left us with the general attention formula
+
+$$
+\text{attn}(q,\, K,\, V) = \sum_{i = 1}^{m} \alpha_i\, v_i, \qquad \alpha_i = \frac{\exp(s(q, k_i))}{\sum_j \exp(s(q, k_j))},
+$$
+
+with the similarity function $s(q, k)$ left unspecified. This session picks the function that every Transformer uses — the **scaled dot product** — and writes the operation in batched matrix form. Picking the similarity is not arbitrary: the choice has a direct consequence on whether the network trains at all, and the $\sqrt{d_k}$ scaling factor is the single most important hyperparameter-free piece of the design.
+
+---
+
+## 2. The dot product as a similarity
+
+For two vectors $q, k \in \mathbb{R}^{d_k}$, the natural geometric similarity is the inner product
+
+$$
+\langle q, k \rangle = q^\top k = \sum_{j = 1}^{d_k} q_j\, k_j.
+$$
+
+It is large and positive when $q$ and $k$ point in similar directions, near zero when they are orthogonal, and negative when they oppose. As a similarity score for attention, it has three structural virtues:
+
+1. **Computable in a single GEMM.** With all queries packed into $Q \in \mathbb{R}^{n \times d_k}$ and all keys into $K \in \mathbb{R}^{m \times d_k}$, every pairwise score is one matrix product:
+$$
+S = Q K^\top \in \mathbb{R}^{n \times m}, \qquad S_{ij} = \langle q_i, k_j \rangle.
+$$
+This is the workhorse operation GPUs are tuned for.
+
+2. **Bilinear in the parameters.** Because the score is linear in $q$ and in $k$, the gradient through it has a simple form. We will see in 6.3 that $q$ and $k$ are produced from input embeddings by separate learnable linear maps; the dot product makes the whole thing differentiable in clean closed form.
+
+3. **Statistically well-behaved at standard initialisation.** If $q$ and $k$ have i.i.d. zero-mean unit-variance coordinates, the dot product has a controlled distribution — variance $d_k$, mean $0$. This is the property that the $\sqrt{d_k}$ scaling exploits.
+
+Other choices exist — additive attention (Bahdanau et al., 2014) uses $s(q, k) = w^\top \tanh(W_q q + W_k k)$; bilinear attention uses $s(q, k) = q^\top W k$ — and the original "neural attention" paper (Bahdanau et al., 2014) used additive. *Attention Is All You Need* picked the dot product and added the $\sqrt{d_k}$ scaling for the reason in §4 below; this is the choice the entire LLM family has inherited.
+
+---
+
+## 3. The batched form
+
+For a query matrix $Q \in \mathbb{R}^{n \times d_k}$ (one query per row), a key matrix $K \in \mathbb{R}^{m \times d_k}$, and a value matrix $V \in \mathbb{R}^{m \times d_v}$, the scaled dot-product attention is:
+
+$$
+\boxed{\ \text{Attn}(Q,\, K,\, V) = \text{softmax}\!\left( \frac{Q K^\top}{\sqrt{d_k}} \right) V. \ }
+$$
+
+The softmax is applied **row-wise**: each of the $n$ rows of $Q K^\top / \sqrt{d_k}$ is independently normalised over its $m$ entries.
+
+### 3.1 Shapes, slowly
+
+Let us trace the shapes:
+
+| Quantity | Shape | What it is |
+| --- | --- | --- |
+| $Q$ | $n \times d_k$ | Queries (one per row) |
+| $K$ | $m \times d_k$ | Keys (one per row) |
+| $V$ | $m \times d_v$ | Values (one per row) |
+| $Q K^\top$ | $n \times m$ | Pairwise similarity matrix; row $i$ is "query $i$ vs all keys" |
+| $Q K^\top / \sqrt{d_k}$ | $n \times m$ | Scaled scores |
+| $\text{softmax}(\cdot)$ | $n \times m$ | Attention weights; each row sums to 1 |
+| $\text{softmax}(\cdot)\, V$ | $n \times d_v$ | Output (one row per query) |
+
+A typical self-attention layer in a decoder-only LLM has $n = m = T$ (queries, keys, values all come from the same sequence of length $T$) and $d_k = d_v = d / h$ where $d$ is the hidden size and $h$ is the number of heads (6.4). For a small Transformer with $T = 1024, d = 768, h = 12$, that's $d_k = d_v = 64$, so $Q \in \mathbb{R}^{1024 \times 64}$, the score matrix is $1024 \times 1024$, and the output is $1024 \times 64$.
+
+### 3.2 Row-wise softmax: each query is independent
+
+The softmax in attention is applied **across keys for each query**: row $i$ of $Q K^\top$ becomes a probability distribution over the $m$ keys that query $i$ might attend to.
+
+Concretely, with $S = Q K^\top / \sqrt{d_k}$, the attention weight matrix $A \in \mathbb{R}^{n \times m}$ has entries
+
+$$
+A_{ij} = \frac{\exp(S_{ij})}{\sum_{j' = 1}^{m} \exp(S_{ij'})}, \qquad \sum_{j = 1}^{m} A_{ij} = 1\ \text{for each } i.
+$$
+
+Different queries can attend to *different distributions* over keys; the rows do not interact. This is what makes attention "per-token" in its mixing.
+
+### 3.3 The compute and memory bill
+
+Compute:
+
+- $Q K^\top$: $\Theta(n\, m\, d_k)$ FLOPs.
+- Softmax: $\Theta(n\, m)$.
+- $A V$: $\Theta(n\, m\, d_v)$.
+
+Total: $\Theta(n m (d_k + d_v))$. For self-attention with $n = m = T$ and $d_k = d_v = d/h$, the per-head cost is $\Theta(T^2 d / h)$, and the total over $h$ heads is $\Theta(T^2 d)$.
+
+Memory: the score matrix $S \in \mathbb{R}^{n \times m}$ has $\Theta(nm)$ entries. For self-attention this is $\Theta(T^2)$, the quadratic memory cost that motivates long-context variants in 6.13.
+
+---
+
+## 4. Why $\sqrt{d_k}$? The variance argument
+
+The scaling factor $1 / \sqrt{d_k}$ is the single design choice that makes scaled dot-product attention trainable. Here is the argument from *Attention Is All You Need* §3.2.1.
+
+Suppose query and key vectors $q, k \in \mathbb{R}^{d_k}$ are each composed of $d_k$ i.i.d. random coordinates with mean 0 and variance 1 — a reasonable model for vectors right after initialisation, where the matrices $W_Q, W_K$ have small variance and inputs are standardised. Then:
+
+$$
+\mathbb{E}[q^\top k] = \sum_{j = 1}^{d_k} \mathbb{E}[q_j] \mathbb{E}[k_j] = 0,
+$$
+
+$$
+\mathrm{Var}[q^\top k] = \sum_{j = 1}^{d_k} \mathrm{Var}[q_j k_j] = \sum_{j = 1}^{d_k} \mathrm{Var}[q_j]\, \mathrm{Var}[k_j] = d_k.
+$$
+
+(In the variance step we used independence of $q$ and $k$ and the variance-of-product formula for zero-mean factors.) So the **standard deviation of $q^\top k$ scales as $\sqrt{d_k}$**.
+
+For $d_k = 64$, the scores have std $\approx 8$. The softmax of such scores is *already badly saturated* — one entry is multiple standard deviations larger than the others, the corresponding $\alpha \to 1$, the rest $\to 0$. Two consequences:
+
+**(a) Vanishing gradients.** Saturated softmax has $\partial \alpha / \partial s \to 0$ everywhere except the "winner." Backprop through the softmax sends essentially zero gradient to the keys that lost. The other keys cannot move toward better matches.
+
+**(b) Hard match before training begins.** With softmax saturated at initialisation, every query in every layer locks onto a single key from step zero. The network looks like it is making decisions, but the decisions are essentially random and the gradients to fix them are vanishingly small.
+
+The fix: divide the scores by $\sqrt{d_k}$ *before* the softmax. This rescales $q^\top k$ to have unit variance, putting the softmax in its non-saturated regime regardless of $d_k$. With variance 1, exponential differences between scores are bounded by a constant, the softmax output is informative for *every* query, and gradients flow to every key.
+
+<Aside type="note">
+**Why this matters more than you might guess.** It is rare for a single hyperparameter-free design choice to be the difference between training and not training. The $\sqrt{d_k}$ scaling is one of those choices. Without it, every Transformer with $d_k > 1$ fails at initialisation. The original paper devotes one sentence to it; the consequence is the entire LLM era.
+</Aside>
+
+---
+
+## 5. A small worked example
+
+Take three keys and three values in $d_k = d_v = 2$:
+
+$$
+K = \begin{pmatrix} 1 & 0 \\ 0 & 1 \\ 1 & 1 \end{pmatrix}, \qquad V = \begin{pmatrix} 10 & 0 \\ 0 & 10 \\ 5 & 5 \end{pmatrix}.
+$$
+
+And one query $q = (1, 0)$, so $Q = (1, 0)$ as a $1 \times 2$ row.
+
+**Step 1 — scores.** $Q K^\top = (1 \cdot 1 + 0 \cdot 0,\ 1 \cdot 0 + 0 \cdot 1,\ 1 \cdot 1 + 0 \cdot 1) = (1, 0, 1)$.
+
+**Step 2 — scale.** Divide by $\sqrt{d_k} = \sqrt{2} \approx 1.414$: $(0.707, 0, 0.707)$.
+
+**Step 3 — softmax.** Exponentials: $(\exp(0.707), \exp(0), \exp(0.707)) \approx (2.028, 1.000, 2.028)$. Sum: $5.056$. Normalised: $(0.401, 0.198, 0.401)$.
+
+**Step 4 — weighted values.** Output $= 0.401 \cdot (10, 0) + 0.198 \cdot (0, 10) + 0.401 \cdot (5, 5) = (4.01 + 0 + 2.005,\ 0 + 1.98 + 2.005) = (6.015, 3.985)$.
+
+The query $(1, 0)$ aligns best with keys 1 and 3 (both have score 1) and roughly evenly splits attention between them, lightly attending to key 2. The output mixes the values of the chosen keys.
+
+### 5.1 Without the $\sqrt{2}$ scaling
+
+If we *omitted* the scale (scores $(1, 0, 1)$ directly into softmax), the exponentials would be $(e, 1, e) \approx (2.718, 1.000, 2.718)$, sum $6.436$, weights $(0.422, 0.155, 0.422)$ — slightly more concentrated, but for $d_k = 2$ the effect is small. At $d_k = 64$, with typical post-init magnitudes, the score gap would be many standard deviations and the softmax would be near-degenerate. The scaling matters more the larger $d_k$ gets.
+
+---
+
+## 6. Reading the formula in one phrase
+
+The whole operation in plain language:
+
+> *"Each query produces a probability distribution over keys (by softmax of scaled dot-product similarities). The output is the values, averaged under that distribution."*
+
+Every architectural choice in the rest of Chapter 6 is a refinement of this single sentence. Self-attention (6.3) specifies *where $Q, K, V$ come from*. Multi-head (6.4) specifies *how many copies* of this operation run in parallel. Causal mask (6.5) specifies *which keys each query may attend to*. Positional info (6.6, 6.7) specifies *how order is injected*. FFN (6.8) is the per-position non-linearity that pairs with attention to build a complete block.
+
+<SelfTest>
+
+**(a)** Verify the shape rules of §3.1: given $Q \in \mathbb{R}^{n \times d_k}$, $K \in \mathbb{R}^{m \times d_k}$, $V \in \mathbb{R}^{m \times d_v}$, confirm by index notation that $\text{Attn}(Q, K, V) \in \mathbb{R}^{n \times d_v}$.
+
+**(b)** Show that for fixed $Q, K, V$, the operation $Q \mapsto \text{Attn}(Q, K, V)$ is *not* linear in $Q$ (the softmax breaks linearity). Identify exactly which step introduces non-linearity.
+
+**(c)** Re-derive the variance argument of §4 if $q$ and $k$ have variance $\sigma^2$ (not $1$) per coordinate. What is $\mathrm{Var}[q^\top k]$? What scaling factor should be used in place of $\sqrt{d_k}$ to recover unit variance?
+
+**(d)** For the example of §5, change the query to $q = (0, 1)$ and recompute the attention weights and output. Which value gets the largest weight? Does the answer match your geometric intuition about the keys?
+
+**(e)** Compute the total FLOPs and the score-matrix memory for a self-attention layer with $T = 4096, d = 4096, h = 32, d_k = d_v = 128$. Compare with a single attention head ($h = 1, d_k = 4096$) of the same total $d$. Which one is cheaper in compute? Which uses less score-matrix memory?
+
+</SelfTest>

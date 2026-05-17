@@ -1,0 +1,160 @@
+---
+title: "6.6 — Why attention needs positional information"
+chapter: 6
+order: 6
+estimatedMinutes: 16
+goal: "Prove that scaled dot-product attention is permutation-equivariant in its keys and values, see that this makes attention blind to token order, and survey the three families of fixes (absolute / relative / rotary) that inject position into the operation."
+prerequisites: ["ch6-attention-transformer/6.5-causal-masking"]
+---
+
+## 1. Why this session exists
+
+There is a structural fact about attention that does not appear anywhere in the formula and is easy to miss: **the operation is invariant to permutations of its key–value sequence**. A query gets the same answer whether its keys are presented in their original order or shuffled into any other order. For language, where the difference between *"the dog bit the man"* and *"the man bit the dog"* lives entirely in the token ordering, this is a fatal limitation.
+
+The fix is to *break* the permutation symmetry by injecting positional information into the inputs of attention. Three families of techniques exist; modern LLMs almost universally use the third (rotary, RoPE — 6.7). This session proves the symmetry, motivates the fix, and surveys the families. The historical implementations live in [Appendix 6.A](/session/ch6-attention-transformer/6.A-sinusoidal-pe) (sinusoidal) and [Appendix 6.B](/session/ch6-attention-transformer/6.B-learned-pe) (learned).
+
+---
+
+## 2. Permutation equivariance: the statement
+
+Let $\pi$ be any permutation of $\{1, \dots, m\}$, and let $P_\pi \in \{0, 1\}^{m \times m}$ be the corresponding permutation matrix (so $(P_\pi X)_i = X_{\pi(i)}$). For a single query $q \in \mathbb{R}^{d_k}$ and key/value matrices $K \in \mathbb{R}^{m \times d_k}, V \in \mathbb{R}^{m \times d_v}$:
+
+$$
+\boxed{\ \text{attn}(q,\, P_\pi K,\, P_\pi V) = \text{attn}(q,\, K,\, V). \ }
+$$
+
+Shuffling the keys and values *the same way* leaves the attention output unchanged. The query "doesn't know" which key was originally first or last.
+
+### 2.1 Proof
+
+Write the attention output as a sum:
+
+$$
+\text{attn}(q, K, V) = \sum_{i=1}^{m} \frac{\exp(q^\top k_i / \sqrt{d_k})}{\sum_j \exp(q^\top k_j / \sqrt{d_k})}\, v_i.
+$$
+
+Under the permutation, $k_i \mapsto k_{\pi(i)}$ and $v_i \mapsto v_{\pi(i)}$. The numerator at position $i$ becomes $\exp(q^\top k_{\pi(i)} / \sqrt{d_k})$. The denominator becomes $\sum_j \exp(q^\top k_{\pi(j)} / \sqrt{d_k})$, but $j$ is a dummy summation index that ranges over $\{1, \dots, m\}$ — and so does $\pi(j)$, since $\pi$ is a permutation. So the denominator is *identical* to before.
+
+The output becomes
+
+$$
+\sum_{i=1}^{m} \frac{\exp(q^\top k_{\pi(i)} / \sqrt{d_k})}{\sum_j \exp(q^\top k_j / \sqrt{d_k})}\, v_{\pi(i)}.
+$$
+
+Reindex by $i' = \pi(i)$, so $i = \pi^{-1}(i')$ ranges over $\{1, \dots, m\}$:
+
+$$
+= \sum_{i'=1}^{m} \frac{\exp(q^\top k_{i'} / \sqrt{d_k})}{\sum_j \exp(q^\top k_j / \sqrt{d_k})}\, v_{i'} = \text{attn}(q, K, V).\ \blacksquare
+$$
+
+Both the weights and the values are re-indexed by the same permutation, and the sum is over all indices, so the permutation has no effect.
+
+### 2.2 The full-sequence version
+
+For self-attention applied to a full sequence, the analogous statement is: permuting the rows of $X$ permutes the rows of $\text{Attn}(X W_Q, X W_K, X W_V)$ the same way. (This is *equivariance*, the symmetry we saw in [4.2 §2](/session/ch4-cnn-bridge/4.2-equivariance-receptive-fields) — except where convolution is *translation*-equivariant, attention is *permutation*-equivariant: it respects an even larger symmetry group.)
+
+The causal mask of [6.5](/session/ch6-attention-transformer/6.5-causal-masking) breaks permutation equivariance in *one specific way* — it forbids attending forward — but it does not encode the *distance* between positions. A query at position 5 sees its predecessor at position 4 as "just another key, indistinguishable from the key at position 1." The mask says "you may attend"; the model has no way to tell *what's how far away*.
+
+---
+
+## 3. Why this is wrong for language
+
+Three concrete failures with no positional signal:
+
+**(a) Word order is lost.** As above, *"the dog bit the man"* and *"the man bit the dog"* are *attention-indistinguishable* — both contain the same multiset of tokens, and unordered self-attention gives the same representations to both. The causal mask helps a little (different *prefix multisets*), but the *order within the prefix* is still invisible.
+
+**(b) Locality cannot be exploited.** The strongest statistical signal in language is that nearby tokens are semantically related. Without positional information, the model cannot prefer to attend to nearby keys over distant ones — it has to learn *content-only* rules, which is harder.
+
+**(c) Long-range identity coding fails.** "Token at position 5" cannot be distinguished from "token at position 50" if both are the same word type. Anaphora resolution ("the dog ... it ...") becomes impossible without some way to track *which* "it" refers to which "dog."
+
+The hardware fact: GPT-style models trained *without* positional encoding score at chance-level on these tasks. Position is not a nicety; it is load-bearing.
+
+---
+
+## 4. Three families of fixes
+
+How do you inject position into a permutation-symmetric operation? Three approaches, in chronological order of invention:
+
+### 4.1 Absolute positional encoding (AIAYN, GPT-2)
+
+Add a position-dependent vector $p_t \in \mathbb{R}^d$ to the embedding of token at position $t$ *before* the first attention layer:
+
+$$
+\tilde X_t = X_t + p_t.
+$$
+
+The function $t \mapsto p_t$ is either a fixed sinusoidal pattern (AIAYN — see [Appendix 6.A](/session/ch6-attention-transformer/6.A-sinusoidal-pe)) or a learned parameter matrix (GPT-2 — see [Appendix 6.B](/session/ch6-attention-transformer/6.B-learned-pe)).
+
+**Pros.** Simple. Lives entirely in the input. Has no impact on the attention operation itself.
+
+**Cons.** *Absolute.* The model learns that "position 50 is different from position 5" but does not naturally express *relative* position ("5 positions before me"). Generalising beyond the training context length is brittle: sinusoidal extrapolates with degraded quality, learned does not extrapolate at all.
+
+### 4.2 Relative positional encoding (Shaw et al., 2018; T5)
+
+Add a *learned bias* to the attention scores that depends on $i - j$ (the relative position of query and key):
+
+$$
+S_{ij} = \frac{q_i^\top k_j}{\sqrt{d_k}} + b_{i - j}.
+$$
+
+The bias $b_{i - j}$ is a function of the *signed offset only*, not of the absolute positions $i, j$. T5 (Raffel et al., 2020) uses this with bucketed offsets; Shaw et al. (2018) use full per-offset parameters.
+
+**Pros.** Naturally relative. Extrapolates more gracefully than absolute. Generalises well when fine-tuning on longer contexts.
+
+**Cons.** Introduces parameters tied to position. Slightly increases compute (a per-pair lookup in the attention).
+
+### 4.3 Rotary positional embedding (RoPE — Su et al., 2021)
+
+The modern standard. Don't *add* anything; instead, *rotate* the query and key vectors in 2D planes by an angle proportional to position:
+
+$$
+\tilde q_m = R_m\, q, \qquad \tilde k_n = R_n\, k,
+$$
+
+where $R_m, R_n$ are block-diagonal rotation matrices whose rotation angles scale with position $m, n$. The key identity (derived in 6.7) is:
+
+$$
+\tilde q_m^\top \tilde k_n = q^\top R_m^\top R_n\, k = q^\top R_{n - m}\, k.
+$$
+
+The dot product *automatically* depends only on the *relative* position $n - m$. No added parameters. No additive bias. Just a rotation applied to $q$ and $k$ before the dot product.
+
+**Pros.** Relative for free. No parameters. Decent extrapolation behaviour. Used by LLaMA, Mistral, Qwen, Gemini, Claude, and essentially every LLM from 2023 onward.
+
+**Cons.** Slightly more compute (the rotation). Extrapolation to context lengths much beyond training is still imperfect — fixes (NTK-aware scaling, YaRN) deferred to 7.13.
+
+---
+
+## 5. Why RoPE wins for modern LLMs
+
+The reasons compound:
+
+1. **No new parameters.** RoPE is parameter-free; the rotation angles are deterministic functions of position. Absolute and relative methods add parameters that scale with the context length budget.
+2. **Naturally relative.** $\tilde q_m^\top \tilde k_n$ depends only on $n - m$. This is what we want for language: "the verb is two positions after the subject" should be a *content*-independent fact about positions.
+3. **Compatible with the residual stream.** RoPE applies to $Q$ and $K$ *only*, not to the embedding stream. The residual stream stays clean and positional bias does not "leak" into the FFN.
+4. **Tractable extrapolation.** Position interpolation (Chen et al., 2023), NTK-aware scaling, and YaRN (Peng et al., 2023) all build cleanly on RoPE's rotation interpretation to extend context windows after training. We will see these in 7.13.
+
+The combination is unique to RoPE, which is why every major LLM family since 2022 has adopted it. The historical sinusoidal and learned methods are still worth knowing — they shaped many design decisions — and are detailed in the appendices.
+
+---
+
+## 6. What we keep going forward
+
+Two facts to take into 6.7:
+
+1. **Attention without positional information is permutation-equivariant.** This is the structural problem. Order is invisible.
+2. **The modern fix is RoPE — rotate $Q$ and $K$ in 2D planes by angles proportional to position.** The rotation makes the dot product $q^\top k$ depend only on the *relative* position. The next session derives this rigorously.
+
+<SelfTest>
+
+**(a)** Verify the permutation equivariance proof of §2.1 on a tiny example: $m = 3$, $q = (1, 0)$, $K, V$ as in [6.2 §5](/session/ch6-attention-transformer/6.2-scaled-dot-product-attention). Permute the rows of $K, V$ by $\pi = (3, 1, 2)$ and confirm the output is unchanged.
+
+**(b)** A self-attention layer with no positional encoding sees two sequences: "*the dog bit the man*" and "*the man bit the dog*." Argue from §2.2 that the *set* of output representations is the same — only the assignment of representations to positions differs. Why is this catastrophic for language modelling?
+
+**(c)** AIAYN's sinusoidal encoding satisfies a linear identity: $\text{PE}(t + k)$ is a linear function of $\text{PE}(t)$. Sketch why this makes "relative positional reasoning" easier than with a learned-table approach. (Full proof: Appendix 6.A.)
+
+**(d)** For T5-style relative positional bias $S_{ij} = q_i^\top k_j / \sqrt{d_k} + b_{i - j}$, how many learnable bias parameters are there in principle for a context length $T$? How does this compare with the parameter cost of a *learned* absolute positional embedding of context length $T$?
+
+**(e)** Sketch why RoPE has zero learnable parameters dedicated to position, while still encoding position. (Hint: the rotation angles are fixed functions of $t$, not learned.) What does this imply about how RoPE's positional information interacts with the embedding matrix?
+
+</SelfTest>

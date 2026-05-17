@@ -1,0 +1,171 @@
+---
+title: "6.3 — Self-attention vs cross-attention"
+chapter: 6
+order: 3
+estimatedMinutes: 16
+goal: "Specify where Q, K, V come from in practice: three separate linear projections of a single input (self-attention), or queries from one sequence and keys/values from another (cross-attention). Understand why three projections, and why the decoupling matters."
+prerequisites: ["ch6-attention-transformer/6.2-scaled-dot-product-attention"]
+---
+
+## 1. Why this session exists
+
+[6.2](/session/ch6-attention-transformer/6.2-scaled-dot-product-attention) wrote the attention operation as a function of three matrices $Q, K, V$ — but did not say *where they come from*. In a real Transformer, $Q$, $K$, and $V$ are all produced from the input embeddings by **learned linear projections**. This session specifies the wiring.
+
+Two patterns appear in practice:
+
+- **Self-attention.** $Q$, $K$, $V$ are all projections of the *same* input sequence. A token can attend to other tokens in its own sequence. Used everywhere in decoder-only LLMs (GPT, LLaMA, Claude, Mistral).
+- **Cross-attention.** $Q$ comes from one sequence; $K, V$ come from another. A token in one sequence attends to tokens in a *different* one. Used in encoder–decoder Transformers for translation (the original AIAYN setup) and in multimodal models where a text sequence attends to an image-token sequence.
+
+The single most-asked question once people see attention is "why three separate projections?" The answer is in §3.
+
+---
+
+## 2. Self-attention
+
+For an input sequence of $T$ tokens with embedded representations $X \in \mathbb{R}^{T \times d}$ (one embedding row per token), self-attention introduces three learnable matrices:
+
+$$
+W_Q \in \mathbb{R}^{d \times d_k}, \qquad W_K \in \mathbb{R}^{d \times d_k}, \qquad W_V \in \mathbb{R}^{d \times d_v},
+$$
+
+and computes:
+
+$$
+\boxed{\ Q = X W_Q, \qquad K = X W_K, \qquad V = X W_V, \qquad Y = \text{Attn}(Q, K, V). \ }
+$$
+
+All three matrices act on the *same* $X$ but with *different* weights. The output $Y \in \mathbb{R}^{T \times d_v}$ has one row per token — each row is what that token's query "found" by attending to all the keys.
+
+Most modern Transformers use $d_k = d_v$ (a single dimension we will just call $d_h$ — the "head dimension" — once we introduce multi-head in 6.4). In the single-head case $d_k = d_v = d$, but multi-head splits $d$ across heads.
+
+### 2.1 The slogan
+
+A clean way to read self-attention:
+
+> *"Each token computes a query, every token broadcasts a key and a value, and the token gathers a weighted mixture of values according to how well its query matches each key."*
+
+The mixing is *not* uniform across pairs of tokens (as it would be in some hand-wired graph) and *not* fixed by position (as in convolution). It is content-addressed: token $i$ attends to token $j$ if and only if $q_i^\top k_j$ is large.
+
+### 2.2 Why three matrices and not one
+
+The most common confusion: if $X$ produces both $Q$ and $K$ via linear maps, why not just use $X$ for both — set $Q = K = V = X$ and skip the projections?
+
+Four reasons.
+
+**(a) Three distinct roles.** Each token plays three different roles at the same position:
+
+- **As a query:** "what am I looking for?"
+- **As a key:** "what do I represent?"
+- **As a value:** "what do I contribute if attended to?"
+
+These are different questions and they need different answers. A learned linear projection lets the network express each role in its own subspace. Setting $Q = K$ forces "what I look for" and "what I represent" to be the same vector — pushing a token to attend mostly to itself, which destroys the operation's usefulness.
+
+**(b) Independent normalisation.** Queries and keys are dot-producted; their *magnitudes* matter. Values are averaged; their *directions and magnitudes* matter for content delivery. Decoupling lets the network normalise queries/keys for the dot-product geometry while letting values have whatever scale matches the downstream computation.
+
+**(c) Asymmetry.** The score $q_i^\top k_j$ is generally *not* equal to $q_j^\top k_i$ (with three different projections). This asymmetry is necessary for language: "the cat sat" should not give the same attention pattern as "sat the cat". If $Q = K$, the score is symmetric, and the attention matrix is symmetric — a serious expressive limit.
+
+**(d) Capacity.** Three independent projection matrices give the layer $3 d \cdot d_k$ parameters. With a single shared matrix it would be $d \cdot d_k$. The extra parameters are cheap relative to the FFN block (6.8), and they buy substantial expressive power.
+
+<Aside type="note">
+**Tied $K, V$ in some efficient variants.** Some recent architectures share the $K$ and $V$ projections (or some of their dimensions) across queries or heads — this is the **grouped-query attention (GQA)** and **multi-query attention (MQA)** trick of LLaMA-2/Mistral. The motivation there is inference-time KV cache memory, not training-time expressiveness. We will see this in 6.14 (Part 2). The standard architecture keeps $W_Q, W_K, W_V$ distinct.
+</Aside>
+
+---
+
+## 3. Cross-attention
+
+Cross-attention appears when there are *two* sequences and we want one to read from the other.
+
+The classic setting is the encoder–decoder Transformer for machine translation (Vaswani et al., 2017):
+
+- The **encoder** takes a source sequence $X^\text{src} \in \mathbb{R}^{T_\text{src} \times d}$ (e.g. an English sentence) and produces a contextualised representation $H^\text{src}$ via self-attention layers.
+- The **decoder** generates a target sequence $X^\text{tgt} \in \mathbb{R}^{T_\text{tgt} \times d}$ (e.g. a French translation), token by token. At each step, the decoder needs to "look at" the source to know what to translate. That look is cross-attention.
+
+In a cross-attention layer:
+
+$$
+\boxed{\ Q = X^\text{tgt} W_Q, \qquad K = H^\text{src} W_K, \qquad V = H^\text{src} W_V. \ }
+$$
+
+Queries come from the target sequence; keys and values come from the source. The output has shape $T_\text{tgt} \times d_v$ — one row per target token, each row a mixture of source representations.
+
+### 3.1 Cross-attention in modern LLMs
+
+Pure decoder-only LLMs (GPT, LLaMA, Mistral, Claude) use *only* self-attention. There is no separate encoder; the entire input — prompt and generated tokens — lives in one sequence and uses self-attention throughout.
+
+Cross-attention is still important in three modern settings:
+
+- **Encoder–decoder Transformers** (T5, original BART, mT5, Whisper). The encoder reads input, the decoder cross-attends to it while self-attending to the output. Whisper is the most familiar example — it cross-attends from text decoder to audio encoder.
+- **Multimodal models.** Vision-language models (Flamingo, IDEFICS, some early LLaVA variants) bridge an image encoder to a text decoder via cross-attention layers. The text decoder's queries attend to the image encoder's keys/values.
+- **Retrieval-augmented generation (RAG) variants.** Some architectures add a cross-attention layer that lets the model read from a separate "memory" or retrieved-document encoder.
+
+For the rest of this course's main path — decoder-only LLM pretraining — every attention layer is *self*-attention. We focus on the self-attention case from 6.4 onwards; cross-attention shares the same mathematics with a different source for $K, V$.
+
+---
+
+## 4. The full picture of one self-attention sub-layer
+
+Putting §2 together, the self-attention sub-layer of a Transformer is:
+
+$$
+\boxed{
+\begin{aligned}
+Q &= X W_Q, \\
+K &= X W_K, \\
+V &= X W_V, \\
+A &= \text{softmax}\!\left( \frac{Q K^\top}{\sqrt{d_k}} \right), \\
+Y &= A V.
+\end{aligned}
+}
+$$
+
+With $X \in \mathbb{R}^{T \times d}$, $W_Q, W_K \in \mathbb{R}^{d \times d_k}$, $W_V \in \mathbb{R}^{d \times d_v}$, attention matrix $A \in \mathbb{R}^{T \times T}$, output $Y \in \mathbb{R}^{T \times d_v}$.
+
+In multi-head attention (6.4), the same operation is run $h$ times in parallel on $h$ different projections of $X$, then concatenated. In 6.5 we add the causal mask. In 6.7 we modify $Q$ and $K$ for positional information. The block is then completed in 6.8 with an FFN.
+
+The four-line specification above is the entire content of "one attention head." All subsequent complexity is glue.
+
+---
+
+## 5. Parameter count
+
+For a single attention head with hidden size $d$ and head dim $d_k = d_v = d_h$:
+
+$$
+\#\theta_\text{attn-head} = 3 \cdot d \cdot d_h \quad \text{(for } W_Q, W_K, W_V\text{)}.
+$$
+
+Plus the output projection $W_O$ (introduced for multi-head in 6.4), which adds another $h \cdot d_h \cdot d = d^2$ parameters for the whole sub-layer.
+
+For $h$ heads with $d_h = d/h$ — the standard configuration — the total over $W_Q, W_K, W_V, W_O$ is
+
+$$
+\boxed{\ \#\theta_\text{self-attn} = 4 d^2. \ }
+$$
+
+A clean number to memorise: a self-attention sub-layer has $4 d^2$ parameters (ignoring biases, which are sometimes omitted in modern Transformers anyway). For $d = 4096$, that's $\sim 67$M parameters per self-attention block. The FFN block (6.8) will be twice as expensive — $8 d^2$.
+
+---
+
+## 6. What we keep going forward
+
+Two things to lock in for the rest of the chapter:
+
+1. **Self-attention is one specific wiring of the general attention formula.** $Q, K, V$ all come from the same input $X$ via three learned linear projections. The parameters of a self-attention layer are exactly $W_Q, W_K, W_V$ (plus $W_O$ once we go multi-head).
+2. **Cross-attention exists and is structurally identical**, except $K, V$ come from a different sequence. It powers encoder-decoder models and multimodal Transformers. Decoder-only LLMs do not use it.
+
+From 6.4 onward, "attention" means *self-attention* unless explicitly stated otherwise.
+
+<SelfTest>
+
+**(a)** Given $X \in \mathbb{R}^{T \times d}$ and projections $W_Q, W_K, W_V \in \mathbb{R}^{d \times d_h}$, write the entries $Q_{i,j}, K_{i,j}, V_{i,j}$ in terms of $X$ and the weight entries. Verify the shapes.
+
+**(b)** Show that if $W_Q = W_K$, the attention matrix $A = \text{softmax}(Q K^\top / \sqrt{d_k})$ is *symmetric* up to the softmax (i.e. the pre-softmax score matrix is symmetric). Argue why this is a problem for language modelling using a specific 3-word example.
+
+**(c)** A self-attention layer with $d = 1024$ and a single head has how many parameters in $W_Q, W_K, W_V$ alone? Same question for $d = 4096$.
+
+**(d)** Identify the queries, keys, and values in a Whisper-style speech-to-text cross-attention layer. What is the source sequence, what is the target sequence, and which tokens attend to which?
+
+**(e)** Decoder-only Transformers (GPT, LLaMA) need to know about the prompt and the generated text. Argue why "self-attention with a causal mask over the full prompt+generation sequence" plays the same role as the encoder–decoder split in machine-translation Transformers. (No formal proof needed — just the structural argument.)
+
+</SelfTest>

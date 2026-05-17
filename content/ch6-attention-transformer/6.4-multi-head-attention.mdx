@@ -1,0 +1,150 @@
+---
+title: "6.4 — Multi-head attention (MHA)"
+chapter: 6
+order: 4
+estimatedMinutes: 20
+goal: "Derive multi-head attention as h parallel copies of scaled dot-product attention operating on disjoint subspaces of dimension d/h. Understand why we split the heads rather than running a single d-dimensional attention, and count the parameters of the full sub-layer."
+prerequisites: ["ch6-attention-transformer/6.3-self-vs-cross-attention"]
+---
+
+## 1. Why this session exists
+
+A single attention head produces *one* attention pattern per query: each query distributes its weight across keys in *one* way. Empirically this turns out to be too constraining — a token often needs to attend to *several* different things simultaneously. A subject needs to attend to its verb (for tense agreement) *and* its modifying adjectives (for noun-phrase identity) *and* its discourse antecedent (for coreference). A single softmax-normalised distribution cannot do all three at once: probability mass spent on one pattern is mass not spent on another.
+
+**Multi-head attention (MHA)** is the architectural fix: run $h$ copies of the scaled dot-product attention of [6.2](/session/ch6-attention-transformer/6.2-scaled-dot-product-attention) **in parallel**, each on its own subspace of size $d/h$, then concatenate and project. Each head produces its own attention pattern, so the layer outputs $h$ independent mixtures of values per token.
+
+The derivation in §2 is mechanical; the *interpretation* in §4 is what makes the design memorable. The whole construction is one of the cleanest "trivial-looking trick that matters" moves in deep learning history.
+
+---
+
+## 2. The MHA operation
+
+Fix the hidden size $d$ and the number of heads $h$, with $d_h := d / h$ the per-head dimension. Each head $\ell \in \{1, \dots, h\}$ has its own three projection matrices:
+
+$$
+W_Q^{(\ell)} \in \mathbb{R}^{d \times d_h}, \qquad W_K^{(\ell)} \in \mathbb{R}^{d \times d_h}, \qquad W_V^{(\ell)} \in \mathbb{R}^{d \times d_h}.
+$$
+
+Given input $X \in \mathbb{R}^{T \times d}$, each head computes:
+
+$$
+\text{head}_\ell = \text{Attn}\!\left( X W_Q^{(\ell)},\ X W_K^{(\ell)},\ X W_V^{(\ell)} \right) \in \mathbb{R}^{T \times d_h}.
+$$
+
+The $h$ head outputs are then **concatenated** along the feature axis and projected back to dimension $d$ by a final output matrix $W_O \in \mathbb{R}^{d \times d}$:
+
+$$
+\boxed{\ \text{MHA}(X) = \text{Concat}\!\left( \text{head}_1, \dots, \text{head}_h \right) W_O \in \mathbb{R}^{T \times d}. \ }
+$$
+
+The concatenation produces a matrix of shape $T \times (h \cdot d_h) = T \times d$; the output projection mixes information across heads back into the model's main dimension.
+
+### 2.1 Implementation: one big GEMM, not $h$ small ones
+
+In code, MHA is *not* implemented as $h$ separate GEMMs. The standard implementation packs the per-head projections into single matrices:
+
+$$
+W_Q \in \mathbb{R}^{d \times d}, \quad W_K \in \mathbb{R}^{d \times d}, \quad W_V \in \mathbb{R}^{d \times d},
+$$
+
+each formed by horizontally concatenating the $h$ per-head matrices. Then one big multiply $Q = X W_Q$ gives a $T \times d$ matrix, which is *reshaped* to $T \times h \times d_h$ and treated as $h$ heads. The reshape and a per-head softmax are essentially free on the GPU; the expensive parts are the same matrix multiplies as for a single head with hidden size $d$.
+
+So MHA at the level of compute is "scaled dot-product attention applied along an extra batch axis." That batch axis is what makes the multi-head trick free in compute relative to single-head — it does no more work than a single-head attention with the same total dimension.
+
+---
+
+## 3. Parameter count
+
+Four matrices: $W_Q, W_K, W_V$ each in $\mathbb{R}^{d \times d}$, and $W_O \in \mathbb{R}^{d \times d}$. Total:
+
+$$
+\boxed{\ \#\theta_\text{MHA} = 4 d^2. \ }
+$$
+
+(Ignoring biases, which are typically omitted in modern Transformers.) **Independent of $h$.** Splitting into more heads does *not* add parameters. Each head has $3 d \cdot d_h$ parameters, times $h$ heads, gives $3 d \cdot (h\, d_h) = 3 d^2$ — back to where we started. Plus $d^2$ for $W_O$ gives $4 d^2$. The parameter budget per attention sub-layer is fixed.
+
+### 3.1 What you do trade off
+
+If $h$ is independent of parameter count, what does increasing $h$ cost?
+
+- **Per-head expressiveness.** Each head's $W_Q^{(\ell)}, W_K^{(\ell)}, W_V^{(\ell)}$ has only $3 d \cdot d_h$ params; large $h$ means small $d_h$ and a less expressive single head. Tiny $d_h$ (say 8 or 16) saturates softmax less but represents narrower subspaces.
+- **Compute is unchanged.** Total FLOPs are $\Theta(T^2 d)$ regardless of $h$ (the score matrix is still $T \times T$ per head, total $T \times T \times h$, with $d_h$ matrix dimension; the product gives the same $T^2 d$).
+- **Memory is roughly unchanged.** The attention matrix is $T \times T$ per head, $h \cdot T^2$ total. This is the same as a single-head attention of dimension $d$ which would have an $h \cdot T^2$ "implicit" pattern smoothed out by the larger projection.
+
+The standard choice is $d_h = 64$ — independent of $d$. So as models grow, the number of heads $h$ grows with $d$ (LLaMA-7B: $d = 4096, h = 32, d_h = 128$; LLaMA-70B: $d = 8192, h = 64, d_h = 128$). The $d_h = 64$ default was popularised by AIAYN and has remained sticky for two reasons:
+
+1. It is small enough that the $\sqrt{d_h} \approx 8$ scaling (6.2 §4) is not too extreme.
+2. It is large enough that each head expresses meaningful subspaces.
+
+---
+
+## 4. Why we don't fuse the heads: heads attend to different things
+
+The architectural payoff of MHA is that **different heads learn different attention patterns**, and a forward pass produces all of them in parallel. A single-head attention of the *same* total dimension would learn only one pattern per layer.
+
+Empirical work since the original paper has shown that, in trained Transformers, individual heads specialise:
+
+- Some heads attend to the immediately previous token (a "shift" pattern, useful for n-gram-like statistics).
+- Some attend to syntactic dependencies — e.g. the head of a noun phrase.
+- Some implement **induction heads** (Olsson et al., 2022), which copy a previous occurrence of the current token's "successor" — the building block of in-context learning.
+- Some attend uniformly (a "do nothing" head).
+- Some attend to a `[BOS]` token as a no-op sink.
+
+The interpretability literature (Cap 11) has by now catalogued many recurring head roles. None of them require multi-head *a priori*; the point is that a single dimension-$d$ softmax could not express several of these patterns simultaneously, while $h$ parallel dimension-$d_h$ softmaxes can.
+
+<Aside type="note">
+**MHA $\ne$ ensemble.** It is tempting to read MHA as "an ensemble of $h$ attention models." It is not — the heads are not trained independently, they are trained jointly within the same forward pass, and the final $W_O$ mixes their outputs linearly. A more accurate phrasing: MHA gives the layer **$h$ distinct softmax-rank-1 mixings** of the value matrix, and lets the network use them in any combination via $W_O$. The "ensemble" framing misleads about both the training and the inference behaviour.
+</Aside>
+
+### 4.1 Why a single big head fails
+
+Suppose we used one head of size $d$ instead of $h$ heads of size $d/h$. The parameter budgets match ($W_Q, W_K, W_V \in \mathbb{R}^{d \times d}$ in both cases). What changes?
+
+The single-head attention computes a single matrix $A \in \mathbb{R}^{T \times T}$ of weights: row $i$ is one probability distribution over the $T$ keys for query $i$. The output of the layer at position $i$ is **rank-1 in the value space** — it is one weighted combination of value rows.
+
+The multi-head attention computes $h$ matrices $A^{(\ell)} \in \mathbb{R}^{T \times T}$, each a separate distribution per query, and concatenates the outputs. The output at position $i$ is **rank-up-to-$h$ in the value space** — it is the concatenation of $h$ different weighted combinations, projected by $W_O$.
+
+So MHA does not just split a budget — it produces qualitatively more output capacity per attention sub-layer at the same parameter count. That is the structural reason every Transformer uses it.
+
+---
+
+## 5. Number of heads in practice
+
+| Model | $d$ | $h$ | $d_h$ |
+| --- | --- | --- | --- |
+| GPT-2 small | 768 | 12 | 64 |
+| GPT-2 medium | 1024 | 16 | 64 |
+| GPT-3 175B | 12288 | 96 | 128 |
+| LLaMA 7B | 4096 | 32 | 128 |
+| LLaMA 70B | 8192 | 64 | 128 |
+| Mistral 7B | 4096 | 32 | 128 |
+
+The pattern: $d_h \in \{64, 128\}$, $h$ scales with $d$. Other configurations exist (LLaMA-3 uses $d_h = 128$; Mamba-style models have no $h$ in this sense; small GPT-2 sticks with $d_h = 64$), but the centre of mass is here.
+
+For efficient inference, modern LLMs increasingly use **grouped-query attention (GQA)** or **multi-query attention (MQA)**, where $Q$ has the full $h$ heads but $K$ and $V$ are *shared* across heads or across groups of heads. This is a memory-bandwidth optimisation for the KV cache at inference — covered in 6.14 in Part 2. The training-time mathematics are unchanged from MHA above.
+
+---
+
+## 6. What we keep going forward
+
+Three sentences capture MHA for everything that follows:
+
+1. **Multi-head attention is $h$ parallel copies of scaled dot-product attention on disjoint $d/h$-dim subspaces, concatenated and projected.**
+2. **Total parameters of the sub-layer are $4 d^2$, independent of $h$.**
+3. **Different heads learn different attention patterns** — the qualitative payoff of the design.
+
+We have specified *what* attention computes; the remaining sessions in Part 1 specify *how the inputs and outputs are constrained*: causal masking (6.5), positional encoding (6.6–6.7), and the per-position FFN that completes the block (6.8).
+
+<SelfTest>
+
+**(a)** Confirm that for $h$ heads with $d_h = d/h$ and projections $W_Q^{(\ell)}, W_K^{(\ell)}, W_V^{(\ell)} \in \mathbb{R}^{d \times d_h}$, the *total* parameter count of all three matrix families is $3 d^2$, independent of $h$. Then add $W_O$ to recover $4 d^2$.
+
+**(b)** A Transformer has $d = 4096$ and you experiment with $h = 8, h = 32, h = 128$. For each, give $d_h$ and the per-head softmax temperature induced by the $\sqrt{d_h}$ scaling. Which configuration's softmax saturates fastest at initialisation?
+
+**(c)** Show that single-head attention with hidden size $d$ produces, at each query position, a *single* convex combination of the $T$ rows of $V$. Then show that MHA with $h$ heads produces a vector that is the projection of $h$ such combinations. Why does the latter have higher rank in the value space?
+
+**(d)** A Transformer block can be written as a sum: $\text{output}(x) = x + \text{MHA}(x) + \text{FFN}(x + \text{MHA}(x))$ (this is the pre-norm shape we will see in 6.10). Identify which residual stream each multi-head output is written into, and explain why this is consistent with "different heads do different things."
+
+**(e)** For LLaMA 70B ($d = 8192, h = 64, d_h = 128$), compute the parameter count of one MHA sub-layer (4 weight matrices, no biases). Compare with one FFN sub-layer of the same model assuming $d_\text{ff} = 4 d$ (we'll formalise this in 6.8).
+
+</SelfTest>
