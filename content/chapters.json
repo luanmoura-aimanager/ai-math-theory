@@ -27,6 +27,10 @@
     "title": "Chapter 6 — Attention and the Transformer",
     "order": 6
   },
+  "ch7-training-language-models": {
+    "title": "Chapter 7 — Training language models",
+    "order": 7
+  },
   "references-bibliography": {
     "title": "References & bibliography",
     "order": 99

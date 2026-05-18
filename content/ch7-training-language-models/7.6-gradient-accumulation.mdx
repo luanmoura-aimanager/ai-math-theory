@@ -1,0 +1,258 @@
+---
+title: "7.6 — Gradient accumulation and effective batch size"
+chapter: 7
+order: 6
+estimatedMinutes: 18
+goal: "Derive gradient accumulation: split a 2M-token effective batch into K micro-batches of 8k tokens, accumulate the gradient across them, then take one optimiser step. Understand the equivalence to true large-batch training and the small caveat about BatchNorm."
+prerequisites: ["ch7-training-language-models/7.4-mixed-precision", "ch3-optimization-regularization/3.1-batch-sgd-minibatch"]
+---
+
+## 1. Why this session exists
+
+A modern LLM training run uses *enormous* effective batch sizes — measured in tokens, often $1$–$4$ million per step. GPT-3 used a batch size of 3.2 million tokens; LLaMA-2 used 4 million; LLaMA-3 used 16 million. Why? Two reasons:
+
+- **SGD theory (3.1).** A large batch averages out gradient noise, giving a more accurate estimate of the true gradient. Large-batch training requires fewer total steps to converge.
+- **Hardware utilisation.** Each forward/backward pass has high per-call overhead (kernel launches, all-reduces in distributed training, optimiser state read/write). Larger batches amortise this.
+
+But a single GPU — even an H100 with 80 GB — cannot hold the activations of a 2M-token batch for a $> 1$B-parameter model. From [7.3 §5.5](/session/ch7-training-language-models/7.3-forward-pass-at-scale), activations dominate memory, and at long context the constraint is severe.
+
+The standard fix is **gradient accumulation**: rather than processing the full batch in one forward/backward pass, split it into $K$ smaller *micro-batches*, run forward/backward on each, **accumulate** the gradients (instead of taking an optimiser step), and only update parameters after all $K$ micro-batches are done. The result is mathematically equivalent to one large-batch step, achieved by trading wall-clock time (more sequential micro-batches) for memory (each micro-batch's activations fit).
+
+This is the simplest, oldest, and most-used technique to escape the activation-memory wall. Every modern pretraining recipe uses it.
+
+---
+
+## 2. The mathematics of accumulation
+
+Recall the SGD step ([3.1 §2](/session/ch3-optimization-regularization/3.1-batch-sgd-minibatch)). With effective batch size $B$ (number of samples in the batch), the per-step loss is
+
+$$
+\mathcal{L}(\theta) = \frac{1}{B} \sum_{i = 1}^{B} \ell_i(\theta),
+$$
+
+where $\ell_i$ is the per-sample loss. The gradient is
+
+$$
+g = \nabla_\theta \mathcal{L} = \frac{1}{B} \sum_{i = 1}^{B} \nabla_\theta \ell_i(\theta),
+$$
+
+and the optimiser update is $\theta \leftarrow \theta - \eta g$ (or Adam etc.).
+
+### 2.1 Splitting the batch
+
+Partition the $B$ samples into $K$ micro-batches of size $b = B / K$ each. The gradient becomes
+
+$$
+g = \frac{1}{B} \sum_{i = 1}^{B} \nabla_\theta \ell_i(\theta) = \frac{1}{K} \cdot \frac{1}{b} \sum_{k = 1}^{K} \sum_{i \in \text{micro-batch } k} \nabla_\theta \ell_i(\theta).
+$$
+
+Each inner sum $\frac{1}{b} \sum_{i \in \text{micro-batch } k} \nabla_\theta \ell_i$ is the gradient of the *average loss over micro-batch $k$* — call it $g_k$. So
+
+$$
+\boxed{\ g = \frac{1}{K} \sum_{k = 1}^{K} g_k. \ }
+$$
+
+The full-batch gradient is the *average* of the $K$ micro-batch gradients.
+
+### 2.2 The algorithm
+
+Equivalent recipe:
+
+```
+Initialize accumulator: G = 0
+For each micro-batch k = 1, ..., K:
+    Run forward pass on micro-batch k.
+    Compute loss ℓ_k = (1/b) Σ_{i ∈ μb_k} ℓ_i
+    Backward: g_k = ∇_θ ℓ_k
+    Accumulate: G ← G + g_k / K        # or equivalently: G ← G + g_k, then divide by K at the end
+
+Optimiser step: θ ← θ - η G
+G ← 0
+```
+
+After $K$ accumulations, $G = \frac{1}{K} \sum g_k = g_\text{full batch}$. Take one optimiser step. The result is mathematically identical to processing the full batch in one go.
+
+Note the per-micro-batch loss is divided by $b$ (the micro-batch size) — not by $B$. Then dividing the accumulator by $K$ normalises to the full-batch average. PyTorch implementations often divide by $B$ at the micro-batch loss level instead, achieving the same thing more directly:
+
+```python
+loss = compute_loss(micro_batch) / K   # divide by accumulation steps
+loss.backward()                         # accumulates into .grad
+if (step + 1) % K == 0:
+    optimizer.step()
+    optimizer.zero_grad()
+```
+
+Three lines. Every modern training loop has this idiom.
+
+---
+
+## 3. Effective batch size and tokens-per-step
+
+LLM batch sizes are usually measured in **tokens**, not samples — because what matters for SGD noise is the number of independent training signals, and each token in the sequence provides one ([5.3](/session/ch5-sequence-modeling/5.3-language-modeling-objective)). The effective batch is
+
+$$
+\text{tokens-per-step} = B \cdot T,
+$$
+
+where $B$ is the number of sequences per batch and $T$ is the sequence length.
+
+Headline numbers:
+
+| Model | Tokens/step | Setup |
+|---|---:|---|
+| GPT-2 | $\sim 0.5$M | Batch 512 sequences × $T = 1024$ |
+| GPT-3 | $\sim 3.2$M | Batch 1600 sequences × $T = 2048$ |
+| LLaMA-2-7B | $\sim 4$M | Batch 1024 sequences × $T = 4096$ (in some configs $T = 2048$) |
+| LLaMA-3-70B | $\sim 16$M | Batch 4096 sequences × $T = 8192$ |
+| GPT-4 (est) | $\sim 60$M | Estimated from leaks; not officially published |
+
+The trend: tokens-per-step grows roughly with model size, following the empirical scaling-law recipe (Cap 7.11 (Kaplan scaling laws)).
+
+### 3.1 How gradient accumulation enables this
+
+Suppose you have $D$ devices (GPUs), each with memory for $b_\text{device}$ tokens per micro-batch. With *no accumulation*, the effective batch is $b_\text{device} \cdot D$ tokens. With $K$ accumulation steps, the effective batch grows to $b_\text{device} \cdot D \cdot K$ tokens — at the cost of $K$× the wall-clock time per optimiser step.
+
+Example: training a 7B model on 64 H100s (80 GB each) with $T = 4096$, $b_\text{device} = 4$ sequences:
+
+- Raw per-step tokens: $4 \cdot 4096 \cdot 64 = 1.05$M.
+- With $K = 4$ accumulation steps: $4.2$M. Matches LLaMA-2's effective batch.
+
+The accumulation count is a *free parameter* — you increase it until you hit the desired tokens-per-step. Many production runs use $K = 1$ (data parallelism alone is enough); some use $K = 8$ or $16$ to push effective batch into the multi-million range without expanding the cluster.
+
+---
+
+## 4. The "mathematically equivalent" claim, with footnotes
+
+§2 said gradient accumulation is mathematically identical to one large-batch step. This is true for any module that processes each sample *independently*. It is **not** true for modules with cross-sample statistics.
+
+### 4.1 BatchNorm: not equivalent
+
+[3.C](/session/ch3-optimization-regularization/3.C-batchnorm) (Batch Normalization) normalises each feature by *the mean and standard deviation across the batch*. With micro-batches of size $b$, BatchNorm sees $b$ samples instead of $B$ — different statistics, different output. Gradient accumulation is *not* equivalent to one large-batch step under BatchNorm.
+
+This is one of several structural reasons modern LLMs use **LayerNorm or RMSNorm** ([3.8](/session/ch3-optimization-regularization/3.8-layernorm-rmsnorm)), which normalise within each sample independently — and are therefore invariant to batch size and gradient-accumulation-compatible. The whole pre-LN Transformer family is designed to be linear-in-batch, which is what makes accumulation work without caveats.
+
+### 4.2 Other potential pitfalls
+
+- **Dropout** ([3.B](/session/ch3-optimization-regularization/3.B-dropout)) uses different random masks per micro-batch by default. This is *desired* behaviour — each micro-batch contributes a slightly different gradient — and is equivalent in expectation to the large-batch case.
+- **Loss reductions over the batch.** If your loss is summed and then divided by $B$, make sure the $1/B$ division is consistent with the $1/K$ accumulator division (or use the $/K$ idiom of §2.2).
+- **Stochastic regularisation in general.** If a module has any "see-the-whole-batch" behaviour (mixup, label smoothing across batch), it breaks the equivalence.
+
+In a pre-LN Transformer with LayerNorm/RMSNorm and standard dropout, gradient accumulation is exact. This is the case for every modern LLM.
+
+---
+
+## 5. Wall-clock vs memory: the trade-off
+
+Gradient accumulation trades **wall-clock time per optimiser step** for **memory**. Specifically:
+
+- Without accumulation: $K = 1$, $1$ forward + $1$ backward per step.
+- With accumulation: $K > 1$, $K$ forwards + $K$ backwards per step. The total compute is *unchanged*; only the number of optimiser steps per token of training drops.
+
+Roughly:
+
+$$
+\text{wall-clock per step} = K \cdot \text{wall-clock per micro-batch} + \text{optimiser step cost}.
+$$
+
+The optimiser step cost is dominated by the parameter update + Adam state read/write, which is independent of $K$. So increasing $K$ scales total wall-clock for the same effective batch *almost* linearly.
+
+### 5.1 What this buys
+
+The benefit of large effective batch sizes is **gradient quality**: lower variance, fewer total optimiser steps to converge. Empirically (Kaplan et al. 2020, Cap 7.11 (Kaplan scaling laws)), increasing batch size up to the "critical batch size" reduces the number of training steps needed. Past the critical batch size, larger batches don't help further; you're just averaging redundant gradients.
+
+So **the right strategy is**:
+
+1. Pick the desired effective batch from scaling-law tables (typically $\sim 1$M–$10$M tokens for 1B–100B parameter models).
+2. Pick the largest per-device micro-batch that fits in memory after activation checkpointing ([7.7](/session/ch7-training-language-models/7.7-activation-checkpointing)).
+3. Set $K$ to make up the difference.
+
+### 5.2 The trade-off at extremes
+
+- **$K = 1$ (no accumulation).** Cheapest in wall-clock per step. Memory is the bottleneck; you may not reach the optimal effective batch.
+- **$K$ large.** Memory is fine. Wall-clock per step grows linearly with $K$. Practical maximum: $K = 16$ or $32$. Beyond that, the optimiser-step amortisation no longer pays off.
+- **Mixing accumulation with data parallelism.** $K$ accumulation steps × $D$ devices in DP-parallel = $K D$ micro-batches contributing to one optimiser step. Both knobs are at your disposal.
+
+---
+
+## 6. A worked example: pretrain a 1B model on 8 H100s
+
+Target effective batch: 2M tokens (a typical 1B-scale setting). Sequence length: $T = 4096$.
+
+```
+Effective batch in sequences: 2M / 4096 = 488 sequences (round to 512)
+Devices: D = 8
+Per-device per-micro-batch budget (after activation checkpointing): b_device = 16 sequences
+Sequences per accumulation step (across all devices): D · b_device = 128
+Accumulation count: K = 512 / 128 = 4
+```
+
+So: 4 accumulation steps × 8 devices × 16 sequences × 4096 tokens = 2.1M tokens-per-step. Each device runs 4 forward+backward passes per optimiser step, accumulating gradients locally; gradients are all-reduced across devices (Cap 7.8 — Data parallelism) and the optimiser step is taken on each device's local copy.
+
+Pseudocode:
+
+```python
+optimizer.zero_grad()
+for k in range(K):                                # 4 accumulation steps
+    micro_batch = next(train_loader)              # 16 sequences × 4096 tokens, per device
+    with autocast(dtype=torch.bfloat16):
+        loss = model(micro_batch).loss / K
+    loss.backward()                               # accumulates into .grad
+
+# All-reduce gradients across D devices (done automatically by DDP/FSDP at backward)
+# Take one optimiser step:
+optimizer.step()
+```
+
+That's it. Eight lines for an industrial-scale training step.
+
+---
+
+## 7. Loss-bookkeeping subtleties
+
+A common source of bugs: where exactly to apply the $1/K$ scaling.
+
+**Recommended (and the §2.2 idiom):** divide the per-micro-batch loss by $K$ before `backward()`. PyTorch's autograd then accumulates the scaled gradients automatically. After $K$ backward passes, the accumulated gradient is exactly $\frac{1}{K} \sum_k g_k$.
+
+**Alternative:** keep per-micro-batch loss un-scaled; divide each gradient by $K$ manually before the optimiser step. Equivalent, but easier to get wrong (e.g., forgetting to scale).
+
+**For logging:** if you log the loss every step, log the un-scaled per-micro-batch loss. The factor-of-$K$ scaling is an implementation detail, not a property of the optimisation.
+
+A subtle related issue: **mixed-precision loss scaling** (fp16, [7.4 §4](/session/ch7-training-language-models/7.4-mixed-precision)) interacts with gradient accumulation. Use the GradScaler around the accumulated step:
+
+```python
+optimizer.zero_grad()
+for k in range(K):
+    with autocast(dtype=torch.float16):
+        loss = model(micro_batch).loss / K
+    scaler.scale(loss).backward()                # scales gradient by S; accumulates
+scaler.step(optimizer)                            # unscales internally before stepping
+scaler.update()
+```
+
+With bf16, no scaler is needed (the cleaner case from [7.4 §5](/session/ch7-training-language-models/7.4-mixed-precision)).
+
+---
+
+## 8. What we keep going forward
+
+Three things:
+
+1. **Effective batch size = micro-batch size × accumulation steps × data-parallel devices.** This is the formula that connects per-device memory to scaling-law-prescribed batch size.
+2. **Accumulation is mathematically equivalent to large-batch training**, provided the architecture is linear in batch — which a pre-LN Transformer with LN/RMSNorm and dropout is.
+3. **The right idiom**: divide loss by $K$ inside the autograd graph; step the optimiser every $K$ micro-batches; this is 8 extra lines on top of a vanilla training loop.
+
+[Next session](/session/ch7-training-language-models/7.7-activation-checkpointing) tackles the *other* memory-saving trick: instead of holding all activations for the backward pass, *recompute* them on-the-fly. Trade compute for memory; pair with gradient accumulation to fit very large effective batches in modest memory.
+
+<SelfTest>
+
+**(a)** A pretraining run targets 4M tokens-per-step at $T = 4096$. You have $D = 32$ GPUs and can fit $b_\text{device} = 8$ sequences per micro-batch on each. What is $K$, the accumulation count?
+
+**(b)** Argue that gradient accumulation with $K$ steps is mathematically *exactly* equivalent to a single $K$-times-larger batch in a pre-LN Transformer (LayerNorm/RMSNorm + standard dropout). Where in the argument does the "linear-in-batch" property enter?
+
+**(c)** A model uses BatchNorm in some sub-layer (e.g., a CNN feature extractor on the embedding side). Argue why gradient accumulation is *not* exactly equivalent to a single large batch in this case. (Hint: BatchNorm computes statistics over the batch axis.)
+
+**(d)** State the wall-clock-per-optimiser-step formula as a function of $K$. Why does the optimiser-update cost not depend on $K$?
+
+**(e)** Read MegatronLM's training loop ([github.com/NVIDIA/Megatron-LM](https://github.com/NVIDIA/Megatron-LM), file `megatron/training.py`). Identify the gradient-accumulation idiom they use. How is it different from the simple `/ K` division of §7?
+
+</SelfTest>

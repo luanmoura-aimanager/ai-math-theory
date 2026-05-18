@@ -1,0 +1,243 @@
+---
+title: "7.11 — Scaling laws (Kaplan 2020)"
+chapter: 7
+order: 11
+estimatedMinutes: 28
+goal: "Derive Kaplan et al.'s empirical power-law scaling: L(N) ~ N^{-α_N}, L(D) ~ D^{-α_D}, joint L(N, D). Identify the irreducible-loss term L_∞. State what compute-, data-, and parameter-bottlenecked regimes look like, and the critical-batch-size empirical model. Set up the Chinchilla correction (7.12)."
+prerequisites: ["ch7-training-language-models/7.10-fsdp-zero"]
+---
+
+## 1. Why this session exists
+
+We have spent six sessions on *how* to train language models — data, tokenization, precision, parallelism. **Why** should anyone invest the resulting hundreds of GPU-years per training run? Because of the **scaling laws**: a small set of empirical power-law relationships that predict, with remarkable accuracy, how much loss reduction you get per parameter, per token, per FLOP.
+
+If you can predict the loss before spending the money, you can plan training runs rationally: pick the model size, the dataset size, and the compute budget that minimise loss subject to constraints. The scaling laws turned LLM development from "let's see what works" into "let's compute the optimum and book the GPUs".
+
+Two papers define the canonical picture:
+
+- **Kaplan, McCandlish, Henighan, Brown, et al., 2020, *Scaling Laws for Neural Language Models*** ([arXiv:2001.08361](https://arxiv.org/abs/2001.08361)) — this session. Derives the basic power laws and recommended scaling rules. Argued for ~7 parameters per token of training data (we'll see why this was wrong).
+- **Hoffmann, Borgeaud, et al., 2022, *Training Compute-Optimal Large Language Models* (Chinchilla)** — [next session](/session/ch7-training-language-models/7.12-chinchilla). Re-ran the analysis with more rigorous methodology and corrected Kaplan to ~20 tokens per parameter. Production LLMs from 2022 onward use the Chinchilla regime — but Kaplan's *framework* is the right one to learn first.
+
+This session: the three power laws, the joint formula, the irreducible-loss term, and the critical-batch-size model.
+
+---
+
+## 2. The three Kaplan power laws
+
+Kaplan et al. trained ~100 small Transformers (10M to 1.5B parameters) on subsets of a fixed corpus (24 B tokens) and measured the cross-entropy loss on a held-out set. They varied three things independently:
+
+1. **Model size $N$** (non-embedding parameters): from $10^7$ to $1.5 \cdot 10^9$.
+2. **Dataset size $D$** (tokens trained on): from $10^7$ to $10^{10}$.
+3. **Training compute $C$** (FLOPs spent on training): from $10^{12}$ to $10^{19}$.
+
+The remarkable empirical finding: **loss is a power-law function of each variable, holding the others fixed and large**.
+
+### 2.1 Loss vs parameter count
+
+Fix the dataset and run for a long time (so neither $D$ nor compute bottleneck). Then
+
+$$
+\boxed{\ L(N) = \Big(\frac{N_c}{N}\Big)^{\alpha_N} \ }
+$$
+
+with empirical fit $\alpha_N \approx 0.076$ and $N_c \approx 8.8 \cdot 10^{13}$. (The constants vary slightly across papers and datasets; Kaplan's exact values are in the paper's §3.1.)
+
+What this means concretely: doubling the parameter count reduces the loss by a factor $2^{-\alpha_N} = 2^{-0.076} \approx 0.949$, i.e. ~5% relative improvement. Geometrically. Forever. No diminishing returns in the regime tested.
+
+### 2.2 Loss vs dataset size
+
+Fix $N$ large enough to not bottleneck. Then
+
+$$
+\boxed{\ L(D) = \Big(\frac{D_c}{D}\Big)^{\alpha_D} \ }
+$$
+
+with $\alpha_D \approx 0.095$ and $D_c \approx 5.4 \cdot 10^{13}$. Doubling the data reduces loss by $\sim 6\%$ relative.
+
+### 2.3 Loss vs compute
+
+For a Kaplan-style "compute-bottlenecked" run (best model size and data size at fixed compute):
+
+$$
+\boxed{\ L(C) = \Big(\frac{C_c}{C}\Big)^{\alpha_C} \ }
+$$
+
+with $\alpha_C \approx 0.050$ and $C_c \approx 3.1 \cdot 10^8$ PF-days (petaflop-days).
+
+The compute exponent $\alpha_C$ is smaller than $\alpha_N$ or $\alpha_D$ because compute is "spent" across both axes; only some of every FLOP goes to model-size improvements, some to data improvements.
+
+### 2.4 The joint formula
+
+Kaplan also fitted a joint expression that interpolates between the two extremes:
+
+$$
+\boxed{\ L(N, D) = \Big[\, \Big(\tfrac{N_c}{N}\Big)^{\alpha_N / \alpha_D} + \tfrac{D_c}{D} \,\Big]^{\alpha_D}. \ }
+$$
+
+(There are constants in front; the form is what matters.) The shape: at fixed $D$, decreasing $N$ from infinity *eventually* dominates the loss; at fixed $N$, decreasing $D$ from infinity *eventually* dominates. The joint formula correctly predicts the cross-over.
+
+### 2.5 What is *not* in these formulas
+
+Three things to flag.
+
+**(a) No irreducible loss in this form.** As $N, D \to \infty$, the formulas predict $L \to 0$. But the *true* loss is bounded below by the data's entropy: the optimal predictor still has loss $H(\text{data})$. We patch this in §3.
+
+**(b) Exponents are *small*.** $\alpha_N \approx 0.076$ means *very* slow improvement — to halve the loss you need to scale $N$ by $2^{1/0.076} \approx 10^{4}$. Scaling laws are about *consistency*, not about cheap progress.
+
+**(c) The laws hold over many orders of magnitude.** $N$ from $10^7$ to $10^9$, but the laws also predict GPT-3 ($1.75 \cdot 10^{11}$) to within a couple of percent — they extrapolate.
+
+---
+
+## 3. The irreducible loss
+
+A better fit replaces the simple power law with an additive constant:
+
+$$
+\boxed{\ L(N) = L_\infty + \Big(\frac{N_c}{N}\Big)^{\alpha_N}. \ }
+$$
+
+The constant $L_\infty$ is the **irreducible loss** — the asymptotic floor as $N \to \infty$. Empirically $L_\infty \approx 1.69$ for the OpenAI WebText distribution at the byte level (in nats per token).
+
+What does this represent? Three contributions:
+
+1. **Data entropy.** The true conditional entropy of the next token given the past, $H(\text{token}_t | \text{token}_{<t})$. A perfect predictor still has this loss.
+2. **Bayes-irreducible noise.** Some tokens are simply unpredictable (e.g., a random username); no model achieves loss 0 on them.
+3. **Tokenization waste.** The cross-entropy of a non-optimal subword vocabulary versus the optimal one is a constant shift on top of (1).
+
+The irreducible loss is the limit; the power-law term is the *reducible* loss, which scales as $N^{-\alpha_N}$. **Modern training is exclusively in the reducible regime** — even GPT-4 is far from $L_\infty$.
+
+---
+
+## 4. Compute is the master variable
+
+Of the three axes ($N, D, C$), compute is the one that ultimately constrains *everything else*. The compute budget $C$ relates to $N$ and $D$ via the empirical rule of [6.12 Aside](/session/ch6-attention-transformer/6.12-compute-and-memory):
+
+$$
+\boxed{\ C \approx 6 N D \quad \text{(training FLOPs)}. \ }
+$$
+
+The factor 6: 2 forward FLOPs per parameter per token, plus 4 backward FLOPs per parameter per token, equals 6.
+
+So if you fix $C$, choosing $N$ determines $D$ (and vice versa). The interesting question is: *given a fixed compute budget, how should you allocate it between model size and dataset size to minimise loss?*
+
+### 4.1 Kaplan's recommendation
+
+Kaplan et al. argued: at fixed compute, **most of the budget should go to model size**, with relatively *little* data. Their derivation (§5.2) gave the optimum at
+
+$$
+N^\star \propto C^{0.73}, \qquad D^\star \propto C^{0.27}.
+$$
+
+So a $1000\times$ increase in compute should produce a $\sim 250\times$ larger model trained on only $\sim 6\times$ more data. The token-per-parameter ratio $D / N$ would be roughly constant at $\sim 7$ — meaning a 175B-parameter model needs only $\sim 1.2 \cdot 10^{12}$ tokens.
+
+**GPT-3 followed this recipe**: 175B parameters trained on 300B tokens (~1.7 tokens per parameter, even below Kaplan's prescription). And it worked: GPT-3 was an obvious step-change from GPT-2.
+
+The Kaplan recipe held until 2022 — when Chinchilla showed it was systematically wrong by a factor of $\sim 3$ in the optimal ratio. We will return to this in [7.12](/session/ch7-training-language-models/7.12-chinchilla).
+
+### 4.2 Why Kaplan's analysis was off
+
+In hindsight, Kaplan et al. made two methodological choices that biased the result:
+
+1. **Fixed learning rate.** They used the same LR schedule across model sizes. Hoffmann et al. showed that the LR should scale with $N$ (smaller $N$ needs smaller LR for stability), and not doing so under-trained the small models.
+2. **Limited compute regime.** Kaplan's largest experiment was $\sim 10^{19}$ FLOPs; the optimal regime is at $\sim 10^{22}$+ FLOPs. The extrapolation amplified small-model artefacts.
+
+Chinchilla corrected both, and the new optimum became "more data, smaller model" — see §7.12.
+
+---
+
+## 5. Critical batch size, revisited
+
+A central practical question: **how big should the batch be**? We met this in [7.8 §6](/session/ch7-training-language-models/7.8-data-parallelism) qualitatively. Kaplan-McCandlish made it quantitative.
+
+### 5.1 Definition
+
+Loosely: the **critical batch size** $B^*$ is the batch above which doubling the batch no longer halves the number of optimiser steps to a given loss. Below $B^*$, big batches save steps; above $B^*$, big batches just average redundant gradients.
+
+Formally, McCandlish et al. (2018) define $B^*$ as the batch size at which the (noise-equivalent) per-step *variance* of the gradient equals the per-step *systematic gradient*:
+
+$$
+B^* = \frac{\text{tr}(\Sigma)}{\|\nabla \mathcal{L}\|^2},
+$$
+
+where $\Sigma$ is the per-example gradient covariance and $\nabla \mathcal{L}$ is the true mean. The expression compares the noise (numerator) to the signal (denominator). At $B = B^*$, signal-to-noise ratio is 1.
+
+### 5.2 Empirical model
+
+Kaplan et al. give an empirical fit:
+
+$$
+B^*(\mathcal{L}) \approx B_\star \cdot \big(\mathcal{L} - L_\infty\big)^{-1 / \alpha_L},
+$$
+
+with $B_\star \approx 2.1 \cdot 10^8$ tokens and $\alpha_L \approx 0.21$. The result: $B^*$ *grows* as training proceeds (as $\mathcal{L}$ decreases). At the start of training, $B^* \approx 10^5$; near the end, $B^* \approx 10^7$.
+
+This is why frontier training runs ramp up the batch size during training: GPT-3 used a "batch ramp" from $32$K to $3.2$M tokens over the first ~10B tokens. Kaplan's model predicts this is optimal — small early batches save compute when gradients are noisy and the model learns fast.
+
+### 5.3 Practical implications
+
+Three things to keep:
+
+- **Don't over-batch.** Past $B^*$, each doubling buys nothing. Adding more DP devices is wasted.
+- **Ramp the batch.** Starting small and growing matches the increasing $B^*$, saving wall-clock.
+- **Critical-batch-aware schedules**. WSD ([3.7](/session/ch3-optimization-regularization/3.7-lr-schedules-and-clipping), [7.5](/session/ch7-training-language-models/7.5-data-mixing-curriculum)) interacts with the batch ramp: warmup uses small batches, the stable phase uses the largest sensible batches, the decay phase can use very large batches (since loss is changing slowly).
+
+---
+
+## 6. Beyond Kaplan: what carried over and what didn't
+
+After Chinchilla, what survives of Kaplan?
+
+**Survives:**
+
+- **Power-law shape.** $L(N), L(D), L(C)$ are still power laws. Only the exponents and the optimal allocation changed.
+- **Irreducible-loss formulation.** $L = L_\infty + \text{(power-law)}$ is the right functional form; subsequent papers refined the exponents.
+- **Critical batch size model.** Kaplan-McCandlish's framework is still the right tool for batch-size tuning.
+- **Extrapolation across many orders of magnitude.** Scaling laws *do* extrapolate; the field's planning is built on this.
+
+**Did not survive:**
+
+- **The optimal $D/N$ ratio.** Kaplan's $\sim 7$ became Chinchilla's $\sim 20$, and then Llama-3's $\sim 215$ (because of inference-cost amortisation; see [7.12](/session/ch7-training-language-models/7.12-chinchilla)).
+- **GPT-3-style "scale model, not data".** Replaced by "scale both, and over-train if you'll do many inference calls".
+- **The exact exponents.** Updated by Hoffmann et al. with better methodology.
+
+So Kaplan is *historically* important — the framework — but the *prescriptions* are obsolete. Always cite Chinchilla for actual recipe; cite Kaplan for the conceptual structure.
+
+<Aside type="history">
+**The "Scaling Hypothesis".** Kaplan's paper, more than any other, established the modern scaling-pilled mindset: predict-loss-from-compute is feasible, and *intelligence is a smooth function of scale*. Three years later, this thesis was widely accepted; five years later it's the operating assumption of every frontier lab. Without Kaplan's empirical demonstration, "let's spend $100M training a single model" would not have been a reasonable proposal. The scaling laws are *the* economic justification for billion-dollar training runs.
+</Aside>
+
+---
+
+## 7. The bigger picture
+
+The scaling laws are not just about predicting loss. They are about *predicting capabilities*:
+
+- **Loss is a proxy for capability.** Lower loss → better next-token prediction → better at downstream tasks (assuming reasonable evaluation). Empirically, loss is *very* well-correlated with benchmark performance across orders of magnitude of scale.
+- **Emergent abilities.** Some capabilities (chain-of-thought, in-context learning) appear *abruptly* at certain scales, even though loss continues its smooth power-law descent. Whether these are real "phase transitions" or measurement artefacts is debated (Wei et al. 2022 vs Schaeffer et al. 2023, Cap 11.8 (emergent abilities)). Either way, the *meta-pattern* — capabilities follow scale — is robust.
+- **Frontier planning.** Frontier labs use scaling laws (Chinchilla-style, plus newer corrections) to plan training runs months in advance. A typical decision: "given $10^{25}$ training FLOPs, what model size minimises validation loss? Run a sweep at $10^{22}$ to fit the exponent, extrapolate." The exponent is stable enough that this works.
+
+---
+
+## 8. What we keep going forward
+
+Three things:
+
+1. **Three power laws.** $L(N) \sim N^{-\alpha_N}$, $L(D) \sim D^{-\alpha_D}$, $L(C) \sim C^{-\alpha_C}$. Add an irreducible $L_\infty$. Exponents are small ($\sim 0.05$–$0.10$).
+2. **$C \approx 6 N D$** is the master conversion between compute, parameters, and tokens.
+3. **Critical batch size $B^*$ grows during training.** Don't over-batch; consider a batch ramp.
+
+[Next session](/session/ch7-training-language-models/7.12-chinchilla) is the Chinchilla correction: how the optimal $N$:$D$ ratio is actually $\sim 1$:$20$, not Kaplan's $\sim 1$:$7$, and what this implies for modern pretraining recipes (LLaMA-3 over-trains at $\sim 1$:$215$ because deployed inference cost dominates training cost).
+
+<SelfTest>
+
+**(a)** Re-derive the empirical conversion $C \approx 6 N D$. State which factor of 2 comes from the forward pass, which from the backward, and why there's an additional factor of $\frac{3}{2}$.
+
+**(b)** Kaplan reports $\alpha_N \approx 0.076$. State by what factor the loss decreases per doubling of $N$. By what factor does $N$ need to grow to halve the loss (assuming you're well above $L_\infty$)?
+
+**(c)** Compute the Kaplan-prescribed optimal allocation for $C = 10^{24}$ training FLOPs. (Use $N^\star \propto C^{0.73}$, $D^\star \propto C^{0.27}$; you can ignore the proportionality constants and just compute the ratio $D^\star / N^\star$.)
+
+**(d)** A model has $N = 7 \times 10^9$ parameters. At the Kaplan-recommended ratio of $D/N \approx 7$, how many training tokens does it need? At the Chinchilla-recommended ratio of $D/N \approx 20$? At the LLaMA-3-style $D/N \approx 215$ ratio?
+
+**(e)** Argue why the empirical exponents being small ($\alpha_N \approx 0.076$) is what makes the scaling laws *useful*: small exponents mean smooth extrapolation, but also that you need enormous scale changes to meaningfully reduce loss. (Hint: think about why GPT-4 is so much more expensive than GPT-3.)
+
+</SelfTest>

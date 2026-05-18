@@ -1,0 +1,254 @@
+---
+title: "7.9 — Tensor and pipeline parallelism (TP, PP)"
+chapter: 7
+order: 9
+estimatedMinutes: 28
+goal: "Derive tensor parallelism (Megatron-LM): column-shard W_1, row-shard W_2 inside the FFN so that the per-device compute is 1/T_p of the original with one all-reduce per block. Derive pipeline parallelism (GPipe, 1F1B): split the L-block stack across P_p devices, manage the bubble overhead. Identify when each is appropriate."
+prerequisites: ["ch7-training-language-models/7.8-data-parallelism", "ch6-attention-transformer/6.11-transformer-block-aiayn"]
+---
+
+## 1. Why this session exists
+
+Data parallelism ([7.8](/session/ch7-training-language-models/7.8-data-parallelism)) replicates the model and splits the batch. For models that don't fit on one device, you need to split the *model itself*. Two complementary ways:
+
+- **Tensor parallelism (TP).** Split each weight matrix across devices. Each device computes part of every matmul. Requires fine-grained communication ($\sim$one all-reduce per sub-layer); needs high intra-node bandwidth (NVLink).
+- **Pipeline parallelism (PP).** Split the layer *stack* across devices. Device 1 holds blocks 1–8, device 2 holds blocks 9–16, etc. Each microbatch flows through the pipeline. Communication is coarser (one send/recv between stages), so PP works across slower inter-node links.
+
+Frontier LLMs use *both*, composed with DP and FSDP:
+
+- TP within a node (high-bandwidth NVLink): typically $T_p \in \{2, 4, 8\}$.
+- PP across nodes (lower-bandwidth IB): typically $P_p \in \{2, 4, 8, 16\}$.
+- DP/FSDP as the outermost dimension to scale to more replicas.
+
+This session derives both axes. By the end you can read a frontier-training paper's "Parallelism configuration" section ("8-way TP, 4-way PP, 16-way DP, etc.") and recognise exactly what is being split where.
+
+---
+
+## 2. Tensor parallelism (TP)
+
+**Shoeybi, Patwary, Puri, et al., 2019, *Megatron-LM: Training Multi-Billion Parameter Language Models Using Model Parallelism*** ([arXiv:1909.08053](https://arxiv.org/abs/1909.08053)). The foundational TP paper.
+
+### 2.1 The FFN, sharded
+
+Consider one FFN sub-layer ([6.8](/session/ch6-attention-transformer/6.8-ffn)):
+
+$$
+y = W_2 \, \sigma(W_1 x), \qquad W_1 \in \mathbb{R}^{d_\text{ff} \times d}, \ W_2 \in \mathbb{R}^{d \times d_\text{ff}}.
+$$
+
+(We drop biases for clarity; they shard analogously.) Split the FFN across $T_p$ devices ("TP rank"). The trick: shard $W_1$ along its *output* dimension and $W_2$ along its *input* dimension.
+
+**Column-shard $W_1$:** divide the $d_\text{ff}$ rows into $T_p$ groups. Device $t$ holds $W_1^{(t)} \in \mathbb{R}^{(d_\text{ff} / T_p) \times d}$. Compute on device $t$:
+
+$$
+h^{(t)} = \sigma(W_1^{(t)} x) \in \mathbb{R}^{d_\text{ff} / T_p}.
+$$
+
+Note: $x$ is *the same* on every device. No communication needed; each device computes its own slice of the hidden activations. The non-linearity is element-wise so it commutes with the split.
+
+**Row-shard $W_2$:** divide the $d_\text{ff}$ columns into the same $T_p$ groups. Device $t$ holds $W_2^{(t)} \in \mathbb{R}^{d \times (d_\text{ff} / T_p)}$. Compute on device $t$:
+
+$$
+y^{(t)} = W_2^{(t)} h^{(t)} \in \mathbb{R}^d.
+$$
+
+Now $y^{(t)}$ is a *partial sum* — the contribution of device $t$'s share of hidden units to the output. The full output is
+
+$$
+y = \sum_{t = 1}^{T_p} y^{(t)}.
+$$
+
+**Sum-reduce.** One all-reduce across the $T_p$ devices at the *end* of the FFN gives every device the full $y$. The pattern is sometimes notated `f`-`g` (Megatron-LM's notation): $f$ is the identity at forward, all-reduce at backward; $g$ is the all-reduce at forward, identity at backward. The roles flip because of how gradients flow.
+
+The boxed result:
+
+$$
+\boxed{\ \text{FFN with column-row sharding: 1 all-reduce per FFN, all-reduce size = } B \cdot T \cdot d \text{ bytes.} \ }
+$$
+
+### 2.2 Attention, sharded
+
+Multi-head attention ([6.4](/session/ch6-attention-transformer/6.4-multi-head-attention)) is natively parallel across heads. Distribute the $h$ heads across $T_p$ devices: device $t$ owns $h / T_p$ heads. Compute Q, K, V projections, softmax, and value-mixing locally for those heads. Then row-shard the output projection $W_O$:
+
+$$
+\text{attn-out}^{(t)} = W_O^{(t)} \, \text{head-output}^{(t)},
+$$
+
+and all-reduce across $T_p$ to get the full attention output. Same pattern as the FFN: one all-reduce per sub-layer.
+
+**Both attention and FFN: 2 all-reduces per Transformer block under TP.**
+
+### 2.3 Memory and compute savings
+
+Per device, under $T_p$-way TP:
+
+- **Weights**: $1/T_p$ of the original (each matrix is sharded).
+- **Activations** for $W_1 x, h, W_2 h$ partial outputs: roughly $1/T_p$ of the inner widths.
+- **Compute**: $1/T_p$ of the matmuls per block.
+- **Communication**: 2 all-reduces per block, each of size $B T d$.
+
+For LLaMA-7B with $T_p = 8$: per-device weights drop from 14 GB to 1.75 GB. Per-block compute drops 8×. Cost: 2 all-reduces of size $\sim 130$ MB (at $B = 8, T = 4096, d = 4096$, bf16), $\sim 32$ blocks → 64 all-reduces per forward, 128 per training step (forward + backward).
+
+### 2.4 Why TP needs intra-node bandwidth
+
+Each all-reduce of size $\sim 130$ MB at $\sim 25$ GB/s IB takes $\sim 5$ ms. At 128 per step, that's $\sim 640$ ms of pure communication — bigger than the compute time. **TP across IB is impractical**.
+
+But on an 8-GPU node with NVLink (~900 GB/s within the node), the same all-reduce takes $\sim 150 \mu s$. 128 all-reduces is $\sim 20$ ms — easily hidden behind compute. **This is why TP is always within a node, and $T_p$ is typically at most 8 (= GPUs per node).**
+
+### 2.5 Sequence parallelism
+
+A refinement of TP: outside the matmuls (LayerNorm, dropout, residual add), shard along the *sequence dimension* instead of replicating. **Korthikanti et al., 2022, *Reducing Activation Recomputation in Large Transformer Models*** ([arXiv:2205.05198](https://arxiv.org/abs/2205.05198)) — the same paper as selective recomputation ([7.7 §7](/session/ch7-training-language-models/7.7-activation-checkpointing)). The activations of LN/dropout/residual scale linearly in $T$; sequence parallelism shards them across the same $T_p$ devices that hold the TP-sharded matmuls. Combined effect: per-device activation memory drops by $T_p$ uniformly.
+
+Adds two communications per block (gather + scatter), but the bytes are no more than TP's all-reduce, and they fit in the same hidden-behind-compute window. Standard in Megatron-LM since 2022.
+
+---
+
+## 3. Pipeline parallelism (PP)
+
+**Huang, Cheng, Bapna, et al., 2018, *GPipe: Efficient Training of Giant Neural Networks Using Pipeline Parallelism*** ([arXiv:1811.06965](https://arxiv.org/abs/1811.06965)). The foundational PP paper.
+
+### 3.1 The setup
+
+Split the $L$-block stack into $P_p$ contiguous *stages*. Device $p$ holds stages-worth of consecutive blocks: e.g., for $L = 32, P_p = 4$: device 0 holds blocks 1–8, device 1 holds 9–16, etc. Plus the embedding + LM head, which live on devices 0 and $P_p - 1$ respectively.
+
+Forward pass on one microbatch:
+
+1. Device 0 runs blocks 1–8, sends the output activation $X^{(8)}$ to device 1.
+2. Device 1 runs blocks 9–16, sends $X^{(16)}$ to device 2.
+3. ... etc., until device $P_p - 1$ runs the final blocks + LM head + loss.
+
+Backward pass: gradient flows back through the pipeline in reverse.
+
+### 3.2 The bubble
+
+A naïve PP implementation has the obvious problem: while device 1 runs, device 0 is idle (waiting for the backward pass to come back). With one microbatch, the wall-clock is $P_p \cdot (\text{forward cost per stage}) + P_p \cdot (\text{backward cost per stage})$ — but only one device works at a time. **Total efficiency: $1/P_p$.** Terrible.
+
+GPipe's fix: **microbatching**. Split the batch into $M$ microbatches; feed them through the pipeline staggered. Device 0 starts microbatch 1, then microbatch 2 (while microbatch 1 is on device 1), etc. Once the pipeline is full, all devices work simultaneously.
+
+The wall-clock becomes $(M + P_p - 1)$ time-units (forward), plus the same for backward, plus the optimiser step. The **bubble** — idle time at the start and end — is $(P_p - 1)$ out of $(M + P_p - 1)$ time-units. Bubble fraction:
+
+$$
+\text{bubble} = \frac{P_p - 1}{M + P_p - 1}.
+$$
+
+Set $M \gg P_p$ to keep the bubble small. For $P_p = 8, M = 32$: bubble fraction $\approx 18\%$ — manageable. For $P_p = 8, M = 8$: bubble fraction $\approx 47\%$ — wasteful.
+
+The catch: $M$ microbatches need $M$ activation buffers stored simultaneously (for the eventual backward), so PP's memory cost grows linearly in $M$ unless mitigated.
+
+### 3.3 1F1B (one-forward-one-backward)
+
+**Narayanan, Harlap, et al., 2019, *PipeDream*** ([arXiv:1806.03377](https://arxiv.org/abs/1806.03377)). Improves on GPipe: as soon as a microbatch finishes forward, start its backward instead of waiting for all forwards. The schedule becomes alternating: $F_1, F_2, B_1, F_3, B_2, F_4, B_3, \dots$ — "one forward, one backward".
+
+Two benefits:
+
+- **Memory drops.** Each microbatch's activations are released as soon as its backward completes. Steady-state memory holds only $P_p$ activations per device (one per microbatch currently in flight), not $M$.
+- **Bubble unchanged.** Same total wall-clock as GPipe; just different memory profile.
+
+1F1B is the standard PP schedule in 2024–2026 (Megatron-LM, DeepSpeed). GPipe's "all forwards then all backwards" is still used in some frameworks because it's simpler, at the cost of activation memory.
+
+### 3.4 Interleaved pipeline
+
+**Megatron-LM v2 (Narayanan et al., 2021).** A further refinement: instead of contiguous stages (blocks 1–8 on device 0, 9–16 on device 1, etc.), interleave. Device 0 owns blocks $\{1, 5, 9, 13, \dots\}$ (every 4th), device 1 owns $\{2, 6, 10, 14, \dots\}$, etc. With $v$ virtual stages per device, the bubble fraction becomes
+
+$$
+\text{bubble}_\text{interleaved} = \frac{1}{v} \cdot \frac{P_p - 1}{M + P_p - 1}.
+$$
+
+Bubble divided by $v$. The cost: more cross-stage sends per microbatch (now $v \cdot P_p$ instead of $P_p$). On NVLink+IB, the extra communication is tolerable; on slower links it isn't.
+
+Interleaved schedules are standard in frontier LLM training (Megatron-LM, FairScale's PP).
+
+### 3.5 PP across nodes
+
+Unlike TP, PP only sends *boundary activations* between stages — $B \cdot T \cdot d$ bytes per microbatch per boundary. For LLaMA-7B at $B = 8, T = 4096, d = 4096$ in bf16: 1 GB per microbatch per boundary, sent once per forward and once per backward. Even on IB at 25 GB/s, this is $\sim 40$ ms per boundary — small relative to the compute per stage.
+
+**This is why PP is the natural choice for *inter-node* parallelism.** TP's high-frequency all-reduces need NVLink; PP's coarse activations tolerate IB.
+
+---
+
+## 4. Composing TP, PP, DP, FSDP
+
+In a frontier pretraining run, all four axes compose. The standard topology:
+
+| Axis | Width | Located | Communication primitive |
+|---|---|---|---|
+| **TP** | $T_p$ | Within a node (NVLink) | All-reduce per sub-layer |
+| **PP** | $P_p$ | Across nodes (IB) | Send/recv between stages |
+| **DP / FSDP** | $D$ | Across all $T_p \cdot P_p \cdot D$ devices | All-reduce / all-gather |
+| Total devices | $T_p \cdot P_p \cdot D$ | | |
+
+LLaMA-3-70B was reportedly trained on 16384 GPUs configured roughly as $T_p = 8$, $P_p = 16$, DP/FSDP-128. The product: $8 \cdot 16 \cdot 128 = 16{,}384$.
+
+### 4.1 Which axis to pick first?
+
+A rough heuristic:
+
+1. **TP up to $T_p = 8$**, since that's one node's NVLink domain.
+2. **PP up to whatever you need** to fit the model: $L / P_p$ blocks must fit on one device's TP-shard.
+3. **DP/FSDP** to scale to more replicas / shrink optimiser memory.
+
+For LLaMA-70B, $L = 80$ blocks, $d = 8192$. Per-block parameters (under $T_p = 8$): $12 d^2 / T_p = 1.6 \times 10^8$ = 320 MB in bf16. Even with all-blocks-checkpointed, you need PP to spread the $L = 80$ blocks across multiple devices once you account for activations and ZeRO-sharded optimiser state. $P_p = 16$ gives $80/16 = 5$ blocks per device per TP-shard — comfortable.
+
+### 4.2 The DP-or-FSDP question
+
+DP keeps full parameters on each replica; FSDP shards them. Modern practice:
+
+- For sub-7B models: DP or DP + ZeRO-1 (optimiser-state sharding). Activations + small model fit.
+- For 7B–70B: FSDP/ZeRO-3 (full sharding) is needed; TP may also be used for the largest activations.
+- For 70B+: TP + PP + FSDP, in roughly that order.
+
+There is no algorithmic rule; you tune by what fits in memory and what minimises communication. Modern training stacks (Megatron-LM, NeMo, ColossalAI) automate the configuration search.
+
+---
+
+## 5. Communication summary
+
+Per training step, per device, the four axes contribute:
+
+| Axis | Volume per step | Locality |
+|---|---|---|
+| DP | $2 G_\text{global} (D-1)/D$ | Across all devices |
+| FSDP | $\sim 3 G_\text{global}$ (all-gather + reduce-scatter) | Across DP ranks |
+| TP | $\sim 4 L B T d$ (all-reduces per block) | Within TP group |
+| PP | $\sim 2 (P_p - 1) M B T d$ (microbatch boundaries) | Between PP stages |
+
+Where $G_\text{global}$ is the gradient size of the full (un-sharded) model. The TP and PP volumes scale with $L, B, T, d$ — independent of the parameter count *per se*. The DP/FSDP volumes scale with the parameter count.
+
+Total per-step communication for a 70B-parameter run can be 50–200 GB per device — a substantial fraction of compute time. **Hiding it behind compute via overlap and pipelining is the central engineering problem** of large-scale LLM training.
+
+---
+
+## 6. Sequence parallelism (briefly) and context parallelism
+
+Two more axes that exist in some frameworks:
+
+- **Sequence parallelism (SP)** ([§2.5](#)). A TP-extension; shards activations along the $T$ dimension for sub-layers outside matmuls (LN, dropout). Combined with TP, gives uniform $T_p$-way activation sharding.
+- **Context parallelism (CP)** (also called Ring Attention, [Liu et al., 2023, arXiv:2310.01889](https://arxiv.org/abs/2310.01889)). Splits the sequence dimension across devices specifically for attention's $T^2$ memory at very long context. Each device computes attention on its sequence chunk; partial results are passed in a ring. Used by Gemini 1.5 for 1M+ context training.
+
+These are the bleeding edge of long-context training; most production stacks include them as optional axes.
+
+---
+
+## 7. What we keep going forward
+
+Three things:
+
+1. **Tensor parallelism** shards the matmuls themselves (column-shard $W_1$, row-shard $W_2$, all-reduce at the end). Two all-reduces per Transformer block. **Use within a node, $T_p \leq 8$.**
+2. **Pipeline parallelism** shards the layer stack into stages and microbatches the input. **Use across nodes, $P_p \leq 16$ or so.** 1F1B and interleaved schedules minimise the bubble.
+3. **Compose TP × PP × DP/FSDP** for frontier-scale training. LLaMA-70B used $8 \times 16 \times 128 = 16{,}384$ GPUs in this configuration.
+
+[Next session](/session/ch7-training-language-models/7.10-fsdp-zero) opens the third lever — **FSDP / ZeRO** — that shards the parameters, gradients, and optimiser state *within* the DP dimension, achieving "DP that fits 70B models".
+
+<SelfTest>
+
+**(a)** Re-derive the column-row sharding of the FFN. Why does sharding $W_1$ along output and $W_2$ along input *only require one all-reduce* (rather than two)? Where does the all-reduce occur in the forward pass?
+
+**(b)** For LLaMA-7B at $B = 8, T = 4096, d = 4096, L = 32$ under $T_p = 8$-way TP, compute (i) the per-device weight memory, (ii) the all-reduce volume per block, and (iii) the total all-reduce volume per forward pass.
+
+**(c)** Pipeline parallelism with $P_p = 8$ stages and $M = 32$ microbatches has bubble fraction $\frac{P_p - 1}{M + P_p - 1}$. Compute this. Now compute the same for interleaved PP with $v = 4$ virtual stages.
+
+**(d)** Why is TP almost always intra-node and PP usually inter-node? State the communication-frequency and -bandwidth requirements of each.
+
+**(e)** A frontier run uses $T_p = 8, P_p = 16, D = 64$. State the total number of devices, and explain where each axis sits in the network topology (NVLink within a node, IB between nodes, etc.). Why is this called "5D parallelism" when you count sequence parallelism?
+
+</SelfTest>

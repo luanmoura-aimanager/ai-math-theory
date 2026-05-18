@@ -1,0 +1,213 @@
+---
+title: "7.7 — Activation checkpointing (gradient checkpointing)"
+chapter: 7
+order: 7
+estimatedMinutes: 22
+goal: "Derive activation checkpointing as a compute-memory trade: store activations at every √L blocks instead of every block; recompute the missing ones during the backward pass. Quantify the trade (memory ↓ √L, compute ↑ 33%) and identify where it sits in the modern training stack."
+prerequisites: ["ch7-training-language-models/7.6-gradient-accumulation", "ch2-mlps-backprop/2.11-autodiff-forward-reverse"]
+---
+
+## 1. Why this session exists
+
+Activation memory dominates the per-step training budget ([7.3 §5.5](/session/ch7-training-language-models/7.3-forward-pass-at-scale), [7.4 §7](/session/ch7-training-language-models/7.4-mixed-precision)). For a 7B-parameter model at $T = 4096$ in bf16, activations are tens of GB *per layer*; across $L = 32$ layers, the total exceeds any single GPU's memory by an order of magnitude.
+
+[7.6](/session/ch7-training-language-models/7.6-gradient-accumulation) gave us one tool — gradient accumulation — that limits *batch size* without changing per-batch memory. **Activation checkpointing** is the complementary tool: it limits *per-batch* activation memory without changing batch size.
+
+The idea is classical autodiff [2.11](/session/ch2-mlps-backprop/2.11-autodiff-forward-reverse): the backward pass needs every intermediate activation, but we can choose to *store* some and *recompute* others. The trade-off is compute vs memory. Pick the right balance and you can train models with activation memory $\sqrt{L}\times$ smaller at the cost of $\sim 33\%$ more compute.
+
+Introduced by **Chen, Xu, Zhang & Guestrin, 2016, *Training Deep Nets with Sublinear Memory Cost*** ([arXiv:1604.06174](https://arxiv.org/abs/1604.06174)) — sometimes called "gradient checkpointing" or "activation recomputation." Universal in modern LLM training.
+
+---
+
+## 2. The default: store everything
+
+Recall the backward pass ([2.11 §3](/session/ch2-mlps-backprop/2.11-autodiff-forward-reverse)). For a forward chain $x_0 \to x_1 \to \dots \to x_L$ with $x_\ell = f_\ell(x_{\ell-1})$, the chain rule produces
+
+$$
+\frac{\partial \mathcal{L}}{\partial x_{\ell-1}} = \frac{\partial \mathcal{L}}{\partial x_\ell} \cdot J_\ell(x_{\ell-1}),
+$$
+
+where the Jacobian $J_\ell(x_{\ell-1})$ requires *both* $x_{\ell-1}$ (to evaluate the Jacobian function) and the weights of $f_\ell$. **All $x_0, \dots, x_L$ must be available during the backward pass.**
+
+In a standard implementation, the forward pass stores every $x_\ell$ as it goes. Memory cost:
+
+$$
+M_\text{naive} = L \cdot |x_\ell|,
+$$
+
+where $|x_\ell|$ is the size of one activation tensor (a function of $B, T, d$, etc., in fp16/bf16). For GPT-2-small at $B = 8, T = 1024$: $|x_\ell| \approx 6.3$ MB; over $L = 12$ layers, $\sim 76$ MB. For LLaMA-7B at $B = 8, T = 4096$: $|x_\ell| \approx 0.5$ GB; over $L = 32$ layers, $\sim 16$ GB. For the activations *inside* each block (attention scores especially) the numbers are an order of magnitude larger; [7.3 §5.5](/session/ch7-training-language-models/7.3-forward-pass-at-scale) gave the full table.
+
+The naive approach is impossible at scale.
+
+---
+
+## 3. The other extreme: recompute everything
+
+Imagine the opposite: store *only* $x_0$. To get $\partial \mathcal{L} / \partial x_{\ell-1}$ at layer $\ell$, re-run the forward pass from $x_0$ up to $x_\ell$ (using the now-stored gradient at $x_\ell$). After computing $\partial \mathcal{L} / \partial x_{\ell-1}$, discard everything except $x_{\ell-1}$.
+
+This costs $O(L)$ recomputations for each of $L$ layers — total $O(L^2)$ forward FLOPs on top of the original $O(L)$. Memory drops to $O(1)$ per layer's activations, but compute blows up quadratically.
+
+Modern training cannot afford either extreme: store-everything blows out memory; recompute-everything blows out compute. The sweet spot is in between.
+
+---
+
+## 4. The $\sqrt{L}$ trick
+
+**Chen et al. (2016)'s key idea.** Partition the $L$ layers into $\sqrt{L}$ groups of $\sqrt{L}$ layers each. Store *only* the activations at the boundaries of each group; recompute the inner activations of each group during backward.
+
+### 4.1 The recipe
+
+1. **Forward pass.** Run normally; store the activations at $\ell = 0, \sqrt{L}, 2\sqrt{L}, \dots, L$. Discard everything else.
+2. **Backward pass.** When you need the gradient at some intermediate $\ell$, identify which group $\ell$ belongs to. Re-run the forward from the *previous* checkpoint (e.g., from $k\sqrt{L}$) up to $\ell$, regenerating the missing activations. Compute the gradient. Then discard the regenerated activations and move on.
+
+### 4.2 Memory and compute
+
+**Memory.** Stored boundary activations: $\sqrt{L}$ entries, each $|x_\ell|$ in size. **In-flight recomputation buffer**: at most $\sqrt{L}$ activations from one group, since we recompute one group at a time. Total:
+
+$$
+M_\text{checkpoint} = 2 \sqrt{L} \cdot |x_\ell|.
+$$
+
+Down from $L |x_\ell|$ by a factor of $\sqrt{L}/2$. For $L = 96$ (GPT-3 depth), this is roughly $5\times$ less memory.
+
+**Compute.** The naive forward is $L$ block-forwards. Checkpointing adds *one extra forward* for each group of $\sqrt{L}$ blocks during the backward — total $\sqrt{L}$ groups, each contributing $\sqrt{L}$ block-forwards. So the extra compute is $L$ block-forwards.
+
+The backward itself is roughly $2\times$ the forward in compute. So total cost without checkpointing is $1 + 2 = 3$ forward-equivalents per step. With checkpointing, it's $1 + 2 + 1 = 4$ forward-equivalents. That is **33% more compute**.
+
+The boxed trade:
+
+$$
+\boxed{\ \text{checkpointing reduces activation memory by }\sqrt{L} \text{ at a cost of }\sim 33\%\text{ more compute.} \ }
+$$
+
+For $L = 96$ (GPT-3): memory ÷ $\sim 10$, compute × $1.33$. **An excellent trade**.
+
+---
+
+## 5. The general checkpoint pattern
+
+We don't have to use $\sqrt{L}$ groups; any partition $L_1, L_2, \dots, L_K$ with $\sum L_k = L$ works. With $K$ checkpoints:
+
+$$
+M = K \cdot |x_\ell| + \max_k L_k \cdot |x_\ell|, \quad \text{extra compute} = L \cdot \text{block-forward cost}.
+$$
+
+For uniform $L_k = L/K$, optimising memory (minimising the sum) gives $K = \sqrt{L}$ — the §4 choice.
+
+Modern implementations often go further: checkpoint **every block**. That's $K = L$, with no intra-block recomputation needed (each block recomputed fully during its own backward). Memory: $L \cdot |x_\text{block boundary}|$ — only the residual stream is stored, not the intermediate FFN hidden / attention scores. Compute overhead: still $\sim 33\%$.
+
+This is the standard PyTorch idiom:
+
+```python
+from torch.utils.checkpoint import checkpoint
+
+def block_forward(X):
+    # one residual-stream → residual-stream block
+    X = X + attn(ln1(X))
+    X = X + ffn(ln2(X))
+    return X
+
+# In the model's forward pass:
+for block_module in self.blocks:
+    X = checkpoint(block_module, X, use_reentrant=False)
+```
+
+`checkpoint(module, X)` calls `module(X)` during forward but does *not* store the internal activations. During backward, it re-runs `module(X)` to regenerate them on demand.
+
+---
+
+## 6. Why this is the right granularity
+
+Why checkpoint at the **block boundary** rather than at every layer (FFN, LN, attention)?
+
+Inside one block, the *biggest* activations are the attention scores $A \in \mathbb{R}^{B \times h \times T \times T}$ (size $B h T^2$, growing with $T^2$) and the FFN hidden $H \in \mathbb{R}^{B \times T \times 4d}$. Both are dropped when we re-run the block from its residual-stream input. So **checkpointing the block** sheds the worst-case attention-score and FFN-hidden buffers — exactly what we want.
+
+The cost of recomputing one block is: one MHA forward + one FFN forward + two LNs $\approx 33\%$ extra over the original forward (the inner detail: backward is $2\times$ forward; adding one extra forward makes total $3 + 1 = 4$, hence $33\%$).
+
+You could checkpoint at finer granularity (per-layer within a block) but the memory savings diminish: the residual-stream is anyway preserved across the block, and the per-layer activations within a block aren't the biggest things. Block-level checkpointing is the sweet spot.
+
+---
+
+## 7. Selective checkpointing
+
+A 2023+ refinement: instead of checkpointing *whole blocks*, checkpoint only the **most-expensive-to-store** activations. The clearest example: attention scores.
+
+**Korthikanti et al., 2022, *Reducing Activation Recomputation in Large Transformer Models*** ([arXiv:2205.05198](https://arxiv.org/abs/2205.05198)) describe **selective activation recomputation** in Megatron-LM. Their key insight:
+
+- Storing the residual stream + FFN hidden + LN inputs is cheap (linear in $T$).
+- Storing the attention scores is expensive (quadratic in $T$, $B h T^2$).
+- The attention scores are also cheap to recompute (one extra $Q K^\top$ matmul).
+
+So: store everything *except* the attention scores; recompute scores during backward. This shaves the $h T^2$ memory term while adding only the cost of one matmul — much less than 33% overhead.
+
+For LLaMA-7B at $T = 4096$: selective recomputation drops activation memory from $\sim 16$ GB to $\sim 4$ GB at $\sim 5\%$ extra compute, vs full block-level checkpointing which drops to $\sim 1$ GB at $\sim 33\%$ extra compute. Different sweet spots; both are used in production.
+
+### 7.1 FlashAttention as the natural fit
+
+[FlashAttention (Dao et al., 2022)](https://arxiv.org/abs/2205.14135) is a fused attention kernel that *never materialises the score matrix* in HBM — it tiles the $Q K^\top$ and softmax into SRAM-friendly blocks. Selective recomputation of attention scores is essentially "what FlashAttention already does for free." The two ideas converge.
+
+In practice: any modern LLM trained with PyTorch's `scaled_dot_product_attention` (with the `is_causal` flag and SDPA-backend selection) gets attention-score recomputation automatically. You don't need to manually checkpoint the attention sub-layer; it's handled at the kernel level. Block-level checkpointing then only covers the FFN and residual-stream activations.
+
+We come back to FlashAttention in Cap 10.5 (inference side, but the same kernel is used in training).
+
+---
+
+## 8. Interaction with gradient accumulation
+
+Checkpointing and gradient accumulation are **independent and additive**.
+
+- **Gradient accumulation**: reduces *peak memory* by processing fewer samples per micro-batch ([7.6](/session/ch7-training-language-models/7.6-gradient-accumulation)).
+- **Activation checkpointing**: reduces *per-micro-batch peak memory* by recomputing instead of storing activations.
+
+Combined: you can train a 7B model at 4M-token effective batch on relatively modest hardware. A typical recipe:
+
+- Per-device micro-batch: $b = 2$ sequences, $T = 4096$.
+- Per-block activation checkpointing: ~5 GB activation memory per device.
+- Accumulation: $K = 8$ steps to reach 16 micro-batches × $D = 32$ devices × $T = 4096 = 2$M tokens-per-step.
+- Total memory: $\sim 20$ GB for non-activations + $\sim 5$ GB activations = $\sim 25$ GB. Fits on a single H100 (80 GB) with comfortable headroom.
+
+Without checkpointing, the activations would be $\sim 30$ GB; with the optimiser state added, training would not fit. Checkpointing is the load-bearing memory optimisation.
+
+---
+
+## 9. Why it always works (and a tiny exception)
+
+The mathematical guarantee: **as long as the forward pass is deterministic given its inputs, recomputing it produces the same result**. Backward gradients are correct to floating-point precision.
+
+The one exception is **dropout**. Dropout uses a random mask per forward pass; if you re-run the forward, you get a *different* dropout mask, which produces inconsistent gradients between forward and backward.
+
+The fix: when checkpointing a block that contains dropout, **save the random state** during the original forward; restore it before the recomputation. PyTorch's `torch.utils.checkpoint` does this automatically when `preserve_rng_state=True` (the default).
+
+You almost never have to think about this manually. Just be aware: if dropout-containing blocks are checkpointed and the RNG state isn't preserved, you get silent gradient miscomputation. PyTorch warns you if this case looks suspicious.
+
+<Aside type="warning">
+**Don't checkpoint the embedding or LM head.** The embedding lookup is a memory-pointer operation (no computation worth recomputing) and the LM head is a single matmul whose activations dominate. Checkpointing them gives almost no memory saving and adds redundant compute. The right granularity is whole *blocks* in the residual stack; the embedding and LM head live outside.
+</Aside>
+
+---
+
+## 10. What we keep going forward
+
+Three things to keep:
+
+1. **The $\sqrt{L}$ trick**: store $\sqrt{L}$ checkpoints, recompute the rest. Memory ÷ $\sqrt{L}$, compute × $1.33$. Block-level checkpointing achieves this with minimal code: wrap each block in `torch.utils.checkpoint`.
+
+2. **Selective recomputation**: don't store the attention-score matrix (quadratic in $T$); recompute it during backward. Combined with FlashAttention, the attention contribution is handled automatically.
+
+3. **Activation checkpointing + gradient accumulation = practical pretraining recipe**. The two compose: accumulation manages effective batch size; checkpointing manages per-micro-batch activation memory. Together they let a 7B-class model train comfortably on $32$–$64$ H100s at 2–4M tokens-per-step.
+
+This closes the single-machine training story. Next session (Cap 7.8 — Data parallelism, in Part 2) (Part 2 of this chapter) starts the distributed-training story: data parallelism, then tensor and pipeline parallelism, then FSDP/ZeRO, and finally scaling laws.
+
+<SelfTest>
+
+**(a)** Verify the $\sqrt{L}$ memory analysis. For $L = 96$, what is the memory ratio between naive (store everything) and $\sqrt{L}$-checkpointed training? Quantify the compute overhead.
+
+**(b)** A 7B model has $L = 32$ blocks, $T = 4096$, $B = 8$. The attention scores at one block are $h T^2 = 32 \cdot 4096^2 \approx 5 \times 10^8$ entries. In bf16, this is $\sim 1$ GB. With selective recomputation, this $1$ GB per block is *not* stored. How many GB does this save across all 32 blocks?
+
+**(c)** Trace the backward pass with block-level checkpointing for a $L = 3$ stack. Identify, step by step, when each block's forward is run. (You should run it twice each.)
+
+**(d)** Why is dropout a special case for activation checkpointing? Argue why PyTorch's `preserve_rng_state=True` is the right fix.
+
+**(e)** Selective recomputation reduces memory by $h T^2$ per block at compute cost of one extra $Q K^\top$ matmul. Argue when this is preferable to full block-level checkpointing. (Hint: think about the ratio of attention-score memory to other-activation memory at long context.)
+
+</SelfTest>

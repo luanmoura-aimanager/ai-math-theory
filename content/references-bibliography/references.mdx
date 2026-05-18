@@ -264,7 +264,90 @@ prerequisites: []
 
 ---
 
-## Chapters 7–12
+## Chapter 7 — Training language models
+
+**Textbooks and lecture series.**
+
+- **Stanford CS336** ("Language Modeling from Scratch", 2024 onwards). [stanford-cs336.github.io](https://stanford-cs336.github.io/) — End-to-end LLM pretraining course; data, parallelism, scaling.
+- **Raschka, S.** (2024). *Build a Large Language Model (From Scratch),* Chapters 5–6. Manning. — End-to-end training of a small LLM.
+- **Karpathy, A.** "Let's build the GPT tokenizer". [YouTube](https://www.youtube.com/watch?v=zduSFxRajkE) (2024); paired with [`minbpe`](https://github.com/karpathy/minbpe). — Implements byte-level BPE from scratch (7.2).
+
+**Primary papers — pretraining data.**
+
+- **Raffel, C., Shazeer, N., Roberts, A., et al.** (2020). "Exploring the limits of transfer learning with a unified text-to-text transformer" (T5). *JMLR*. [arXiv:1910.10683](https://arxiv.org/abs/1910.10683) — C4 corpus (7.1 §4.1).
+- **Gao, L., Biderman, S., Black, S., et al.** (2020). "The Pile: An 800GB dataset of diverse text for language modeling". [arXiv:2101.00027](https://arxiv.org/abs/2101.00027) — 22-source mixed corpus (7.1 §4.2).
+- **Together AI** (2023). "RedPajama: An open source recipe to reproduce LLaMA training dataset". [together.ai](https://www.together.ai/blog/redpajama) — Open reproduction of LLaMA-1 data (7.1 §4.3).
+- **Li, J., Castellanos-Bray, A., et al.** (2024). "DataComp-LM: In search of the next generation of training sets for language models" (DCLM). [arXiv:2406.11794](https://arxiv.org/abs/2406.11794) — Systematic data-quality experiments; DCLM-Baseline (7.1 §4.4, 7.5).
+- **Penedo, G., Kydlíček, H., Cappelli, A., et al.** (2024). "The FineWeb Datasets: Decanting the web for the finest text data at scale". [arXiv:2406.17557](https://arxiv.org/abs/2406.17557); HuggingFace blog. — FineWeb and FineWeb-Edu (7.1 §4.5, 7.5).
+- **Rae, J. W., Borgeaud, S., Cai, T., et al.** (2021). "Scaling language models: Methods, analysis & insights from training Gopher" (MassiveText). [arXiv:2112.11446](https://arxiv.org/abs/2112.11446) — Heuristic data-filtering rules (7.1 §3.3).
+- **Wenzek, G., Lachaux, M.-A., Conneau, A., et al.** (2020). "CCNet: Extracting high quality monolingual datasets from web crawl data". [arXiv:1911.00359](https://arxiv.org/abs/1911.00359) — Classifier-based filtering pipeline (7.1 §3.4).
+- **Lee, K., Ippolito, D., Nystrom, A., et al.** (2022). "Deduplicating training data makes language models better". [arXiv:2107.06499](https://arxiv.org/abs/2107.06499) — MinHash deduplication (7.1 §6).
+- **Villalobos, P., Sevilla, J., Heim, L., et al.** (2022). "Will we run out of data? An analysis of the limits of scaling datasets in machine learning". [arXiv:2211.04325](https://arxiv.org/abs/2211.04325) — The "data wall" argument (7.1 §5).
+- **Muennighoff, N., Rush, A. M., Barak, B., et al.** (2023). "Scaling data-constrained language models". [arXiv:2305.16264](https://arxiv.org/abs/2305.16264) — Repeating high-quality data up to 4× (7.1 §5, 7.5).
+- **Welbl, J., Glaese, A., Uesato, J., et al.** (2021). "Challenges in detoxifying language models". [arXiv:2109.07445](https://arxiv.org/abs/2109.07445) — Toxicity filtering trade-offs (7.1 §3.7).
+- **Barbaresi, A.** (2021). "Trafilatura: a web scraping library and command-line tool for text discovery and extraction". *ACL System Demonstrations*. [aclanthology.org/2021.acl-demo.15](https://aclanthology.org/2021.acl-demo.15) — Reference HTML→text extractor (7.1 §3.1).
+
+**Primary papers — tokenization.**
+
+- **Sennrich, R., Haddow, B., & Birch, A.** (2016). "Neural machine translation of rare words with subword units" (BPE). [arXiv:1508.07909](https://arxiv.org/abs/1508.07909) — BPE adapted from Gage 1994 for NMT (7.2).
+- **Kudo, T., & Richardson, J.** (2018). "SentencePiece: A simple and language independent subword tokenizer and detokenizer for neural text processing". [arXiv:1808.06226](https://arxiv.org/abs/1808.06226) — SentencePiece (BPE-mode and unigram-mode) (7.2 §5.4).
+- **Gage, P.** (1994). "A new algorithm for data compression". *C Users Journal*, 12(2), 23–38. — The original byte-pair encoding compression algorithm (7.2 §3.4).
+
+**Primary papers — precision and numerical training.**
+
+- **Micikevicius, P., Narang, S., Alben, J., et al.** (2017). "Mixed precision training". [arXiv:1710.03740](https://arxiv.org/abs/1710.03740) — fp16 mixed precision with loss scaling (7.4 §3, §4).
+- **Wang, S., & Kanwar, P.** (2019). "BFloat16: The secret to high performance on Cloud TPUs". Google Cloud blog. [cloud.google.com](https://cloud.google.com/blog/products/ai-machine-learning/bfloat16-the-secret-to-high-performance-on-cloud-tpus) — bf16 design rationale (7.4 §2.1).
+- **Dettmers, T., Lewis, M., Belkada, Y., & Zettlemoyer, L.** (2022). "LLM.int8(): 8-bit matrix multiplication for transformers at scale". [arXiv:2208.07339](https://arxiv.org/abs/2208.07339) — Outlier-aware quantisation; structural activation outliers (7.4 §6.2; full treatment Cap 10.6).
+
+**Primary papers — data sequencing.**
+
+- **Xie, S. M., Pham, H., Dong, X., et al.** (2023). "DoReMi: Optimizing data mixtures speeds up language model pretraining". [arXiv:2305.10429](https://arxiv.org/abs/2305.10429) — Worst-domain-perplexity optimisation for data mixtures (7.5 §2.2).
+- **Bengio, Y., Louradour, J., Collobert, R., & Weston, J.** (2009). "Curriculum learning". *ICML*. [dl.acm.org/doi/10.1145/1553374.1553380](https://dl.acm.org/doi/10.1145/1553374.1553380) — Original curriculum-learning paper (7.5 §3).
+- **Hu, S., Tu, Y., Han, X., et al.** (2024). "MiniCPM: Unveiling the potential of small language models with scalable training strategies". [arXiv:2404.06395](https://arxiv.org/abs/2404.06395) — WSD schedule + late-stage annealing recipe (7.5 §4).
+- **Abdin, M., Aneja, J., Awadalla, H., et al.** (2024). "Phi-3 technical report". [arXiv:2404.14219](https://arxiv.org/abs/2404.14219) — Synthetic/textbook-heavy data approach (7.5 §6 Aside).
+- **Dubey, A., Jauhri, A., Pandey, A., et al.** (2024). "The Llama 3 herd of models". [arXiv:2407.21783](https://arxiv.org/abs/2407.21783) — LLaMA-3 data-mixing-in-late-stages documentation (7.1 §4.6, 7.5).
+
+**Primary papers — memory and compute engineering.**
+
+- **Chen, T., Xu, B., Zhang, C., & Guestrin, C.** (2016). "Training deep nets with sublinear memory cost". [arXiv:1604.06174](https://arxiv.org/abs/1604.06174) — Activation checkpointing / gradient checkpointing (7.7 §4).
+- **Korthikanti, V., Casper, J., Lym, S., et al.** (2022). "Reducing activation recomputation in large transformer models". [arXiv:2205.05198](https://arxiv.org/abs/2205.05198) — Selective recomputation in Megatron-LM (7.7 §7).
+- **Dao, T., Fu, D. Y., Ermon, S., Rudra, A., & Ré, C.** (2022). "FlashAttention: Fast and memory-efficient exact attention with IO-awareness". [arXiv:2205.14135](https://arxiv.org/abs/2205.14135) — Tiled attention kernel; in-SRAM softmax (7.7 §7.1; full treatment Cap 10.5).
+
+**Primary papers — distributed training.**
+
+- **Patarasuk, P., & Yuan, X.** (2009). "Bandwidth optimal all-reduce algorithms for clusters of workstations". *J. Parallel and Distributed Computing*. [sciencedirect.com](https://www.sciencedirect.com/science/article/pii/S0743731508001767) — Ring all-reduce algorithm (7.8 §3.2).
+- **McCandlish, S., Kaplan, J., Amodei, D., et al.** (2018). "An empirical model of large-batch training". [arXiv:1812.06162](https://arxiv.org/abs/1812.06162) — Critical batch size (7.8 §6, 7.11 §5).
+- **Shoeybi, M., Patwary, M., Puri, R., et al.** (2019). "Megatron-LM: Training multi-billion parameter language models using model parallelism". [arXiv:1909.08053](https://arxiv.org/abs/1909.08053) — Tensor parallelism (column/row sharding of FFN and MHA) (7.9 §2).
+- **Korthikanti, V., Casper, J., Lym, S., et al.** (2022). "Reducing activation recomputation in large transformer models". [arXiv:2205.05198](https://arxiv.org/abs/2205.05198) — Sequence parallelism + selective activation recomputation (7.9 §2.5; also 7.7 §7).
+- **Huang, Y., Cheng, Y., Bapna, A., et al.** (2018). "GPipe: Efficient training of giant neural networks using pipeline parallelism". [arXiv:1811.06965](https://arxiv.org/abs/1811.06965) — Microbatch-based pipeline parallelism; bubble fraction (7.9 §3).
+- **Narayanan, D., Harlap, A., Phanishayee, A., et al.** (2019). "PipeDream: Generalized pipeline parallelism for DNN training". [arXiv:1806.03377](https://arxiv.org/abs/1806.03377) — 1F1B pipeline schedule (7.9 §3.3).
+- **Narayanan, D., Shoeybi, M., Casper, J., et al.** (2021). "Efficient large-scale language model training on GPU clusters using Megatron-LM". [arXiv:2104.04473](https://arxiv.org/abs/2104.04473) — Interleaved pipeline + TP × PP × DP composition (7.9 §3.4).
+- **Liu, H., Zaharia, M., & Abbeel, P.** (2023). "Ring Attention with blockwise transformers for near-infinite context". [arXiv:2310.01889](https://arxiv.org/abs/2310.01889) — Context parallelism for 1M+ context training (7.9 §6, 7.13 §5.1).
+- **Rajbhandari, S., Rasley, J., Ruwase, O., & He, Y.** (2020). "ZeRO: Memory optimizations toward training trillion parameter models". [arXiv:1910.02054](https://arxiv.org/abs/1910.02054) — Three-stage memory sharding (ZeRO-1/2/3 / FSDP) (7.10).
+- **Ren, J., Rajbhandari, S., Aminabadi, R. Y., et al.** (2021). "ZeRO-Offload: Democratizing billion-scale model training". [arXiv:2101.06840](https://arxiv.org/abs/2101.06840) — Offloading Adam state to CPU memory (7.10 §8).
+- **Rajbhandari, S., Ruwase, O., Rasley, J., Smith, S., & He, Y.** (2021). "ZeRO-Infinity: Breaking the GPU memory wall for extreme scale deep learning". [arXiv:2104.07857](https://arxiv.org/abs/2104.07857) — NVMe offload extending ZeRO (7.10 §8).
+
+**Primary papers — scaling laws.**
+
+- **Kaplan, J., McCandlish, S., Henighan, T., et al.** (2020). "Scaling laws for neural language models". [arXiv:2001.08361](https://arxiv.org/abs/2001.08361) — Power-law scaling of loss in $N, D, C$; the framework still in use (7.11).
+- **Henighan, T., Kaplan, J., Katz, M., et al.** (2020). "Scaling laws for autoregressive generative modeling". [arXiv:2010.14701](https://arxiv.org/abs/2010.14701) — Extension to images, video, code modalities (7.11).
+- **Hoffmann, J., Borgeaud, S., Mensch, A., et al.** (2022). "Training compute-optimal large language models" (Chinchilla). [arXiv:2203.15556](https://arxiv.org/abs/2203.15556) — The $D/N \approx 20$ correction (7.12).
+- **Sardana, N., & Frankle, J.** (2024). "Beyond Chinchilla-optimal: Accounting for inference in language model scaling laws". [arXiv:2401.00448](https://arxiv.org/abs/2401.00448) — Inference-aware over-training derivation (7.12 §5).
+
+**Primary papers — long-context training (training-side complement to Cap 6.13 references).**
+
+- **Liu, N. F., Lin, K., Hewitt, J., et al.** (2023). "Lost in the middle: How language models use long contexts". [arXiv:2307.03172](https://arxiv.org/abs/2307.03172) — The mid-context performance dip failure mode (7.13 §4.3).
+- *Note:* The other long-context RoPE-scaling papers (Chen et al. 2023 position interpolation; YaRN by Peng et al. 2023; Mistral sliding-window; ALiBi by Press et al. 2021; attention sinks by Xiao et al. 2023; FlashAttention by Dao et al. 2022) are listed under Chapter 6's positional-encodings and long-context sections, and are referenced by 7.13 in their training-side application.
+
+**Primary papers — GPT-3 and the few-shot story.**
+
+- **Brown, T. B., Mann, B., Ryder, N., et al.** (2020). "Language models are few-shot learners" (GPT-3). [arXiv:2005.14165](https://arxiv.org/abs/2005.14165) — The 175B-parameter pretrained LM; few-shot prompting at scale (7.14).
+- **Child, R., Gray, S., Radford, A., & Sutskever, I.** (2019). "Generating long sequences with sparse transformers". [arXiv:1904.10509](https://arxiv.org/abs/1904.10509) — Sparse Transformer's alternating sparse-dense pattern; used in GPT-3 (7.14 §3.1).
+- **Radford, A., Wu, J., Child, R., et al.** (2019). "Language models are unsupervised multitask learners" (GPT-2). OpenAI technical report. — Pre-LN block, modified init, reversible tokenization referenced by GPT-3 §2.1 (7.14 §3.1).
+
+---
+
+## Chapters 8–12
 
 *To be populated as those chapters are written. The convention is to list, for each chapter, the textbooks used, primary papers cited, lecture series referenced, and any online resources that the chapter draws from.*
 

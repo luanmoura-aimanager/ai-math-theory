@@ -1,0 +1,264 @@
+---
+title: "7.14 — Reading: GPT-3 paper, focus on §2 (model + training)"
+chapter: 7
+order: 14
+estimatedMinutes: 30
+goal: "Read Brown et al. (2020), Language Models are Few-Shot Learners. Identify, section by section, what survives in 2026 and what doesn't. Cross-check GPT-3's architecture and training-compute table against Chinchilla (7.12). Extract three statements that now feel obvious — the chapter's capstone."
+prerequisites: ["ch7-training-language-models/7.13-long-context-training", "ch7-training-language-models/7.12-chinchilla", "ch6-attention-transformer/6.11-transformer-block-aiayn"]
+---
+
+## 1. Why this session exists
+
+Chapter 7 derived modern pretraining from scratch — data, tokenization, precision, parallelism, scaling laws. To anchor it historically, we read the paper that introduced the era: **Brown, Mann, Ryder, et al., 2020, *Language Models are Few-Shot Learners*** ([arXiv:2005.14165](https://arxiv.org/abs/2005.14165)). The GPT-3 paper.
+
+GPT-3 was the watershed. Before: language models were research artefacts. After: they were $100M-training-budget products that did few-shot in-context learning, code generation, translation, math (poorly), reasoning (poorly), and many other things that previously required task-specific fine-tuned models. The paper documents an architecture that is, by 2026 standards, *the same as today's*; the difference is scale, data, and training discipline.
+
+This session: read §2 (Model and Training) section-by-section, identify each design choice in our framework, and find three statements that now feel obvious. Pair this with the [AIAYN read of 6.11](/session/ch6-attention-transformer/6.11-transformer-block-aiayn): together they bracket the period from "the architecture works" (2017) to "the architecture is enough at scale" (2020).
+
+---
+
+## 2. The paper in context
+
+GPT-3 (June 2020) sits between:
+
+- **GPT-2** (Feb 2019): same architecture, smaller scale (1.5B params), trained on WebText (~10B tokens). Showed "unsupervised multi-task learning" — a language model can do summarisation, translation, QA *implicitly*, with no task-specific head.
+- **Chinchilla** (March 2022): the scaling-law correction. Showed GPT-3 was under-trained.
+
+GPT-3's experimental setup:
+
+- **175B parameters**: $L = 96$ blocks, $h = 96$ heads, $d = 12{,}288$.
+- **300B tokens** of training data: a mixture of CommonCrawl-filtered (60%), WebText2 (22%), Books1+Books2 (16%), Wikipedia (3%).
+- **Compute**: ~$3 \cdot 10^{23}$ FLOPs total. Roughly $3000$ V100-GPU-years.
+- **No fine-tuning.** The paper's central claim is *few-shot prompting*: at this scale, the base LM does in-context learning *without* explicit instruction tuning.
+
+The combination — biggest-ever model, biggest-ever data run, no task-specific finetuning, capable of broad task performance from prompts — was the moment LLMs went from "research toy" to "general-purpose substrate".
+
+---
+
+## 3. The architecture (§2.1)
+
+Open the paper to §2.1, "Model and Architectures." The text is short — three paragraphs. Match each sentence to what we have built.
+
+### 3.1 What §2.1 says, decoded
+
+> "We use the same model and architecture as GPT-2, including the modified initialization, pre-normalization, and reversible tokenization described therein..."
+
+Decoded: pre-LN block ([6.10](/session/ch6-attention-transformer/6.10-pre-vs-post-norm)). Byte-level BPE tokenizer ([7.2 §5](/session/ch7-training-language-models/7.2-bpe-tokenization)). Standard initialization scaled by $1/\sqrt{N}$ (a per-residual-branch trick from GPT-2's *Improving Language Understanding* paper).
+
+> "...with the exception that we use alternating dense and locally banded sparse attention patterns in the layers of the transformer, similar to the Sparse Transformer."
+
+This is the *one* architectural diff from GPT-2: alternating layers use *sparse* attention patterns (Child et al., 2019, Sparse Transformer) to reduce compute. In retrospect, this didn't catch on — later models (LLaMA, etc.) reverted to dense attention everywhere. Sparse Transformer's "fixed pattern" was supplanted by sliding-window and the FlashAttention efficiency story.
+
+> "To study the dependence of ML performance on model size, we train 8 different sizes of model..."
+
+This is *the* methodological move: train at 8 sizes from 125M to 175B, plot loss against compute, fit power laws. Kaplan-style scaling-law study ([7.11](/session/ch7-training-language-models/7.11-scaling-laws-kaplan)). Cf. Chinchilla's later three-method study with corrections.
+
+### 3.2 Table 2.1: the model sizes
+
+The famous table:
+
+| Model | $N$ | $L$ | $d$ | $h$ | $d_h$ | $d_\text{ff}/d$ |
+|---|---:|---:|---:|---:|---:|---:|
+| GPT-3-125M | 125M | 12 | 768 | 12 | 64 | 4 |
+| GPT-3-350M | 350M | 24 | 1024 | 16 | 64 | 4 |
+| GPT-3-760M | 760M | 24 | 1536 | 16 | 96 | 4 |
+| GPT-3-1.3B | 1.3B | 24 | 2048 | 24 | 128 | 4 |
+| GPT-3-2.7B | 2.7B | 32 | 2560 | 32 | 80 | 4 |
+| GPT-3-6.7B (curie) | 6.7B | 32 | 4096 | 32 | 128 | 4 |
+| GPT-3-13B | 13B | 40 | 5140 | 40 | 128 | 4 |
+| GPT-3-175B (davinci) | 175B | 96 | 12288 | 96 | 128 | 4 |
+
+This table is a *parameter sweep* — same architectural ratios ($d_\text{ff}/d = 4$, $d_h = 64$ or $128$), only $L$ and $d$ varied. Notice:
+
+- **Both $L$ and $d$ scale up** as $N$ grows, in roughly fixed proportion.
+- **$d_h$ is held at 128** for the largest models — a hint at the empirical rule "head dim should be $\sim 128$, scale $h$ to match $d$" that LLaMA and others adopted.
+- **$d_\text{ff} = 4d$** universally, as predicted by [6.8 §3](/session/ch6-attention-transformer/6.8-ffn).
+
+This table is *the* GPT-3 family chart; every later "family" (LLaMA, Mistral, Qwen) follows the same template.
+
+---
+
+## 4. The training data (§2.2)
+
+> "Datasets for language models have rapidly expanded, culminating in the Common Crawl dataset constituting nearly a trillion words. ..."
+
+GPT-3's training data, by token weight:
+
+| Source | Quantity | Weight in training |
+|---|---:|---:|
+| CommonCrawl (filtered) | 410B | 60% |
+| WebText2 | 19B | 22% |
+| Books1 | 12B | 8% |
+| Books2 | 55B | 8% |
+| Wikipedia | 3B | 3% |
+
+Notice the disparity: CommonCrawl is the largest source but Books1 (smaller) is sampled with comparable weight per token — i.e., Books1 is *repeated more*. Modern recipes ([7.5 §2.4](/session/ch7-training-language-models/7.5-data-mixing-curriculum)) systematise this.
+
+§2.2 describes the filtering pipeline:
+
+> "(1) we downloaded and filtered a version of CommonCrawl based on similarity to a range of high-quality reference corpora,
+> (2) we performed fuzzy deduplication at the document level..."
+
+This is exactly the CCNet + MinHash pipeline of [7.1 §3](/session/ch7-training-language-models/7.1-pretraining-data). GPT-3 was an early adopter; later corpora (DCLM, FineWeb-Edu) extended the methodology with better filters and more aggressive deduplication.
+
+### 4.1 The tokens-per-parameter ratio
+
+GPT-3-175B was trained on 300B tokens. Ratio: $D/N \approx 1.7$. **Far below Chinchilla's prescription of $\sim 20$**, and even below Kaplan's prescription of $\sim 7$.
+
+Why? Kaplan's analysis ([7.11 §4.1](/session/ch7-training-language-models/7.11-scaling-laws-kaplan)) gave $N^* \propto C^{0.73}$, $D^* \propto C^{0.27}$ — heavily favouring $N$ at large $C$. GPT-3 implemented this. We now know ([7.12](/session/ch7-training-language-models/7.12-chinchilla)) that this is the wrong direction.
+
+A redo at the same compute: $C = 3 \cdot 10^{23}$ FLOPs. Chinchilla optimum: $N^* \approx \sqrt{C/120} \approx 5 \cdot 10^{10}$, $D^* \approx 10^{12}$. So **a 50B-parameter model trained on 1T tokens** would have *out-performed* GPT-3-175B at the same compute. The 70B Chinchilla model and the LLaMA-1-65B (both at ~$D/N = 20$) — both at less than half GPT-3's parameter count — beat GPT-3 on most benchmarks.
+
+GPT-3 is the historical *demonstration* of the scaling thesis; it is also the historical *example* of getting the allocation wrong.
+
+---
+
+## 5. The training process (§2.3)
+
+GPT-3's training mechanics. Match each to our toolkit.
+
+> "We use the same model and architecture as GPT-2 [...], with the same modified initialization, pre-normalization, and reversible tokenization, with the exception that..."
+
+(See §3.1.)
+
+> "All models use a context window of $n_\text{ctx} = 2048$ tokens."
+
+$T_\text{train} = 2048$. Context-extension via RoPE-scaling ([7.13](/session/ch7-training-language-models/7.13-long-context-training)) didn't exist yet — GPT-3 has *learned absolute positional embeddings* ([Appendix 6.B](/session/ch6-attention-transformer/6.B-learned-pe)), and is hard-capped at $T_\text{ctx} = 2048$. (Years later, RoPE-based descendants of this lineage push to $128k$+.)
+
+> "Adam with $\beta_1 = 0.9, \beta_2 = 0.95, \epsilon = 10^{-8}$."
+
+Standard Adam ([3.5](/session/ch3-optimization-regularization/3.5-adam)) with the canonical hyperparameters that have remained essentially unchanged in 5 years.
+
+> "We clip the global norm of the gradient at 1.0."
+
+Gradient clipping at $1.0$ ([3.7 §3](/session/ch3-optimization-regularization/3.7-lr-schedules-and-clipping)).
+
+> "Cosine decay for learning rate down to 10% of its value, over 260 billion tokens..."
+
+Cosine LR schedule, decaying to $10\%$ of peak ([3.7 §3](/session/ch3-optimization-regularization/3.7-lr-schedules-and-clipping)). Note: GPT-3 *did not* use the WSD schedule of MiniCPM ([7.5 §4](/session/ch7-training-language-models/7.5-data-mixing-curriculum)) — that came later. Cosine to $10\%$ was the 2020 standard.
+
+> "We use a batch size of $3.2 \cdot 10^6$ tokens for the 175B model."
+
+3.2M tokens per step (cf. modern $4$–$16$M-token steps). This is the *peak* of GPT-3's batch ramp:
+
+> "The batch size is increased linearly from a small value (32k tokens) to the full value over the first 4-12 billion tokens of training..."
+
+Batch ramp from $32$k tokens to $3.2$M, over the first $4$–$12$B tokens. Match this to the critical-batch-size argument ([7.11 §5](/session/ch7-training-language-models/7.11-scaling-laws-kaplan)): $B^*$ grows as training proceeds, so small early batches are sufficient and save compute.
+
+> "We always train on sequences of the full $n_\text{ctx} = 2048$ token context window, packing multiple documents into a single sequence when documents are shorter than 2048 tokens, in order to increase computational efficiency."
+
+Document packing (later codified as "packed dataset" by various frameworks). This is how modern training avoids wasting compute on padded short documents.
+
+> "We use a mixture of model parallelism within each matrix multiply and model parallelism across the layers of the network."
+
+**Tensor parallelism + pipeline parallelism** ([7.9](/session/ch7-training-language-models/7.9-tensor-pipeline-parallelism)). GPT-3 was a pre-FSDP training; it used Megatron-LM-style TP within each matrix multiply and PP across layers. ZeRO existed at the time (DeepSpeed 0.3 had ZeRO-1/2) but FSDP/ZeRO-3 was a few months out.
+
+§2.3 ends with:
+
+> "All models were trained on V100 GPUs on part of a high-bandwidth cluster provided by Microsoft."
+
+The V100 era; A100 launched in May 2020 (the same month GPT-3's paper came out). Modern equivalents use H100/H200/B200, $\sim 3$–$10\times$ faster per device than V100.
+
+---
+
+## 6. The training-compute table (§D.1, appendix)
+
+Brown et al. report total compute in PF-days:
+
+| Model | Parameters | PF-days | FLOPs |
+|---|---:|---:|---:|
+| GPT-3-125M | 125M | 2.6 | $2.25 \cdot 10^{20}$ |
+| GPT-3-1.3B | 1.3B | 27.5 | $2.38 \cdot 10^{21}$ |
+| GPT-3-13B | 13B | 270 | $2.34 \cdot 10^{22}$ |
+| GPT-3-175B (davinci) | 175B | 3640 | $3.14 \cdot 10^{23}$ |
+
+Cross-check the $6ND$ rule:
+
+$$
+6 \cdot 175 \cdot 10^9 \cdot 300 \cdot 10^9 = 3.15 \cdot 10^{23}.
+$$
+
+Match: $3.14 \cdot 10^{23}$ vs computed $3.15 \cdot 10^{23}$. **The $6ND$ rule predicts GPT-3's reported compute to within 1%.** This is a satisfying confirmation that what we've derived in [6.12](/session/ch6-attention-transformer/6.12-compute-and-memory) and [7.11](/session/ch7-training-language-models/7.11-scaling-laws-kaplan) is the right formula.
+
+---
+
+## 7. The few-shot story (§3 of the paper)
+
+§3 isn't the focus of our chapter (it's about *evaluation*, not training), but the architectural payoff lives there.
+
+The paper's most influential claim: at $175$B parameters, **the model performs many tasks competitively *without any fine-tuning*** — just from a few examples in the prompt ("few-shot prompting"). E.g., translation, QA, arithmetic, simple reasoning. This was the first systematic demonstration of *in-context learning* at scale.
+
+Why does this matter for *training*? Because it implies that the *base* pretraining (next-token cross-entropy on a generic corpus) is already enough to produce a system with broadly useful capabilities. You don't need a separate "instruction tuning" or "RL alignment" step to get from "trained LM" to "useful product"; the LM itself, prompted appropriately, was already useful.
+
+This was *not* obvious before GPT-3. The 2018-era view was: LMs are pretraining for downstream task-specific fine-tuning. GPT-3 showed the LM-as-product story.
+
+The follow-up — that *instruction tuning + RLHF on top* makes it dramatically better — is the topic of Cap 9. But GPT-3 established the baseline: even just a pretrained LM at $175$B can be a useful AI system.
+
+---
+
+## 8. What survives, what doesn't (2020 → 2026)
+
+**Survives:**
+
+- Decoder-only Transformer architecture.
+- Pre-LN block, byte-level BPE tokenizer.
+- Adam + cosine LR schedule (now often WSD) + gradient clipping at 1.0.
+- Document packing.
+- Batch size growing during training.
+- $6 N D$ as the compute estimate.
+- Scaling-law-driven planning.
+- In-context learning via prompting (the few-shot story).
+
+**Did not survive:**
+
+- **Token-per-parameter ratio of 1.7.** Chinchilla corrected to $\sim 20$; modern over-training pushes to $50$–$300$.
+- **Sparse attention in alternating layers.** Replaced by dense attention everywhere + FlashAttention.
+- **Learned absolute positional embeddings.** Replaced by RoPE.
+- **2048-token context window.** Modern models go to $128k$+ via RoPE scaling.
+- **TP + PP without FSDP.** FSDP/ZeRO-3 now handles the optimiser/gradient/parameter sharding more cleanly.
+- **WebText2 + Books1/2 as data sources.** Replaced by DCLM, FineWeb-Edu, and other classifier-filtered web data.
+- **GPT-3-175B itself as the SOTA reference.** Beaten by every 70B+ Chinchilla-trained model from 2022 onward.
+
+GPT-3 was, in retrospect, a *correct architecture trained at the wrong scale allocation*. The 2022 Chinchilla correction shifted everyone to the right allocation; the 2023 RoPE adoption changed the positional encoding; the 2023 FSDP adoption changed the parallelism story; the 2024 inference-aware over-training changed the deployment economics. But the *skeleton* — embedding → $L$ pre-LN blocks → final LN → tied LM head, trained by causal cross-entropy on a curated web mixture — is exactly what GPT-3 said in 2020.
+
+---
+
+## 9. Three things that should now feel obvious
+
+Per the AIAYN reading ritual ([6.11 §5.1](/session/ch6-attention-transformer/6.11-transformer-block-aiayn)): close the paper, write down three statements from §2 that now feel obvious. Sample three I'd write:
+
+**(a) "We use the same architecture as GPT-2 [...] with pre-normalization."**
+
+Pre-LN was the *single* enabling change for stable deep stack training ([6.10](/session/ch6-attention-transformer/6.10-pre-vs-post-norm)). Without it, 96-layer training wouldn't have converged. The phrase "pre-normalization" sits in one half-sentence; behind it is a whole session's worth of analysis.
+
+**(b) "Adam with $\beta_1 = 0.9, \beta_2 = 0.95, \epsilon = 10^{-8}$. We clip the global norm of the gradient at 1.0."**
+
+These hyperparameters are unchanged from 2020 to 2026, and they're chosen for principled reasons: $\beta_2 = 0.95$ (not the typical default $0.999$) keeps the second-moment estimator responsive to recent gradient statistics, which matters in LLM training where the loss landscape evolves smoothly across the long run ([3.5 §4](/session/ch3-optimization-regularization/3.5-adam)). Gradient clipping at 1.0 prevents the rare spike that would otherwise destabilise training. Two simple knobs, very well-chosen.
+
+**(c) "$C \approx 3 \cdot 10^{23}$ FLOPs" matches "$6 \cdot N \cdot D$".**
+
+The $6 N D$ rule, derived in [6.12](/session/ch6-attention-transformer/6.12-compute-and-memory), predicts GPT-3's reported compute to within 1%. This is the rule that makes scaling-law planning work — without it, you can't even estimate the cost of a training run.
+
+---
+
+## 10. What we keep going forward
+
+Chapter 7 closes here. The chapter built modern pretraining from the architectural primitives of Chapter 6: the data pipeline, the tokenizer, the precision recipe, the data-sequencing recipe, the memory-management tricks, the distributed-training axes, the scaling-law planning machinery, and the long-context extension.
+
+The result is a complete recipe: pick a compute budget, fit a Chinchilla-corrected loss curve to your data, choose $(N, D)$ to hit your target capability, allocate to a TP × PP × FSDP cluster, train with bf16 + cosine/WSD + gradient clipping + document packing + activation checkpointing, extend to 128k+ context, and ship.
+
+[Chapter 8 — Modern LLM architectures] covers what's *inside* the resulting blocks at the frontier: SwiGLU, RMSNorm, GQA/MQA, MLA, MoE, hybrid SSM. These are the post-2020 architectural refinements that build on top of GPT-3's skeleton — each cutting some specific cost (KV-cache, FFN parameters, inference compute) without changing the fundamental recipe.
+
+<SelfTest>
+
+**(a)** Read §2.1 of [Brown et al., 2020](https://arxiv.org/abs/2005.14165). Identify the *one* architectural change from GPT-2 that the paper highlights. Did this change survive? Why or why not?
+
+**(b)** Reproduce GPT-3-175B's training compute from $C \approx 6 N D$: $N = 175 \times 10^9$, $D = 300 \times 10^9$. Compare to the paper's reported $3.14 \cdot 10^{23}$ FLOPs.
+
+**(c)** GPT-3 trained at $D/N \approx 1.7$. State, using the Chinchilla framework, the optimal $(N, D)$ for the same compute budget. By how much would loss have decreased had they made this choice?
+
+**(d)** GPT-3 used a batch-size ramp from $32$k to $3.2$M tokens. Argue this is the right thing to do, citing the critical-batch-size model of [7.11 §5](/session/ch7-training-language-models/7.11-scaling-laws-kaplan).
+
+**(e)** Close the paper, then write down three statements from §2 that now feel obvious. Cross-reference each with the relevant session in Chapters 6 and 7. (Your three should not be the §9 examples; pick your own.)
+
+</SelfTest>

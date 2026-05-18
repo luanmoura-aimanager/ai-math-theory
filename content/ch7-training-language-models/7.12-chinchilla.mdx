@@ -1,0 +1,232 @@
+---
+title: "7.12 — Compute-optimal scaling (Chinchilla 2022) and beyond"
+chapter: 7
+order: 12
+estimatedMinutes: 26
+goal: "Derive Chinchilla's compute-optimal scaling law: at fixed compute, train smaller models on more data, with the optimum at ~20 tokens per parameter. Understand why modern production LLMs (Llama-3 at ~215 tokens/param) over-train relative to Chinchilla — inference cost dominates training cost when you serve a model billions of times."
+prerequisites: ["ch7-training-language-models/7.11-scaling-laws-kaplan"]
+---
+
+## 1. Why this session exists
+
+Kaplan et al. (2020, [7.11](/session/ch7-training-language-models/7.11-scaling-laws-kaplan)) gave us power-law scaling and the conversion $C \approx 6 N D$. They also gave a prescription: at fixed compute, **scale model size aggressively, dataset size modestly**. GPT-3 (175B parameters, 300B tokens, ~1.7 tokens per parameter) followed this recipe.
+
+In 2022, Hoffmann et al. at DeepMind redid the analysis with more careful methodology and reached the opposite prescription:
+
+> **At fixed compute, the loss-minimising allocation has roughly equal contributions from model size and dataset size. The optimal ratio is $D / N \approx 20$ tokens per parameter.**
+
+The corollary: GPT-3 was *substantially over-parameterised and under-trained*. A model with $1/4$ the parameters trained on $4\times$ more data would have achieved lower loss at the same compute cost.
+
+DeepMind demonstrated this by training **Chinchilla** (70B parameters, 1.4T tokens) and showed it outperformed Gopher (280B parameters, 300B tokens — a Kaplan-style allocation at the same compute). Chinchilla was 4× smaller and beat Gopher across the board.
+
+This result reshaped LLM training. Every model from 2022 onward — LLaMA, Mistral, Qwen, DeepSeek — uses Chinchilla-style allocations, with a 2024–2026 twist: models are often *over-trained* relative to Chinchilla (LLaMA-3 at $\sim 215$ tokens per parameter), because the field realised that **training cost is amortised across inference**, and a slightly-overtrained smaller model is cheaper to deploy than a Chinchilla-optimal larger one.
+
+This session: the Chinchilla derivation, the corrected prescription, why production LLMs over-train, and the "data wall" worry (revisited from [7.1 §5](/session/ch7-training-language-models/7.1-pretraining-data)).
+
+---
+
+## 2. The Chinchilla experiment
+
+**Hoffmann, Borgeaud, Mensch, et al., 2022, *Training Compute-Optimal Large Language Models*** ([arXiv:2203.15556](https://arxiv.org/abs/2203.15556)). Three complementary methodologies, all converging on the same answer.
+
+### 2.1 Approach 1: fix model size, vary compute
+
+For each model size $N \in \{75\text{M}, 250\text{M}, \dots, 10\text{B}\}$, train for many different durations (different $D$). For each $N$, plot loss against compute $C = 6 N D$. The envelope of these curves traces $L^*(C)$: the *best* loss achievable per compute.
+
+The minimum of each curve corresponds to the optimal $D^*(N)$. Read off the pair $(N, D^*(N))$ at each $N$ value, then fit a power law:
+
+$$
+N \propto C^{a}, \qquad D \propto C^{1 - a}.
+$$
+
+Chinchilla's result: $a \approx 0.49$, i.e. **$N$ and $D$ should scale in roughly equal proportion**. (Kaplan's value was $a \approx 0.73$ — far more weight on $N$.)
+
+### 2.2 Approach 2: parametric loss function
+
+Fit a joint loss surface
+
+$$
+L(N, D) = E + \frac{A}{N^\alpha} + \frac{B}{D^\beta}.
+$$
+
+(Three power-law pieces: irreducible $E$, $N$-bottlenecked, $D$-bottlenecked.) Minimise subject to $C = 6 N D$. The fit gives $\alpha \approx 0.34$, $\beta \approx 0.28$, and the optimum at $D^*/N^* \approx 20$.
+
+### 2.3 Approach 3: IsoFLOP curves
+
+Pick a fixed compute budget $C$ and train many models *at that compute*, varying $N$ (and adjusting $D = C/(6N)$ to keep $C$ constant). Plot loss as a function of $N$ at fixed $C$. The minimum identifies the optimal $N$ at that compute, and hence $D$.
+
+Repeating for multiple $C$ values traces the optimal allocation curve. Again: $D / N \approx 20$.
+
+### 2.4 The Chinchilla itself
+
+DeepMind trained **Chinchilla** (70B, 1.4T tokens) using the new prescription. Comparison with Gopher (280B, 300B tokens — DeepMind's earlier Kaplan-style model) at *the same compute*:
+
+| Model | $N$ | $D$ | $D/N$ | MMLU |
+|---|---:|---:|---:|---:|
+| Gopher | 280B | 300B | 1.07 | 60.0 |
+| Chinchilla | 70B | 1400B | 20.0 | **67.5** |
+
+Chinchilla beat Gopher on almost every benchmark, despite being $4\times$ smaller. **The Kaplan-style allocation was leaving substantial performance on the table**.
+
+---
+
+## 3. The corrected prescription
+
+Boxed:
+
+$$
+\boxed{\ N^* \propto C^{0.49}, \qquad D^* \propto C^{0.51}, \qquad \frac{D^*}{N^*} \approx 20 \text{ tokens per parameter}. \ }
+$$
+
+### 3.1 The rule of thumb
+
+A simple two-step recipe:
+
+1. **Pick compute budget $C$ in FLOPs.**
+2. **Compute $N^*, D^*$ via** $N \cdot D \approx C / 6$ and $D / N \approx 20$. So $N^* \approx \sqrt{C / 120}, D^* \approx 20 N^*$.
+
+For $C = 10^{23}$ FLOPs (a typical 2023-era frontier run):
+
+$$
+N^* \approx \sqrt{10^{23} / 120} \approx 3 \times 10^{10}, \qquad D^* \approx 6 \times 10^{11}.
+$$
+
+So 30B parameters trained on 600B tokens, at the same compute as a Kaplan-prescribed 150B model on 100B tokens.
+
+### 3.2 Why Kaplan got it wrong
+
+Two methodological problems with Kaplan, fixed by Chinchilla:
+
+**(a) Learning-rate scaling.** Kaplan trained all model sizes with the same LR schedule. Hoffmann et al. used a cosine schedule with peak LR scaled to model size (smaller LR for larger models). This let small models *actually train to convergence*, exposing their true loss potential.
+
+**(b) Cosine LR schedule cycle length.** Kaplan used a fixed cosine cycle independent of training duration. If your cycle ends at 100B tokens but you only train for 50B, you've evaluated at the wrong point of the schedule — small models look artificially worse. Hoffmann et al. matched cycle length to training duration.
+
+Both corrections favour smaller models. Once applied, the optimal allocation shifted toward more data and away from more parameters.
+
+### 3.3 What survives from Kaplan
+
+The framework: power laws, $L_\infty$, joint formula, critical batch size. These are all still right. Only the *optimal allocation* and the exact exponents changed.
+
+---
+
+## 4. LLaMA, Mistral, and the family of "Chinchilla-style" models
+
+The post-2022 generation:
+
+| Model | $N$ | $D$ | $D/N$ |
+|---|---:|---:|---:|
+| Chinchilla | 70B | 1.4T | 20 |
+| LLaMA-1-65B | 65B | 1.4T | 22 |
+| LLaMA-2-70B | 70B | 2.0T | 29 |
+| LLaMA-3-70B | 70B | 15T | **215** |
+| Mistral 7B | 7B | ~8T | ~114 |
+| DeepSeek-V3-671B | 671B | 14.8T | 22 |
+| Qwen2.5-72B | 72B | ~18T | ~250 |
+
+Chinchilla, LLaMA-1, and DeepSeek-V3 sit at $D/N \approx 20$ — exactly the Chinchilla-optimal prediction. LLaMA-3, Mistral, and Qwen all *over-train* significantly. Why?
+
+---
+
+## 5. Inference-aware over-training
+
+Chinchilla optimises **training-loss-per-training-FLOP**. But a deployed LLM is served *trillions* of times after training, so the relevant quantity is **total cost per user query**.
+
+### 5.1 The total-cost argument
+
+Let $C_\text{train}$ = total training FLOPs, $C_\text{inf-per-query}$ = inference FLOPs per query, $Q$ = expected number of queries over the model's lifetime. Then total cost (ignoring constants):
+
+$$
+C_\text{total} = C_\text{train} + Q \cdot C_\text{inf-per-query}.
+$$
+
+Inference FLOPs scale as $\sim 2 N$ per token generated (no backward, no Adam — just the forward). For $Q$ in the billions or trillions of queries, $Q \cdot C_\text{inf-per-query}$ dominates by orders of magnitude.
+
+**You want a small $N$, even at the cost of more training**, because every query thereafter benefits from the smaller-$N$ model.
+
+### 5.2 The new optimum
+
+If you anticipate $Q$ queries, the inference-aware optimum (Sardana, Frankle, 2024, [arXiv:2401.00448](https://arxiv.org/abs/2401.00448), *Beyond Chinchilla-Optimal*) is:
+
+$$
+D^* / N^* \approx 20 \cdot (1 + \kappa \cdot Q / Q_\text{ref})^{1 / \beta},
+$$
+
+where $\kappa$ is a weighting factor and $Q_\text{ref}$ is the queries-equivalent of one training run. For frontier LLMs deployed broadly ($Q$ in the $10^{12}$+ range), the optimum is $D/N$ in the hundreds — exactly LLaMA-3's regime.
+
+**Modern frontier LLMs train at $D/N$ between $50$ and $300$**, depending on the model's expected deployment scale. Small consumer-facing models over-train the hardest (their deployment volume is huge per parameter); proprietary or research models stay closer to $D/N \approx 20$.
+
+### 5.3 The "Chinchilla ceiling"
+
+A natural concern: doesn't over-training waste compute? After all, Chinchilla showed that past the optimum, additional training tokens give diminishing returns *per training FLOP*. Yes — but the diminishing returns are on the training-cost side, while the *inference saving* is on the inference-cost side. The break-even calculation is straightforward: for any deployed model, you can compute "how many queries does over-training pay off after?" Answer is usually in the hundreds of millions.
+
+For Meta deploying LLaMA-3 to billions of monthly active users, the break-even is reached in days. For a research lab training a 70B model that 100 academics will play with, Chinchilla-optimal stays optimal.
+
+<Aside type="note">
+**The "all the data you have" recipe.** Increasingly, frontier labs in 2024–2026 give up trying to compute the optimal $D$ and just train on *all* the high-quality tokens they have. The data wall ([7.1 §5](/session/ch7-training-language-models/7.1-pretraining-data)) is real: at $10^{13}$+ tokens of unique high-quality web data, plus code/math/books, you're at the boundary of what's possible to assemble. So the recipe becomes: pick $N$ to fit a target inference cost, train on every quality token available. This is empirically close to the inference-aware optimum for production deployments.
+</Aside>
+
+---
+
+## 6. The fundamental trade-offs
+
+A summary of how the field navigates the $(N, D, C)$ space in 2026:
+
+**Compute is fixed.** Most labs operate under a hard compute budget — a cluster, a quarter, a budget. $C$ is given.
+
+**Inference cost matters.** $N$ should be as small as you can get away with, *subject to acceptable loss*. Smaller is better for serving.
+
+**Data quality matters.** $D$ should be as much *high-quality* token as you can assemble (with up to 4× repetition tolerable, [7.1 §5 Aside](/session/ch7-training-language-models/7.1-pretraining-data)).
+
+**Over-training is the default.** $D/N \in [50, 300]$ is the modern range. Chinchilla's $D/N = 20$ is a *lower bound* on the optimal, not the optimal itself.
+
+**Smaller is better when it fits.** A 7B model with $D/N = 200$ ($\sim 1.4$T tokens of training) often beats a 30B model with $D/N = 50$ ($\sim 1.5$T tokens, same compute) for *deployment*. The 7B is cheaper to serve.
+
+---
+
+## 7. The diminishing-returns curve
+
+A practical question: as $D/N$ grows past Chinchilla, how much loss do you actually save?
+
+The picture is monotone but slow. From Sardana & Frankle (2024) §3, fitted to the Chinchilla parametric form: increasing $D/N$ from 20 to 200 reduces loss by $\sim 3\%$ at fixed $N$. Small in absolute terms — but at the *capability* level, this maps to several MMLU/HumanEval points and substantial qualitative improvements.
+
+So over-training is "expensive per loss point" but the loss points are *valuable*. As of 2026, every additional MMLU point on a frontier model is worth substantial training compute — the field has reached the regime where small loss improvements matter commercially.
+
+---
+
+## 8. Scaling laws as a planning tool
+
+How a frontier run is actually planned, in practice:
+
+1. **Pick deployment scale.** Estimate $Q$ (queries per year × deployment lifetime).
+2. **Pick target capability.** What MMLU / HumanEval / domain-specific score do you need?
+3. **Calibrate the scaling law.** Run a sweep at $C_\text{sweep} = 10^{20}\text{–}10^{22}$ FLOPs. Fit the Chinchilla loss formula to your specific architecture and data distribution. (Your exponents will differ from the published Chinchilla values by a few percent.)
+4. **Extrapolate.** Use the fitted formula to predict loss at $(N, D)$ pairs in your compute budget. Pick the $(N, D)$ that hits your target capability *and* has the lowest inference cost.
+5. **Train.** Reserve the GPUs. Run for the prescribed number of tokens. Monitor whether the actual loss matches the prediction (within a few percent); if not, debug.
+
+The whole machinery turns LLM development from an art into something close to civil engineering. The scaling-law fit is the architectural drawing; the training run is the construction.
+
+---
+
+## 9. What we keep going forward
+
+Three things:
+
+1. **Chinchilla-optimal: $D/N \approx 20$.** At fixed training compute, this is the loss-minimising allocation. Kaplan's $D/N \approx 7$ was wrong by a factor of ~3.
+2. **Production LLMs over-train.** $D/N \in [50, 300]$. The motive is inference cost: a smaller-but-overtrained model serves cheaper. LLaMA-3 trains at $\sim 215$ tokens per parameter.
+3. **Scaling laws are a planning tool.** Fit at small scale; extrapolate; train. This is how 100M-GPU-hour training runs are made tractable.
+
+[Next session](/session/ch7-training-language-models/7.13-long-context-training) turns to **long-context training**: how a model trained at 8k context becomes capable of 32k → 128k → 1M tokens via position interpolation, NTK-aware scaling, and YaRN — the training-side counterpart of the inference-side techniques in [6.13](/session/ch6-attention-transformer/6.13-long-context).
+
+<SelfTest>
+
+**(a)** State the Chinchilla optimal ratio $D / N$. Compare with Kaplan's. By what factor are they different?
+
+**(b)** For a compute budget of $C = 5 \times 10^{23}$ FLOPs, compute the Chinchilla-optimal $(N^*, D^*)$ using $N \cdot D = C/6$ and $D/N = 20$. Compare to GPT-3 ($N = 175$B, $D = 300$B) at roughly the same compute.
+
+**(c)** LLaMA-3-70B trains at $D/N \approx 215$. Explain in two paragraphs why this is *not* a contradiction of Chinchilla — argue from the inference-cost perspective.
+
+**(d)** Hoffmann et al. demonstrate three approaches converging on $D/N \approx 20$. Pick one (§2.1, §2.2, or §2.3) and explain in your own words why it identifies the same optimum.
+
+**(e)** The "all the data you have" recipe (§5 Aside) is the practical limit of inference-aware over-training. Argue why this is the *expected* equilibrium given the data-wall worry of [7.1 §5](/session/ch7-training-language-models/7.1-pretraining-data). Where does it break (if at all)?
+
+</SelfTest>

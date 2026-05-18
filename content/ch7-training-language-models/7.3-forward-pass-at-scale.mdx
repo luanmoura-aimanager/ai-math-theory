@@ -1,0 +1,314 @@
+---
+title: "7.3 — The forward pass at scale: shapes for GPT-2-small"
+chapter: 7
+order: 3
+estimatedMinutes: 24
+goal: "Walk the forward pass of GPT-2-small (12 layers, 12 heads, d=768, n_ctx=1024, V=50257) shape-by-shape; recover the 124M parameter count; count the FLOPs and the per-step memory footprint."
+prerequisites: ["ch7-training-language-models/7.2-bpe-tokenization", "ch6-attention-transformer/6.11-transformer-block-aiayn", "ch6-attention-transformer/6.12-compute-and-memory"]
+---
+
+## 1. Why this session exists
+
+Chapter 6 derived the architecture in symbolic form: $d$ this, $L$ that, $\#\theta \approx 12 L d^2$. This session pins it to one concrete model — GPT-2-small — and walks every tensor shape and every parameter from input ids to output logits. After this session you can:
+
+- Draw the GPT-2-small computation graph from memory.
+- Reproduce the 124M parameter headline from first principles.
+- State the per-step FLOPs and memory cost for training, in numbers.
+- Adapt the same recipe to any other model size (GPT-2-medium/large/xl, LLaMA-7B, GPT-3) — the shapes scale, the recipe doesn't change.
+
+GPT-2-small is the right reference for two reasons: it is small enough to fit on a single GPU (so the shapes are concrete, not hypothetical), and it is exactly what the [nanoGPT walkthrough of 6.16](/session/ch6-attention-transformer/6.16-nanogpt-walkthrough) implements. The numbers here should match what you saw running `model.eval()` in that session.
+
+---
+
+## 2. The GPT-2-small configuration
+
+From Radford et al. (2019), *Language Models are Unsupervised Multitask Learners* (GPT-2 paper), Table 2 — the smallest of four GPT-2 variants:
+
+| Hyperparameter | Symbol | GPT-2-small value |
+|---|---|---:|
+| Vocabulary size | $V$ | 50,257 |
+| Maximum context length | $T_\text{max}$ | 1,024 |
+| Residual stream width | $d$ | 768 |
+| Number of layers | $L$ | 12 |
+| Number of attention heads | $h$ | 12 |
+| Head dimension | $d_h = d / h$ | 64 |
+| FFN inner width | $d_\text{ff} = 4 d$ | 3,072 |
+| Total parameters | | ~124M |
+
+GPT-2-small is *the* reference model for "small but not tiny" Transformer experiments. nanoGPT trains it on Shakespeare; CS336 uses it; every research codebase has a `gpt2-small` config.
+
+A few notes:
+
+- $V = 50{,}257$ is GPT-2's byte-level BPE vocabulary ([7.2 §6](/session/ch7-training-language-models/7.2-bpe-tokenization)). The $\sim 50K$ choice was made *before* training the model.
+- $T_\text{max} = 1024$ is the training context length. Inference can use up to $1024$ tokens of context; longer prompts must be truncated.
+- $L = 12, h = 12, d = 768$ are the three free architectural numbers; everything else derives from them and the choice $d_\text{ff} = 4d$.
+
+---
+
+## 3. Shape-by-shape forward pass
+
+Let $B$ = batch size, $T$ = sequence length (up to $T_\text{max} = 1024$). Pick $B = 8, T = 1024$ for concreteness.
+
+### 3.1 Input ids
+
+```
+input_ids ∈ ℤ^{B × T}     # shape: (8, 1024); each entry is an integer in [0, V)
+```
+
+A token ID array. After [7.2](/session/ch7-training-language-models/7.2-bpe-tokenization), each entry is the BPE id of one token. Shape `(B, T) = (8, 1024)`.
+
+### 3.2 Embedding
+
+GPT-2 uses learned absolute positional embeddings ([Appendix 6.B](/session/ch6-attention-transformer/6.B-learned-pe)), so the input embedding is the **sum** of a token embedding and a position embedding:
+
+```
+tok_emb = E[input_ids]               # shape: (B, T, d) = (8, 1024, 768)
+pos_emb = W_pos[:T]                   # shape: (T, d)    = (1024, 768)
+X^(0)   = tok_emb + pos_emb           # broadcast along batch: (8, 1024, 768)
+```
+
+Two parameter tensors:
+
+- $E \in \mathbb{R}^{V \times d}$ — the token embedding matrix. $50{,}257 \times 768 = 38{,}597{,}376$ parameters.
+- $W_\text{pos} \in \mathbb{R}^{T_\text{max} \times d}$ — the position embedding matrix. $1024 \times 768 = 786{,}432$ parameters.
+
+Together: $\sim 39.4$M parameters. About $32\%$ of the total — a big chunk for such a small model.
+
+### 3.3 One Transformer block
+
+Each block is the **pre-LN block** of [6.10](/session/ch6-attention-transformer/6.10-pre-vs-post-norm):
+
+```
+# Input to block ell:
+X ∈ (B, T, d) = (8, 1024, 768)
+
+# --- Attention sub-layer ---
+X1  = LayerNorm_1(X)                 # (B, T, d), uses γ_1, β_1 ∈ (d,)
+QKV = X1 @ W_attn                    # (B, T, 3d) = (8, 1024, 2304); W_attn shape (d, 3d) = (768, 2304)
+Q, K, V = split(QKV, axis=-1)        # each (B, T, d) = (8, 1024, 768)
+Q = Q.view(B, T, h, d_h).transpose(1, 2)   # (B, h, T, d_h) = (8, 12, 1024, 64)
+K, V = same reshape                       # (B, h, T, d_h) = (8, 12, 1024, 64)
+
+S = Q @ K.transpose(-2, -1) / sqrt(d_h)    # (B, h, T, T) = (8, 12, 1024, 1024)
+S = S + causal_mask                        # causal mask is upper triangle = -inf
+A = softmax(S, axis=-1)                    # (B, h, T, T)
+Z = A @ V                                  # (B, h, T, d_h) = (8, 12, 1024, 64)
+Z = Z.transpose(1, 2).view(B, T, d)        # (B, T, d) = (8, 1024, 768)
+attn_out = Z @ W_O                         # W_O shape (d, d) = (768, 768)
+
+X = X + attn_out                           # residual: (B, T, d)
+
+# --- FFN sub-layer ---
+X2  = LayerNorm_2(X)                       # (B, T, d), uses γ_2, β_2 ∈ (d,)
+H   = X2 @ W_1 + b_1                       # (B, T, 4d) = (8, 1024, 3072); W_1 (d, 4d) = (768, 3072)
+H   = GELU(H)
+ffn_out = H @ W_2 + b_2                    # (B, T, d) = (8, 1024, 768); W_2 (4d, d) = (3072, 768)
+
+X = X + ffn_out                            # residual: (B, T, d)
+```
+
+Twelve such blocks. After block 12, $X^{(12)} \in \mathbb{R}^{B \times T \times d}$.
+
+### 3.4 Final LN and LM head
+
+```
+Z = LayerNorm_final(X^(12))          # (B, T, d) = (8, 1024, 768)
+logits = Z @ E^T                      # (B, T, V) = (8, 1024, 50257), weight-tied to E
+```
+
+The LM head is *tied* to the embedding matrix $E$ — same parameters, used at both ends. The output logits are a probability distribution over the vocabulary at every position.
+
+### 3.5 Loss
+
+For a training step, the target is `target_ids ∈ ℤ^{B × T}` — usually the same as `input_ids` shifted by one position (next-token prediction). The loss is row-wise cross-entropy ([1.8](/session/ch1-linear-models-perceptron/1.8-multiclass-ce-gradient)):
+
+$$
+\mathcal{L} = -\frac{1}{B T} \sum_{b = 1}^{B} \sum_{t = 1}^{T} \log\text{softmax}(\text{logits}_{b, t})_{\text{target}_{b, t}}.
+$$
+
+A single scalar.
+
+---
+
+## 4. Parameter count, from first principles
+
+Let's recover the headline 124M.
+
+### 4.1 Per-block parameters
+
+| Component | Shape | Count |
+|---|---|---:|
+| `LayerNorm_1`: $\gamma_1, \beta_1$ | $(d,) \times 2$ | $2d = 1{,}536$ |
+| `W_attn` (combined Q, K, V) | $(d, 3d)$ | $3 d^2 = 1{,}769{,}472$ |
+| `b_attn` (QKV bias) | $(3d,)$ | $3d = 2{,}304$ |
+| `W_O` (attention output) | $(d, d)$ | $d^2 = 589{,}824$ |
+| `b_O` (attention output bias) | $(d,)$ | $d = 768$ |
+| `LayerNorm_2`: $\gamma_2, \beta_2$ | $(d,) \times 2$ | $2d = 1{,}536$ |
+| `W_1` (FFN expand) | $(d, 4d)$ | $4 d^2 = 2{,}359{,}296$ |
+| `b_1` (FFN expand bias) | $(4d,)$ | $4d = 3{,}072$ |
+| `W_2` (FFN contract) | $(4d, d)$ | $4 d^2 = 2{,}359{,}296$ |
+| `b_2` (FFN contract bias) | $(d,)$ | $d = 768$ |
+| **Per block total** | | $\mathbf{7{,}087{,}872}$ |
+
+So one block is $\approx 7.09$M parameters. Times $L = 12$ blocks: $85{,}054{,}464 \approx 85$M.
+
+### 4.2 Embeddings and final LN
+
+| Component | Shape | Count |
+|---|---|---:|
+| Token embedding $E$ | $(V, d) = (50257, 768)$ | $38{,}597{,}376$ |
+| Position embedding $W_\text{pos}$ | $(T_\text{max}, d) = (1024, 768)$ | $786{,}432$ |
+| Final LayerNorm: $\gamma_f, \beta_f$ | $(d,) \times 2$ | $1{,}536$ |
+| LM head (tied to $E$) | — | $0$ |
+| **Embeddings + LN total** | | $\mathbf{39{,}385{,}344}$ |
+
+### 4.3 Grand total
+
+$$
+\#\theta_\text{GPT-2-small} = 85{,}054{,}464 + 39{,}385{,}344 = 124{,}439{,}808 \approx 124.4\,\text{M}.
+$$
+
+This matches OpenAI's headline number exactly. The often-quoted 124M is the round-down; the *exact* number is $\approx 124.4$M.
+
+### 4.4 Cross-check against the $12 L d^2$ rule
+
+The Cap 6 first-order rule was $\#\theta \approx V d + 12 L d^2 + 2d$. Plug in:
+
+$$
+50{,}257 \cdot 768 + 12 \cdot 12 \cdot 768^2 + 2 \cdot 768 = 38{,}597{,}376 + 84{,}934{,}656 + 1{,}536 = 123{,}533{,}568.
+$$
+
+That's $\approx 123.5$M — within $1\%$ of the exact $124.4$M. The discrepancy is the biases (which the rule dropped) and the per-block LNs. **The $12 L d^2$ formula is accurate to a few percent at this scale**; you can use it for quick parameter estimates and worry about the corrections only when designing precisely.
+
+---
+
+## 5. FLOPs and memory at training time
+
+From [6.12](/session/ch6-attention-transformer/6.12-compute-and-memory):
+
+$$
+\#\text{FLOPs/block forward} = 24 T d^2 + 4 T^2 d.
+$$
+
+### 5.1 GPT-2-small forward FLOPs
+
+At $T = 1024$:
+
+$$
+\begin{aligned}
+\#\text{FLOPs/block} &= 24 \cdot 1024 \cdot 768^2 + 4 \cdot 1024^2 \cdot 768 \\
+                     &= 1.449 \times 10^{10} + 3.221 \times 10^{9} \\
+                     &= 1.771 \times 10^{10}.
+\end{aligned}
+$$
+
+Times $L = 12$ blocks: $\approx 2.13 \times 10^{11}$ FLOPs per forward pass per batch slot. Per batch of $B = 8$: $\approx 1.70 \times 10^{12}$ FLOPs. Plus the LM head, $2 B T V d \approx 6.3 \times 10^{11}$. Total forward $\approx 2.3 \times 10^{12}$ FLOPs per training batch.
+
+### 5.2 Backward FLOPs
+
+The backward pass is roughly **twice** the forward — every matrix multiply in the forward pass turns into two matrix multiplies in the backward (one for the input gradient, one for the weight gradient). The standard rule of thumb:
+
+$$
+\#\text{FLOPs/training step} \approx 3 \cdot \#\text{FLOPs/forward}.
+$$
+
+So GPT-2-small at $B = 8, T = 1024$: $\approx 7 \times 10^{12}$ FLOPs per training step.
+
+The Chinchilla heuristic of $6 N D$ ([6.12 Aside](/session/ch6-attention-transformer/6.12-compute-and-memory)) gives: $6 \cdot 124 \times 10^6 \cdot 8192 = 6.1 \times 10^{12}$ — close enough.
+
+### 5.3 Memory: parameters
+
+$124 \times 10^6$ params, fp32: $4 \cdot 124 \times 10^6 = 496$ MB just for the weights. In fp16 (or bf16): $\sim 250$ MB.
+
+### 5.4 Memory: optimiser state
+
+Adam ([3.5](/session/ch3-optimization-regularization/3.5-adam)) tracks first moment $m$ and second moment $v$, each the same shape as the parameters. Plus the master copy of weights in fp32 (for mixed-precision training, [7.4](/session/ch7-training-language-models/7.4-mixed-precision)):
+
+$$
+\text{Adam memory} = \underbrace{\#\theta \cdot 4}_{\text{master weights, fp32}} + \underbrace{\#\theta \cdot 4}_{m, fp32} + \underbrace{\#\theta \cdot 4}_{v, fp32} = 12 \cdot \#\theta\ \text{bytes}.
+$$
+
+For GPT-2-small: $12 \cdot 124 \times 10^6 = 1.5$ GB.
+
+### 5.5 Memory: activations
+
+The dominant memory cost at training time. Per training step, every intermediate activation is stored for the backward pass:
+
+- Input embedding output: $B T d = 6.3 \times 10^6$ entries per layer.
+- Attention scores: $B h T^2 = 8 \cdot 12 \cdot 1024^2 = 1.0 \times 10^8$ entries per block ← *the dominant term*.
+- FFN hidden state: $B T \cdot 4 d = 2.5 \times 10^7$ entries per block.
+
+In fp16 (2 bytes per entry), per block:
+
+$$
+\sim (1.0 \times 10^8 + 6 \cdot 10^7) \cdot 2 = 320\ \text{MB per block}.
+$$
+
+Times $L = 12$ blocks: $\sim 3.8$ GB of activations. **Memory is dominated by activations**, not by parameters or optimiser state.
+
+This is the structural reason for **activation checkpointing** ([7.7](/session/ch7-training-language-models/7.7-activation-checkpointing)) — recompute activations on demand instead of storing them.
+
+### 5.6 Full training memory budget for one GPT-2-small step
+
+| Component | Size (fp16/bf16 with fp32 Adam master) |
+|---|---:|
+| Parameters (fp16) | $\sim 250$ MB |
+| Gradients (fp16) | $\sim 250$ MB |
+| Optimizer state (fp32) | $\sim 1.5$ GB |
+| Activations (fp16) | $\sim 3.8$ GB |
+| **Total** | $\sim 5.8$ GB |
+
+Fits comfortably on a 24 GB consumer GPU (RTX 3090, 4090) with batch size 8. The headroom is what lets you push to larger contexts or batch sizes. For larger models (GPT-2-medium and up), the activation memory dominates and forces activation checkpointing.
+
+---
+
+## 6. Scaling the recipe
+
+The exact same calculation works for any decoder-only Transformer; only the constants change. Quick table for the GPT-2 family and beyond:
+
+| Model | $L$ | $h$ | $d$ | $d_\text{ff}$ | $T_\text{max}$ | $\#\theta$ |
+|---|---:|---:|---:|---:|---:|---:|
+| GPT-2-small | 12 | 12 | 768 | 3,072 | 1,024 | 124M |
+| GPT-2-medium | 24 | 16 | 1,024 | 4,096 | 1,024 | 355M |
+| GPT-2-large | 36 | 20 | 1,280 | 5,120 | 1,024 | 774M |
+| GPT-2-xl | 48 | 25 | 1,600 | 6,400 | 1,024 | 1.5B |
+| GPT-3-125M | 12 | 12 | 768 | 3,072 | 2,048 | 125M |
+| GPT-3-350M | 24 | 16 | 1,024 | 4,096 | 2,048 | 350M |
+| GPT-3-1.3B | 24 | 24 | 2,048 | 8,192 | 2,048 | 1.3B |
+| GPT-3-6.7B (curie) | 32 | 32 | 4,096 | 16,384 | 2,048 | 6.7B |
+| GPT-3-13B | 40 | 40 | 5,120 | 20,480 | 2,048 | 13B |
+| GPT-3-175B (davinci) | 96 | 96 | 12,288 | 49,152 | 2,048 | 175B |
+| LLaMA-7B | 32 | 32 | 4,096 | 11,008 (≈ $\frac{8}{3} d$) | 4,096 | 6.7B |
+| LLaMA-70B | 80 | 64 | 8,192 | 28,672 | 4,096 | 70B |
+
+A few patterns to notice:
+
+- **GPT-2 → GPT-3 architectural change is minimal.** Same shape, larger $L$ and $d$, longer $T_\text{max}$. The "scale is what matters" thesis is exactly this.
+- **LLaMA's $d_\text{ff}$ is slightly less than $4 d$.** Because it uses SwiGLU (Cap 8.4), which uses three matrices in the FFN. Adjusting $d_\text{ff}$ down keeps the parameter count similar to standard-FFN models.
+- **The ratio $d_\text{ff} / d \approx 4$ (or $8/3$ for SwiGLU)** is constant across the family — this is the only thing tied to a "shape rule"; everything else scales freely.
+
+---
+
+## 7. What we keep going forward
+
+Three things from this session:
+
+1. **Every Transformer is a small set of hyperparameters** $(L, h, d, d_\text{ff}, V, T_\text{max})$ that determine everything else. Memorise GPT-2-small as $(12, 12, 768, 3072, 50257, 1024)$.
+2. **Parameter count is approximately $V d + 12 L d^2$.** Accurate to a few percent. For GPT-2-small: 39M embed + 85M blocks ≈ 124M total.
+3. **Memory cost is dominated by activations**, not parameters or optimiser state, at training time. This will be the central concern of [7.6](/session/ch7-training-language-models/7.6-gradient-accumulation) and [7.7](/session/ch7-training-language-models/7.7-activation-checkpointing).
+
+[Next session](/session/ch7-training-language-models/7.4-mixed-precision) opens up the *precision* axis: training a 124M model in pure fp32 is wasteful; modern training uses fp16 or bf16 for forward/backward and fp32 for the optimiser. Each choice has a numerical-stability story we have to know.
+
+<SelfTest>
+
+**(a)** Reproduce the GPT-2-small parameter count from scratch using the per-block table in §4.1. Identify the single largest term.
+
+**(b)** A larger model has $d = 4096, L = 32, V = 50000, T_\text{max} = 2048$. Estimate the parameter count using the $V d + 12 L d^2$ rule. Now compute the exact count using §4.1 (including biases and LNs). Compare.
+
+**(c)** For GPT-2-small at $B = 8, T = 1024$, the FLOPs per training step are roughly $7 \times 10^{12}$. On an A100 GPU at ~300 TFLOPs/s fp16, what is the wall-clock per step? Compare with the same calculation for GPT-3-175B at $B = 1024, T = 2048$.
+
+**(d)** The activation memory dominates the training memory budget (§5.5). State which activation contributes the largest term and why it scales as $h T^2$.
+
+**(e)** A GPT-2-small model has 50,257 vocabulary entries × 768 dim = 38.6M embedding parameters. What fraction of the total is this? Now repeat for GPT-3-175B (V same, d=12288). What does this say about the "embedding-dominated" regime?
+
+</SelfTest>

@@ -1,0 +1,237 @@
+---
+title: "7.5 — Data mixing, curriculum, and annealing"
+chapter: 7
+order: 5
+estimatedMinutes: 22
+goal: "Understand how a pretraining run sequences its tokens: domain weighting (math/code vs uniform), curriculum (easy → hard), and high-quality annealing near training end. Pair MiniCPM-style annealing with the WSD schedule of 3.7."
+prerequisites: ["ch7-training-language-models/7.1-pretraining-data", "ch3-optimization-regularization/3.7-lr-schedules-and-clipping"]
+---
+
+## 1. Why this session exists
+
+[7.1](/session/ch7-training-language-models/7.1-pretraining-data) gave us *what data exists*; [7.2](/session/ch7-training-language-models/7.2-bpe-tokenization) gave us *how to tokenise it*. This session is about *how to sequence it during training* — a piece of pretraining that was treated as a black box until ~2024 and is now recognised as one of the highest-leverage design choices in the entire pretraining recipe.
+
+Three knobs:
+
+1. **Domain weighting.** Up- or down-weight code, math, multilingual data relative to its natural-distribution share. *Why?* The natural distribution under-represents code and math; sampling them more heavily makes the model better at code and math, often without hurting other domains.
+2. **Curriculum.** Order the data from "easy" to "hard" — short and simple sequences first, long and complex sequences later. *Why?* Curriculum aligns with how humans (and earlier shallow models) learn; for LLMs it has subtler effects, with mixed empirical results.
+3. **Annealing.** Switch to high-quality data near the end of training, alongside the learning-rate decay. *Why?* The model's final updates are the ones that "stick"; spending them on noisy data wastes the highest-impact training steps.
+
+The MiniCPM-style annealing recipe (Hu et al., 2024) combines #3 with the WSD learning-rate schedule of [3.7](/session/ch3-optimization-regularization/3.7-lr-schedules-and-clipping): warm-up, stable, decay — with the high-quality data introduced in the decay phase. This has become a near-universal pattern in 2024–2026 frontier pretraining.
+
+This session: what each knob does, why, the published evidence, and the recipe that ties them together.
+
+---
+
+## 2. Domain weighting
+
+A pretraining corpus is a *mixture* of sources ([7.1 §2](/session/ch7-training-language-models/7.1-pretraining-data)). At training time, each batch is drawn from this mixture — but the sampling weights need not match the natural-corpus ratios.
+
+### 2.1 The trade-off
+
+Let $\pi_d$ be the *natural* fraction of domain $d$ in the corpus (web, books, code, etc.) and $w_d$ be the *training-time sampling weight*. Setting $w_d > \pi_d$ over-samples that domain; the model sees its tokens more often per epoch than its natural share would imply.
+
+The trade-off:
+
+- **Up-weighting code.** Improves code generation; can slightly hurt prose quality if pushed too far.
+- **Up-weighting math.** Improves arithmetic and step-by-step reasoning; can hurt general knowledge.
+- **Up-weighting Wikipedia.** Improves factual recall but reduces stylistic variety.
+- **Up-weighting books.** Improves long-context coherence and narrative ability.
+
+The "right" weights are recipe-specific. LLaMA-1 used $\sim 67\%$ web, $\sim 4.5\%$ GitHub, $\sim 4.5\%$ books, $\sim 4.5\%$ ArXiv, $\sim 2\%$ Wikipedia, $\sim 2\%$ StackExchange. GPT-3 was different. Phi-3 (Microsoft, 2024) over-weights "textbook-like" data drastically.
+
+### 2.2 DoReMi: learning the weights
+
+**Xie et al., 2023, *DoReMi: Optimizing Data Mixtures Speeds Up Language Model Pretraining*** ([arXiv:2305.10429](https://arxiv.org/abs/2305.10429)). Instead of hand-tuning $w_d$, *learn* them. Train a small "proxy" model under different mixtures; pick the mixture that minimises a *worst-domain* perplexity objective on a held-out evaluation set. Transfer the discovered mixture to the full-size pretraining run.
+
+DoReMi reduced LLaMA-1's pretraining steps to reach a target loss by $2.6\times$ on the same total token budget — a substantial saving. The method is now used as a *first-stage exploration* before committing to a large run; modern pretraining recipes do a small DoReMi-style search at the 1B-parameter scale, then scale up.
+
+### 2.3 Empirical defaults
+
+A modern recipe (LLaMA-3-style) roughly:
+
+- **English web (filtered)**: 50–60%
+- **Multilingual web**: 5–15%
+- **Code**: 10–20%
+- **Math (arXiv, StackExchange-math, Lean/Coq)**: 2–5%
+- **Books / long-form**: 5–10%
+- **Wikipedia + reference**: 1–3%
+
+The exact weights are adjusted via DoReMi-style search and held constant through most of training (until annealing, §4).
+
+### 2.4 Repetition vs fresh tokens
+
+If a domain has fewer total tokens than the model needs to see at the desired weight, **repetition** is unavoidable. Muennighoff et al. (2023, [arXiv:2305.16264](https://arxiv.org/abs/2305.16264)) showed that high-quality data can be repeated up to ~4 times before quality degrades meaningfully. Modern recipes:
+
+- Web data is large enough to see each token $\leq 1$ time.
+- Books and Wikipedia are repeated 2–4 times to match their target weight.
+- Code might be repeated 1–3 times depending on the corpus.
+
+The total *effective epochs* across the mixture is typically 1.0–1.5 (each token seen on average a bit more than once).
+
+---
+
+## 3. Curriculum learning
+
+Curriculum learning ([Bengio et al., 2009, *Curriculum Learning*](https://dl.acm.org/doi/10.1145/1553374.1553380)) — train on easier examples first, harder later — is intuitive: humans and animals learn this way. For deep models the empirical evidence is mixed.
+
+### 3.1 What "easy" and "hard" mean for LLMs
+
+Several proposed orderings:
+
+- **By sequence length.** Short sequences first, gradually lengthen. Reduces compute early on (attention's $T^2 d$ cost), and supposedly lets the model master local patterns before long-range dependencies.
+- **By perplexity under a reference model.** Train a small reference LM; rank documents by their perplexity under it; show low-perplexity (predictable, "easy") documents first. Used in some MPT and OpenLLaMA runs.
+- **By complexity heuristics.** Reading-grade-level, vocabulary diversity, sentence structure. Rare in modern pipelines.
+
+### 3.2 Mixed empirical evidence
+
+The 2024 consensus, gathered from a half-dozen ablations across MPT, Pythia, OpenLLaMA, and LLaMA-3:
+
+- **Length-based curricula** save compute (shorter early sequences are cheaper) but do not measurably improve final loss. Some teams use them (Mistral-7B used 2048→4096→8192 staged context); others (Cap 7.13 (long-context training) — long-context training) treat context-extension as a separate post-training step.
+- **Perplexity-based curricula** sometimes help small models but rarely help large ones. The effect washes out at scale.
+- **Domain curricula** (e.g., "show web first, then code") tend to hurt — the model forgets what was shown earliest. Anti-curriculum effect.
+
+So "curriculum learning" in the strict sense is not a free win for LLM pretraining. The thing that *does* work — and is now called "curriculum-like" — is the annealing recipe of §4 below. The remainder of this section is about that.
+
+---
+
+## 4. Annealing: high-quality data at the end
+
+The single most influential idea in 2024 pretraining recipes:
+
+> **Spend the final $\sim 10\%$ of training on the highest-quality data you have, alongside the learning-rate decay.**
+
+The intuition is gradient-descent: in the late stages, when the learning rate is small, every update is tiny — but every update *also* sticks because the model isn't oscillating. So the last 10% of updates are disproportionately impactful per token seen. Putting your best tokens there pays off.
+
+### 4.1 The MiniCPM recipe
+
+**Hu, Tu, Han, et al., 2024, *MiniCPM: Unveiling the Potential of Small Language Models with Scalable Training Strategies*** ([arXiv:2404.06395](https://arxiv.org/abs/2404.06395)). Introduced the **Warmup-Stable-Decay (WSD)** learning-rate schedule explicitly designed for late-stage annealing, paired with a data switch.
+
+The recipe:
+
+1. **Warmup phase** ($\sim 1\%$ of training). Linear LR ramp from 0 to peak. Use the "stable" data mixture (the §2.3 default).
+2. **Stable phase** ($\sim 80\%$ of training). LR held constant at peak. Same stable data mixture. The bulk of optimisation happens here; the model learns broadly across all domains.
+3. **Decay phase** ($\sim 10$–$20\%$ of training). LR cosine-decayed to ~$0$. **Switch the data mixture to high-quality only**: educational web (FineWeb-Edu, [7.1 §4.5](/session/ch7-training-language-models/7.1-pretraining-data)), curated code, math textbooks, problem-solving data, instruction-like text.
+
+We covered the LR schedule in [3.7](/session/ch3-optimization-regularization/3.7-lr-schedules-and-clipping); MiniCPM is what *also* uses the decay phase as a data window. The data switch coincides with the LR decay.
+
+### 4.2 Empirical evidence
+
+MiniCPM-2B trained with annealing matched a non-annealed 7B model on several benchmarks at $\sim 30\%$ of the compute. This was the result that crystallised the recipe.
+
+Independent verifications:
+
+- **Phi-3** (Abdin et al., 2024). Uses similar "textbook + filtered web" data in late training. Phi-3-mini (3.8B) reached LLaMA-3-7B performance on many benchmarks.
+- **DCLM-Baseline** (Li et al., 2024, [7.1 §4.4](/session/ch7-training-language-models/7.1-pretraining-data)). Reports a "two-stage" recipe with a high-quality final phase.
+- **LLaMA-3** (Dubey et al., 2024). The LLaMA-3 paper documents "data mixing in the late stages of training" as part of the production recipe.
+
+The recipe is now standard. As of 2026, **every frontier pretraining run uses some form of late-stage annealing**.
+
+### 4.3 Why it works, intuitively
+
+Three reinforcing arguments:
+
+**(a) The last updates stick.** Late in training, the model is near a local minimum; small LR means updates don't move the parameters far. Whatever bias the late-stage data injects is *permanent*. Putting high-quality data there is the highest-leverage choice you can make.
+
+**(b) High-quality data is rare.** You only have a few hundred billion tokens of truly excellent data; if you spread it uniformly across $10^{13}$ tokens of training, each excellent example is dwarfed by mediocre context. Concentrating it in the late phase amplifies its impact.
+
+**(c) Annealing is a "polishing" step.** Think of the stable phase as broad learning ("see everything") and the annealing phase as targeted refinement ("now learn the best stuff"). The shape mirrors human study: read broadly, then focus.
+
+### 4.4 WSD vs cosine
+
+The classical cosine LR schedule ([3.7 §3](/session/ch3-optimization-regularization/3.7-lr-schedules-and-clipping)) decays LR smoothly from peak to ~0 over the full training run. WSD holds the LR constant for most of training and decays only at the end.
+
+WSD's advantages over cosine:
+
+- **Annealing-friendly.** The constant-LR phase keeps the model in a "high-learning" regime longer; the late decay coincides cleanly with the data switch.
+- **Checkpoint-flexible.** Models can be "annealed" from any checkpoint of the stable phase — useful for adapting one base model to multiple specialised variants (each with its own annealing data).
+- **Less peak-LR-sensitive.** Cosine schedules need a precise peak-LR pick; WSD's constant phase is more robust.
+
+Most 2024–2026 frontier runs use WSD. Cosine remains common in smaller-scale experiments and where the total token budget is known precisely in advance.
+
+---
+
+## 5. The full pretraining timeline
+
+Tying §2–§4 together, a typical 2024–2026 pretraining run looks like:
+
+```
+Time      │  LR schedule    │  Data mixture        │  What happens
+──────────┼─────────────────┼──────────────────────┼─────────────────────────
+0–1%      │  Warmup         │  Stable mix          │  LR climbs to peak;
+          │  (linear)       │  (web-heavy, §2.3)   │  loss falls fast
+──────────┼─────────────────┼──────────────────────┼─────────────────────────
+1–80%     │  Stable         │  Stable mix          │  Bulk of learning;
+          │  (constant)     │                      │  model acquires
+          │                 │                      │  most of its capabilities
+──────────┼─────────────────┼──────────────────────┼─────────────────────────
+80–95%    │  Decay          │  High-quality        │  Final refinement;
+          │  (cosine to 0)  │  annealing mix       │  precise factual and
+          │                 │                      │  reasoning gains
+──────────┼─────────────────┼──────────────────────┼─────────────────────────
+95–100%   │  Decay to ~0    │  Targeted final     │  Lock in final
+          │                 │  (instruction-like) │  capabilities
+```
+
+For a 15T-token LLaMA-3 run, this maps to roughly:
+
+- $\sim 0.15$ T tokens warm-up
+- $\sim 12$ T tokens stable phase
+- $\sim 2.5$ T tokens annealing phase (high-quality)
+- $\sim 0.4$ T tokens final lock-in
+
+The annealing phase is the same size as a small pretraining run on its own. It's not a tweak — it's a major fraction of the total.
+
+---
+
+## 6. Loss curves and what they show
+
+A well-tuned pretraining run produces a characteristic loss curve:
+
+1. **Warmup spike-then-fall.** The first few hundred steps may be noisy; loss is high. As LR reaches peak, loss enters its main descent.
+2. **Stable-phase decline.** Loss decreases as a roughly straight line on a log-log plot. The slope corresponds to the scaling law of Cap 7.11 (Kaplan scaling laws).
+3. **Annealing drop.** When the data switches and LR starts decaying, the loss curve "drops" by an additional ~0.05–0.10 — visible as a kink. This is the *annealing payoff*: high-quality data at low LR delivers compounded improvement.
+4. **Final flat.** Near the end of decay, loss plateaus.
+
+If your loss curve doesn't show an annealing drop, either the data switch didn't include enough high-quality material or the LR didn't decay enough.
+
+<Aside type="history">
+**Phi: the "textbook is all you need" extreme.** Microsoft's Phi family (Phi-1, Phi-2, Phi-3) pushed the §4 idea to an extreme: train mostly on *synthetic* high-quality data — Python tutorials, textbook-style explanations, problem-solution pairs generated by GPT-4 — for a much larger fraction of the run. Phi-3-mini (3.8B) achieves LLaMA-3-8B-like performance on many benchmarks, partly because nearly *all* of its training data is high-quality. The risk is overfitting to the synthetic-data distribution; Phi-3 indeed has narrower capability breadth than equivalently-sized models trained on more diverse data. The lesson: high-quality data is necessary; how much you should rely on synthetic vs naturally-occurring high-quality is still being worked out.
+</Aside>
+
+---
+
+## 7. Connections to later chapters
+
+The annealing recipe interacts with the rest of the course:
+
+- **WSD schedule** is from [3.7](/session/ch3-optimization-regularization/3.7-lr-schedules-and-clipping). The constant-then-decay shape is what enables clean annealing.
+- **DCLM-Baseline and FineWeb-Edu** are typical annealing-data sources. See [7.1 §4](/session/ch7-training-language-models/7.1-pretraining-data).
+- **Long-context training** (Cap 7.13 (long-context training)) often happens in the annealing phase: switch to longer sequences (8k → 32k → 128k) alongside the high-quality data switch.
+- **Instruction fine-tuning** (Cap 9.2 SFT) sits *after* pretraining, with its own learning-rate schedule. The annealing data and the SFT data overlap conceptually (both are high-quality, instruction-like) but are *not* the same step — annealing happens during pretraining, SFT happens after.
+
+---
+
+## 8. What we keep going forward
+
+Pretraining is not "feed tokens uniformly until done". It is a *scheduled* process with three structuring decisions:
+
+1. **Domain weighting.** Up-weight high-leverage domains (code, math) relative to natural shares. DoReMi searches for the best mixture.
+2. **Curriculum.** Mostly *not* helpful in the strict sense; length-based staging is the only common form.
+3. **Annealing.** Switch to high-quality data in the final $\sim 15\%$ of training, paired with the WSD learning-rate decay. **This is the single biggest 2024 recipe innovation.**
+
+[Next session](/session/ch7-training-language-models/7.6-gradient-accumulation) returns to the optimisation engineering: how do you achieve a $2$M-token *effective batch size* on a GPU that can only fit $8$k tokens at a time? The answer is gradient accumulation.
+
+<SelfTest>
+
+**(a)** A pretraining recipe uses a 15 T total token budget with an 80% stable phase and a 15% annealing phase. How many tokens does each phase consume? If the annealing phase uses FineWeb-Edu (1.3 T tokens), what is the effective epoch count over that data?
+
+**(b)** A model is trained on a mixture with $w_\text{code} = 15\%$ but the natural-corpus ratio is $\pi_\text{code} = 5\%$. State the up-weighting factor. Why might this hurt prose quality if pushed further (to $w_\text{code} = 50\%$)?
+
+**(c)** DoReMi optimises a *worst-domain* perplexity. Why this objective rather than average perplexity? (Hint: think about which domains tend to be under-represented in standard mixtures.)
+
+**(d)** Argue why the WSD learning-rate schedule pairs better with late-stage annealing than the cosine schedule does. (Hint: think about what fraction of the run has low LR.)
+
+**(e)** Read MiniCPM (Hu et al., 2024, [arXiv:2404.06395](https://arxiv.org/abs/2404.06395)) §3. State, in your own words, the empirical evidence they offer for late-stage annealing. What single experiment most cleanly isolates the annealing effect from confounds?
+
+</SelfTest>

@@ -1,0 +1,221 @@
+---
+title: "7.8 — Data parallelism (DP)"
+chapter: 7
+order: 8
+estimatedMinutes: 22
+goal: "Derive synchronous data parallelism: replicate the model on D devices, split the batch across them, average gradients via all-reduce, take one optimiser step on each replica. Quantify the communication cost (ring all-reduce: 2 · (D-1)/D · #params per step) and identify where DP alone runs out of headroom."
+prerequisites: ["ch7-training-language-models/7.7-activation-checkpointing", "ch3-optimization-regularization/3.1-batch-sgd-minibatch"]
+---
+
+## 1. Why this session exists
+
+Single-machine training has a hard wall. A 7B-parameter model in bf16 mixed precision with Adam needs ~140 GB of non-activation memory ([7.4 §7](/session/ch7-training-language-models/7.4-mixed-precision)) — already beyond a single H100. Even fitting the *model* is a multi-device problem; running fast enough for production pretraining (trillions of tokens) demands hundreds to thousands of devices working in parallel.
+
+There are *four* axes of parallelism we will cover:
+
+- **Data parallelism (DP) — this session.** Replicate the model; split the batch.
+- **Tensor parallelism (TP) — [7.9](/session/ch7-training-language-models/7.9-tensor-pipeline-parallelism).** Split each matmul across devices.
+- **Pipeline parallelism (PP) — [7.9](/session/ch7-training-language-models/7.9-tensor-pipeline-parallelism).** Split the *layer stack* across devices.
+- **Fully-Sharded Data Parallelism (FSDP / ZeRO-3) — [7.10](/session/ch7-training-language-models/7.10-fsdp-zero).** Shard the parameters and optimiser state across DP ranks.
+
+Frontier pretraining combines all four (often called **5D parallelism** when you count sequence parallelism, [7.9 §6](/session/ch7-training-language-models/7.9-tensor-pipeline-parallelism), separately). This session covers the cheapest and most universal: DP. Every LLM trained since ~2017 uses DP as its outermost layer of parallelism. The session derives the algorithm, the communication primitive (ring all-reduce), the actual cost in bytes-per-step, and identifies the regime where DP alone hits a wall (you cannot fit the model on one device).
+
+---
+
+## 2. The DP setup
+
+You have $D$ devices, each capable of running the full model in memory. The training step:
+
+1. **Replicate.** Place an identical copy of the model on each device.
+2. **Split.** Partition the global batch of $B$ samples into $D$ shards of $B / D$ samples each. Device $d$ owns shard $d$.
+3. **Forward.** Each device runs the forward pass on its shard. No cross-device communication.
+4. **Backward.** Each device runs backward to compute its *local* gradient $g_d = (1/B_d) \sum_{i \in \text{shard } d} \nabla \ell_i$ where $B_d = B / D$. Still local — no communication.
+5. **All-reduce.** Compute the global gradient $g = (1/D) \sum_d g_d$. **This is the cross-device step.** Every device ends with the same $g$.
+6. **Optimiser step.** Each device applies $g$ to its local copy via Adam (or whatever). Because all replicas had identical parameters and now apply the same gradient, they remain identical after the step.
+
+The all-reduce in step 5 is the only synchronisation point. Steps 3 and 4 are embarrassingly parallel. The cost analysis (§4) is dominated by the all-reduce.
+
+### 2.1 Synchronous vs asynchronous
+
+We are describing **synchronous** DP — every device waits for the all-reduce, applies the same update, stays in lockstep. Earlier systems (Hogwild, Downpour SGD circa 2012–2015) used **asynchronous** DP, where workers pushed gradients to a parameter server without waiting. Async DP is faster per step but introduces *stale gradient* noise that hurts convergence at LLM scales. **Modern LLM training is universally synchronous.**
+
+### 2.2 The mathematical guarantee
+
+After step 6, the parameters on every device are equal to what a single-device run of batch size $B$ would have produced — *exactly*, up to floating-point determinism. This is the same observation as gradient accumulation ([7.6 §2](/session/ch7-training-language-models/7.6-gradient-accumulation)):
+
+$$
+g = \frac{1}{B} \sum_{i = 1}^{B} \nabla \ell_i = \frac{1}{D} \sum_{d = 1}^{D} \underbrace{\frac{1}{B_d} \sum_{i \in \text{shard } d} \nabla \ell_i}_{g_d}.
+$$
+
+The mean-of-means equals the mean — because the shards partition the batch evenly. DP is *exactly* equivalent to single-device training on the same effective batch.
+
+(Caveat from [7.6 §4.1](/session/ch7-training-language-models/7.6-gradient-accumulation): if your model uses BatchNorm, the equivalence breaks. Modern LLMs use LayerNorm/RMSNorm and are batch-linear; the equivalence holds.)
+
+---
+
+## 3. All-reduce: the load-bearing primitive
+
+The all-reduce takes a per-device tensor $g_d$ and computes the global sum (or average) $g = \sum_d g_d$, *placing the result on every device*. It is the single most important communication primitive in distributed training.
+
+### 3.1 Naive: gather-and-broadcast
+
+A first idea: a single device (call it rank 0) gathers all $g_d$, computes the sum, broadcasts the result back. Cost:
+
+- Each device sends its $g_d$ (size $G$) to rank 0: $D - 1$ sends, total $G \cdot (D - 1)$ bytes moved over the network.
+- Rank 0 broadcasts the result: another $G \cdot (D - 1)$ bytes.
+- Total: $2 G (D - 1)$ bytes, all bottlenecked through rank 0.
+
+Two problems: (a) rank 0's network link is the bottleneck, idle on everyone else; (b) total bandwidth scales with $D$, hopeless at $D = 1024$.
+
+### 3.2 Ring all-reduce
+
+**Patarasuk & Yuan, 2009, *Bandwidth optimal all-reduce algorithms for clusters of workstations*** ([sciencedirect.com](https://www.sciencedirect.com/science/article/pii/S0743731508001767)). Arrange the $D$ devices in a logical ring. Each device communicates only with its two neighbours. The all-reduce executes in two phases of $D - 1$ steps each:
+
+**Phase 1: reduce-scatter.** Split each device's tensor into $D$ equal chunks of size $G / D$. In step $k$ ($k = 1, \dots, D - 1$):
+
+- Device $d$ sends chunk $(d - k + 1) \bmod D$ to its right neighbour.
+- Receives chunk $(d - k) \bmod D$ from its left neighbour and *adds* it to its local copy.
+
+After $D - 1$ steps, each device holds the *summed* version of one specific chunk (chunk $d$ on device $d$).
+
+**Phase 2: all-gather.** Symmetrically pass the summed chunks around the ring so every device ends up with every chunk. Another $D - 1$ steps of $G / D$ bytes each.
+
+### 3.3 Cost analysis
+
+Each device sends $D - 1$ chunks of size $G / D$ in each phase, total
+
+$$
+\text{bytes sent per device} = 2 \cdot (D - 1) \cdot \frac{G}{D} = 2 G \cdot \frac{D - 1}{D}.
+$$
+
+As $D \to \infty$, this approaches $2 G$ per device — **independent of $D$**. *Every* device sends the same volume regardless of how many devices there are. This is bandwidth-optimal: you can't do better unless you weaken the all-reduce semantics.
+
+For LLM training: $G$ is the gradient size (in bytes). For a 7B-parameter model in bf16, $G = 14$ GB. Per training step, every device sends ~$28$ GB across the network. On an InfiniBand HDR cluster (200 Gbit/s ≈ 25 GB/s per device), this is ~$1.1$ seconds of communication. If a forward+backward takes 2 seconds, the all-reduce is comparable in time to the compute — a significant overhead.
+
+### 3.4 Hierarchical and tree all-reduces
+
+Ring all-reduce is good across a flat fabric. Modern clusters are *hierarchical*: 8 GPUs per node (connected by NVLink at ~900 GB/s), nodes connected by InfiniBand at ~25 GB/s. Real implementations (NCCL — NVIDIA Collective Communications Library) use **hierarchical all-reduce**: first reduce within each node over NVLink, then ring-reduce across nodes over IB, then broadcast within each node again. The within-node phase is essentially free; the inter-node phase scales as $2 G (D_\text{nodes} - 1) / D_\text{nodes}$.
+
+For 64 nodes × 8 GPUs each: per-device inter-node bytes $\approx 2 G \cdot 63/64$, almost the same as flat. But the constant factor is much smaller because the within-node bandwidth dominates: NVLink is ~36× faster than IB.
+
+NCCL handles all of this automatically. From the user's perspective, you call `dist.all_reduce(tensor)` and the topology-aware algorithm runs underneath.
+
+---
+
+## 4. PyTorch DDP: the standard implementation
+
+PyTorch's **DistributedDataParallel (DDP)** wraps the model and inserts the all-reduce at backward time.
+
+```python
+import torch.distributed as dist
+from torch.nn.parallel import DistributedDataParallel as DDP
+
+dist.init_process_group(backend="nccl")  # one process per GPU
+model = build_model().to(local_rank)
+model = DDP(model, device_ids=[local_rank])
+
+for batch in dataloader:
+    optimizer.zero_grad()
+    loss = model(batch.input_ids).loss
+    loss.backward()                  # NCCL all-reduce happens here, overlapped with backward
+    optimizer.step()
+```
+
+Two important details:
+
+**(a) Backward and all-reduce overlap.** DDP doesn't wait until the entire backward pass finishes before starting communication. As soon as the gradient for layer $\ell$ is computed, DDP fires off an asynchronous all-reduce for that gradient. The all-reduce of layer $\ell$ overlaps with the backward computation of layer $\ell - 1$. With enough overlap, communication is largely hidden behind compute.
+
+The overlap is what makes DDP practical at scale: the all-reduce latency wouldn't tolerate a serial "compute → wait → step" pattern.
+
+**(b) Bucket-based all-reduce.** Per-layer all-reduces have high per-call overhead (NCCL kernel launches, IB connection setup). DDP groups consecutive small gradients into **buckets** (default ~25 MB) and issues one all-reduce per bucket. This trades a little overlap (the first bucket can't start until the last layer's gradient is ready) for much lower fixed cost.
+
+---
+
+## 5. Where DP runs out
+
+DP requires that the **entire model + optimiser state + activations fit on one device**. Three things scale with model size $N$:
+
+| Component | Size | LLaMA-7B (bf16, Adam) | LLaMA-70B (bf16, Adam) |
+|---|---|---:|---:|
+| Master weights (fp32) | $4 N$ | 28 GB | 280 GB |
+| Working weights (bf16) | $2 N$ | 14 GB | 140 GB |
+| Gradients (bf16 + fp32 acc) | $\sim 6 N$ | 42 GB | 420 GB |
+| Adam $m, v$ (fp32) | $8 N$ | 56 GB | 560 GB |
+| **Non-activation total** | $\sim 20 N$ | **140 GB** | **1.4 TB** |
+| Activations (with checkpoint) | varies | 5–20 GB | 50–200 GB |
+
+A single H100 has 80 GB. **LLaMA-7B in pure DP does not fit** — let alone LLaMA-70B. The minimum-viable solution for 7B+ models is FSDP/ZeRO ([7.10](/session/ch7-training-language-models/7.10-fsdp-zero)), which *shards* this 20-bytes-per-parameter cost across devices. For 70B+, you additionally need tensor and/or pipeline parallelism ([7.9](/session/ch7-training-language-models/7.9-tensor-pipeline-parallelism)) to split the model itself across devices.
+
+This is why DP alone is rarely used for billion-parameter models in 2024–2026. It is the *outer* layer of parallelism, composed with the others.
+
+---
+
+## 6. Critical batch size and DP scaling
+
+A separate worry: as you scale $D$, the effective batch grows ($B_d$ held fixed at the per-device microbatch ≥ 1). Beyond a certain point, larger batches stop helping convergence — they just average redundant gradients.
+
+**McCandlish, Kaplan, Amodei et al., 2018, *An Empirical Model of Large-Batch Training*** ([arXiv:1812.06162](https://arxiv.org/abs/1812.06162)). Defines the **critical batch size** $B^*$: the batch size above which doubling the batch no longer halves the number of steps to convergence.
+
+For LLM pretraining, the critical batch size grows roughly with the model's loss-progress (it gets larger as training proceeds). Empirically for GPT-3-class models, $B^* \in [10^6, 10^7]$ tokens. Training at much larger batches "wastes" gradient information — you'd get the same final loss in fewer total optimiser steps with a smaller batch.
+
+The practical implication: at very large $D$, doubling DP devices stops linearly accelerating training. You hit diminishing returns; further speed-up requires *other* parallelism axes (TP, PP) so each device can do *more compute* per step without expanding the batch.
+
+This is why frontier training has a roughly fixed "useful DP width" of a few hundred to a few thousand replicas. Beyond that, scaling is in TP/PP/FSDP, not DP.
+
+---
+
+## 7. ZeRO-1, ZeRO-2: pre-FSDP optimisations
+
+Two intermediate variants of DP that reduce its memory footprint without going all the way to FSDP. We mention them for context; [7.10](/session/ch7-training-language-models/7.10-fsdp-zero) covers the full picture.
+
+- **ZeRO-1 (Optimiser State Partitioning).** Shard the Adam $m, v$ across DP ranks. Each rank only stores $m, v$ for its $1/D$ share of parameters. Cuts ~$8 N$ → $8 N / D$ for the optimiser state.
+- **ZeRO-2 (Gradient + Optimiser State).** Shard the gradients too. Each rank stores only its share of the gradient after a reduce-scatter (replacing the all-reduce). Cuts the gradient term as well.
+
+Both keep the parameters fully replicated. ZeRO-3 (full FSDP) shards the parameters as well — that is the topic of 7.10.
+
+Why mention them here? Because the line between "DP" and "FSDP" is blurry. PyTorch's DDP is plain DP; PyTorch's FSDP can run in ZeRO-2 mode or full ZeRO-3 mode. DeepSpeed offers all three (`stage=1`, `stage=2`, `stage=3`). The choice depends on memory headroom and communication budget.
+
+---
+
+## 8. Worked example: pretrain a 1B model on 32 H100s
+
+A 1B model in bf16 + Adam: $20 \cdot 10^9 = 20$ GB non-activation memory. Comfortably fits on a single 80 GB H100 — **DP alone is sufficient at 1B scale**.
+
+Configuration:
+
+- $D = 32$ devices.
+- Per-device microbatch: 8 sequences × $T = 4096 = 32{,}768$ tokens.
+- Gradient accumulation: $K = 2$ steps to reach a 2M-token effective batch.
+- Effective batch: $8 \cdot 4096 \cdot 32 \cdot 2 = 2{,}097{,}152$ tokens.
+
+Per-step communication (per device): $2 \cdot 1\,\text{GB-worth-of-gradients} \cdot (32-1)/32 \approx 1.94$ GB. On a node with NVLink (intra-node) + IB (inter-node): roughly $\sim 100$ ms wall-clock, easily hidden behind a $\sim 1$ second forward+backward.
+
+This is the regime where pure DP works cleanly: model fits on one device, communication is small relative to compute, scaling is near-linear up to $\sim 64$ devices.
+
+For 7B-class models the math changes: $\sim 140$ GB non-activation memory > 80 GB per device, so you *must* shard the model state (ZeRO-2 minimum, ideally ZeRO-3 / FSDP) before adding more devices.
+
+---
+
+## 9. What we keep going forward
+
+Three things:
+
+1. **Synchronous DP is exact.** A $D$-device DP run is mathematically equivalent to a single-device run with the same effective batch (modulo BatchNorm — irrelevant for LLMs).
+2. **Ring all-reduce is the load-bearing primitive.** Per-device communication is $2 G (D-1)/D$, asymptoting to $2 G$ — independent of $D$. NCCL implements topology-aware variants.
+3. **DP alone is insufficient for >1B-class models.** You need FSDP/ZeRO ([7.10](/session/ch7-training-language-models/7.10-fsdp-zero)) to shard the optimiser state; TP/PP ([7.9](/session/ch7-training-language-models/7.9-tensor-pipeline-parallelism)) to shard the model itself when even FSDP doesn't fit.
+
+[Next session](/session/ch7-training-language-models/7.9-tensor-pipeline-parallelism) opens up tensor and pipeline parallelism — the two ways of splitting the *computation* across devices, complementary to DP's "split the data" approach.
+
+<SelfTest>
+
+**(a)** State the per-device communication cost of ring all-reduce in terms of $G$ (gradient size) and $D$ (number of devices). What does this asymptote to as $D \to \infty$? Why is this called "bandwidth-optimal"?
+
+**(b)** A 1B-parameter model in bf16 has $G = 2$ GB. Across $D = 32$ devices, compute the per-device bytes sent during a ring all-reduce. If the network bandwidth is 25 GB/s, how long does the all-reduce take?
+
+**(c)** DDP overlaps the all-reduce with the backward pass. State the mechanism (bucket-based all-reduce, layer-by-layer pipeline). Why does this overlap matter for scaling to $D = 1024$?
+
+**(d)** A LLaMA-7B model has $20 N = 140$ GB of non-activation memory. Why does pure DP fail at this scale on H100 (80 GB)? What does FSDP / ZeRO-3 do differently?
+
+**(e)** Critical batch size grows with training progress (McCandlish et al., 2018). Suppose your current critical batch is $B^* = 4$M tokens. You're running DP across $D = 1024$ devices with per-device microbatch $B_d = 1$ sequence at $T = 4096$. Compute the effective batch. Are you above or below critical? What does this imply about adding more DP devices?
+
+</SelfTest>

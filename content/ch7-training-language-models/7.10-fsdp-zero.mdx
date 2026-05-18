@@ -1,0 +1,252 @@
+---
+title: "7.10 — Fully-sharded data parallel (FSDP / ZeRO-3)"
+chapter: 7
+order: 10
+estimatedMinutes: 24
+goal: "Derive ZeRO's three stages: partitioning the optimiser state (ZeRO-1), gradients (ZeRO-2), and parameters (ZeRO-3 / FSDP). Quantify the memory drop (down to 1/D for parameters) and the extra communication (one all-gather per forward, one reduce-scatter per backward). Identify when FSDP suffices vs. needing TP/PP."
+prerequisites: ["ch7-training-language-models/7.8-data-parallelism"]
+---
+
+## 1. Why this session exists
+
+Pure DP ([7.8](/session/ch7-training-language-models/7.8-data-parallelism)) is exact and simple but stores a full copy of the model + Adam state on every device — $\sim 20 N$ bytes per parameter. At 7B+ parameters this overflows a single H100 (80 GB). TP and PP ([7.9](/session/ch7-training-language-models/7.9-tensor-pipeline-parallelism)) shard the *computation* and are essential for very large models, but they come with substantial communication overhead and complexity.
+
+**ZeRO** ([Rajbhandari et al., 2020, *ZeRO: Memory Optimizations Toward Training Trillion Parameter Models*](https://arxiv.org/abs/1910.02054)) — and its PyTorch-native rebranding **FSDP (Fully Sharded Data Parallel)** — sit between pure DP and TP/PP: keep the data-parallel structure (replicate the *batch shards* across devices, train synchronously), but **shard the model state across the same DP ranks**. Each device holds $1/D$ of the parameters, $1/D$ of the gradients, $1/D$ of the optimiser state. At forward/backward time, the device temporarily *gathers* the parameters of the current sub-layer from all other devices, runs the computation, and discards the gathered tensors.
+
+The result: memory drops by ~$D$, with only a modest increase in communication. For LLaMA-7B on 32 H100s, FSDP cuts non-activation memory from 140 GB per device to ~5 GB. **FSDP/ZeRO-3 is the default for 7B–70B-class training in 2024–2026**, and the foundation on which TP and PP layer for the largest models.
+
+This session: the three ZeRO stages, the communication primitives, the memory accounting, the PyTorch FSDP API, and the practical guide to when to use FSDP vs adding TP/PP.
+
+---
+
+## 2. Recap: DP memory in three buckets
+
+From [7.4 §7](/session/ch7-training-language-models/7.4-mixed-precision), per device under pure DP with bf16 mixed precision + Adam:
+
+| Bucket | Size per parameter | At 7B |
+|---|---|---:|
+| Working weights (bf16) | 2 bytes | 14 GB |
+| Gradients (bf16, fp32 accumulator) | $\sim 6$ bytes | 42 GB |
+| Optimiser state (fp32 master, $m$, $v$) | $4 + 4 + 4 = 12$ bytes | 84 GB |
+| **Total non-activation** | $\sim 20$ bytes | **140 GB** |
+
+ZeRO addresses each bucket separately. Three stages, named by what they shard:
+
+- **ZeRO-1 (Optimiser State).** Shard the 12-bytes-per-param optimiser bucket. Per device: $12 N / D + 2N + 6N$ bytes.
+- **ZeRO-2 (Optimiser + Gradient).** Also shard the 6-bytes-per-param gradient bucket. Per device: $(12 + 6) N / D + 2N$ bytes.
+- **ZeRO-3 (Optimiser + Gradient + Parameters), a.k.a. FSDP.** Shard all three. Per device: $20 N / D$ bytes.
+
+The three stages are *additive*: each stage shards one additional bucket on top of the previous one. FSDP is ZeRO-3.
+
+---
+
+## 3. ZeRO-1: shard the optimiser state
+
+The cheapest variant; smallest payoff but simplest implementation.
+
+Each DP rank $r \in \{0, \dots, D-1\}$ is assigned a *partition* $P_r$ of the parameters (roughly $1/D$ each). Each rank stores Adam's $m, v$ moments *and* the fp32 master copy *only* for parameters in $P_r$.
+
+Forward and backward proceed as in vanilla DP — the bf16 working weights and bf16 gradients are full-replicated, the all-reduce on gradients works the same way.
+
+The only change is the **optimiser step**: rank $r$ updates only parameters in $P_r$ (using its local fp32 master, $m$, $v$, and the rank-$r$ slice of the gradient). After the local optimiser steps, the *new* bf16 working weights need to be broadcast: rank $r$ broadcasts its updated $P_r$ slice to all other ranks. This is an **all-gather** of the parameters at the end of each step.
+
+Memory drop: optimiser state goes from $12 N$ to $12 N / D$. For $D = 32$, LLaMA-7B: $84 \to 2.6$ GB. Big win.
+
+Extra communication: one parameter all-gather per step ($\sim N$ bytes per device). Modest.
+
+ZeRO-1 is essentially a free memory win at modest scale (the all-gather is cheap relative to the gradient all-reduce). It's the default first step.
+
+---
+
+## 4. ZeRO-2: also shard the gradients
+
+ZeRO-1 leaves the gradient bucket replicated across devices. ZeRO-2 also shards it.
+
+The key change: replace the gradient **all-reduce** with a **reduce-scatter**. A reduce-scatter is "all-reduce then scatter the result" — but done in one pass:
+
+- Each device contributes its local gradient.
+- The *summed* gradient ends up *sharded* across devices: rank $r$ ends up with the summed gradient for its partition $P_r$, and *only* that partition.
+
+Reduce-scatter takes the same wall-clock as all-reduce (both are $2 G (D-1)/D$ bytes per device), but the *output* is sharded.
+
+Now rank $r$ has:
+
+- Its slice of the summed gradient ($\sim 6 N / D$ bytes).
+- Its slice of the optimiser state ($\sim 12 N / D$ bytes).
+- The full bf16 working weights ($2 N$ bytes).
+
+It applies Adam to its slice; the updated weights are then all-gathered as in ZeRO-1.
+
+Memory drop on top of ZeRO-1: gradient memory goes from $6 N$ to $6 N / D$. For LLaMA-7B at $D = 32$: $42 \to 1.3$ GB.
+
+Extra communication: none. Reduce-scatter replaces the all-reduce one-for-one.
+
+ZeRO-2 is the right default when you can afford it: substantial memory savings, no extra communication. Used by DeepSpeed in `stage=2` and by some PyTorch FSDP configurations.
+
+---
+
+## 5. ZeRO-3 / FSDP: also shard the parameters
+
+The big one. Now even the bf16 working weights are sharded: each rank holds only $1/D$ of them in memory.
+
+The catch: during forward and backward, we need *all* the weights of the current sub-layer to actually compute the matmul. The fix is **just-in-time all-gather**: before each sub-layer's forward pass, gather the parameters of that sub-layer from all DP ranks; run the matmul; discard the gathered tensors immediately.
+
+### 5.1 Forward and backward pass under FSDP
+
+```
+For each block ℓ in the model:
+    # 1. All-gather block ℓ's parameters
+    full_params_ℓ = all_gather(local_shard_ℓ)         # (D-1)/D · |params_ℓ| received
+    # 2. Run forward pass on the block
+    X = block(X, full_params_ℓ)
+    # 3. Discard the gathered tensors
+    free(full_params_ℓ)
+
+# Backward pass (in reverse):
+For each block ℓ from last to first:
+    # 1. All-gather params again (because we threw them away after forward)
+    full_params_ℓ = all_gather(local_shard_ℓ)
+    # 2. Run backward pass
+    grad_input, grad_params = backward(grad_output, full_params_ℓ)
+    # 3. Reduce-scatter the parameter gradients
+    local_grad_shard_ℓ = reduce_scatter(grad_params)
+    # 4. Discard gathered params and full grad
+    free(full_params_ℓ); free(grad_params)
+```
+
+The key observation: **we never hold the full model in memory**. At any moment, only the *current sub-layer's* parameters are gathered. The rest live in their sharded form.
+
+### 5.2 Memory accounting
+
+Per device, FSDP holds:
+
+- Local parameter shard: $2 N / D$ bytes (bf16).
+- Local gradient shard: $\sim 6 N / D$ bytes.
+- Local optimiser state: $12 N / D$ bytes.
+- **Transient buffer for the current block's full parameters**: $\sim |\theta_\text{block}| \cdot 2$ bytes (bf16 forward + same for grad).
+
+For a block with $12 d^2$ parameters: $12 \cdot 4096^2 \cdot 2 \approx 400$ MB for LLaMA-7B's blocks. Two such buffers (forward + backward overlap) = $\sim 800$ MB transient.
+
+Steady-state per-device memory for LLaMA-7B at $D = 32$:
+
+$$
+\frac{140\,\text{GB}}{32} + 800\,\text{MB} \approx 5\,\text{GB} \quad \text{(non-activation)}.
+$$
+
+Plus activations on top. Comfortable.
+
+### 5.3 Extra communication
+
+Per training step, on top of ZeRO-2's reduce-scatter:
+
+- **Forward all-gather**: one all-gather per block. Total: $L \cdot (\text{params per block}) \cdot (D - 1)/D$ bytes per device.
+- **Backward all-gather**: same again.
+- **Reduce-scatter** (replacing all-reduce): unchanged from ZeRO-2.
+
+For LLaMA-7B, $L = 32$, params per block $\approx 200$ MB. Forward all-gather: $32 \cdot 200 \cdot 31/32 \approx 6.2$ GB per device. Backward all-gather: another 6.2 GB. Plus 12-GB-equivalent for reduce-scatter.
+
+Total: $\sim 25$ GB of communication per device per step — versus $14$ GB under pure DP. **~70% more communication, ~30× less memory.** Usually the right trade.
+
+### 5.4 The communication-hidden overlap
+
+The forward all-gather of block $\ell + 1$ overlaps with the forward computation of block $\ell$. Same for backward. So the *effective* extra communication is whatever exceeds the compute — typically a $\sim 10\text{–}20\%$ throughput hit, not a $70\%$ one. PyTorch FSDP and DeepSpeed implement this overlap automatically.
+
+For large enough blocks (compute > comm), FSDP runs essentially as fast as pure DP would — except it actually fits. This is the killer feature: **you trade a small constant slowdown for the ability to train models that DP can't even start**.
+
+---
+
+## 6. PyTorch FSDP API
+
+```python
+import torch.distributed as dist
+from torch.distributed.fsdp import FullyShardedDataParallel as FSDP
+from torch.distributed.fsdp.wrap import transformer_auto_wrap_policy
+from functools import partial
+
+dist.init_process_group(backend="nccl")
+model = build_model().to(local_rank)
+
+# Wrap each transformer block in its own FSDP unit
+auto_wrap = partial(
+    transformer_auto_wrap_policy,
+    transformer_layer_cls={TransformerBlock},
+)
+model = FSDP(
+    model,
+    auto_wrap_policy=auto_wrap,
+    sharding_strategy=ShardingStrategy.FULL_SHARD,  # ZeRO-3
+    mixed_precision=MixedPrecision(param_dtype=torch.bfloat16),
+)
+
+for batch in dataloader:
+    optimizer.zero_grad()
+    loss = model(batch.input_ids).loss
+    loss.backward()
+    optimizer.step()
+```
+
+Three things to notice:
+
+- `sharding_strategy=ShardingStrategy.FULL_SHARD` is ZeRO-3. Alternatives: `SHARD_GRAD_OP` (ZeRO-2), `NO_SHARD` (plain DP).
+- `auto_wrap_policy` controls the *granularity* of sharding: per Transformer block is the typical choice, balancing memory and communication-overlap. Sharding too finely (per linear layer) creates too many small all-gathers; too coarsely (the whole model) loses the JIT-discard benefit.
+- `mixed_precision` ties FSDP to the bf16 recipe of [7.4](/session/ch7-training-language-models/7.4-mixed-precision). FSDP keeps fp32 master + Adam state internally; user-visible parameters are bf16.
+
+The rest of the training loop is *identical to DDP*. This is the practical promise of FSDP: drop-in scaling from pure DP.
+
+---
+
+## 7. When FSDP suffices vs needing TP/PP
+
+A rough rule of thumb (consider this for typical hardware: H100/A100 with NVLink + IB):
+
+| Model size | Recommended parallelism |
+|---|---|
+| $< 1$B | Pure DP (DDP). |
+| 1B–13B | DP or FSDP/ZeRO-3 across $\geq 8$ devices. |
+| 13B–70B | FSDP/ZeRO-3 across $\geq 32$ devices, possibly with $T_p \in \{2, 4\}$ TP. |
+| 70B–500B | TP=8 within node + FSDP/ZeRO-3 across nodes + PP across $\geq 8$ stages. |
+| > 500B | Full 4-axis: TP=8 + PP=8-16 + FSDP. |
+
+For a model that *just barely* fits with FSDP at the configured cluster size, adding TP=2 or 4 shrinks activations and per-block working buffers further, often at less communication cost than adding more FSDP-DP devices. The choice depends on workload: long-context training benefits more from TP+SP; very deep models benefit more from PP.
+
+For 7B-class on a 32-H100 cluster, **FSDP alone is enough**, and TP/PP are unnecessary complexity. For 70B on the same cluster, TP=4 + FSDP is the sweet spot. For 200B+, you need PP as well.
+
+---
+
+## 8. The CPU-offload variant
+
+A further memory trick: offload the *Adam optimiser state* to CPU memory (which is far cheaper and more abundant than GPU memory). DeepSpeed's **ZeRO-Offload** ([Ren et al., 2021, arXiv:2101.06840](https://arxiv.org/abs/2101.06840)) and PyTorch FSDP's `cpu_offload=True` option do exactly this.
+
+The trade-off: GPU memory drops by another $12 N / D$ bytes per device (the local optimiser state moves to CPU). The cost: every optimiser step sends gradients to CPU and pulls updated weights back over PCIe (~$50$ GB/s, much slower than NVLink). For a 7B model at $D = 32$, this is $\sim 100$ ms per step extra — acceptable when the alternative is OOM.
+
+ZeRO-Offload is the right *last-resort* option when even FSDP/ZeRO-3 doesn't quite fit. It's commonly used to train 13B–30B models on consumer-grade hardware (a single RTX 4090 with 24 GB + CPU offload can train 13B-class models with patience).
+
+A more aggressive variant, **ZeRO-Infinity** (Rajbhandari et al., 2021), additionally offloads parameters to NVMe storage. Lets you train trillion-parameter models on small clusters at the cost of substantial throughput loss. Used in research; rarely in production.
+
+---
+
+## 9. What we keep going forward
+
+Three things:
+
+1. **The three ZeRO stages.** Stage 1: shard optimiser state. Stage 2: also shard gradients. Stage 3 (FSDP): also shard parameters. Each adds one all-gather/reduce-scatter; each shrinks memory by another major bucket.
+
+2. **FSDP / ZeRO-3 is the default DP variant for 7B+ models.** Memory drops to $\sim 20 N / D$ bytes; communication grows ~70% over pure DP but the overlap hides most of it. PyTorch's `FullyShardedDataParallel` is a drop-in replacement for `DistributedDataParallel`.
+
+3. **Compose with TP/PP for the largest models.** FSDP alone takes you to 70B-class with 32+ devices. Beyond that, TP shrinks intra-node activations and PP spreads across nodes. Frontier training uses all four axes.
+
+[Next session](/session/ch7-training-language-models/7.11-scaling-laws-kaplan) turns to the *empirical* side: now that we know how to train, what does theory and experiment say about the *return* on training compute and data? Kaplan et al.'s power-law scaling.
+
+<SelfTest>
+
+**(a)** Re-derive the per-device memory cost of ZeRO-3 (FSDP) for a model of $N$ parameters and DP width $D$, in bf16 mixed precision with Adam. Compare to pure DP. Which factor changes most?
+
+**(b)** ZeRO-2 replaces the gradient all-reduce with a reduce-scatter. State why these have the same bandwidth cost. What is different about the *output*?
+
+**(c)** For LLaMA-7B at $D = 32$, $L = 32, d = 4096$, compute (i) the steady-state per-device parameter shard, (ii) the per-block transient all-gather buffer, (iii) the total forward all-gather volume per step.
+
+**(d)** FSDP's per-block all-gather can overlap with the previous block's computation. Sketch (in 4–5 sentences) why this overlap reduces the effective communication overhead to ~10–20% rather than the ~70% suggested by raw bytes.
+
+**(e)** Read the PyTorch FSDP doc for `ShardingStrategy`. State the difference between `FULL_SHARD`, `SHARD_GRAD_OP`, `HYBRID_SHARD`, and `NO_SHARD`. Which corresponds to ZeRO-3? ZeRO-2? Pure DP? Why might `HYBRID_SHARD` be useful in a hierarchical (intra-node + inter-node) cluster?
+
+</SelfTest>

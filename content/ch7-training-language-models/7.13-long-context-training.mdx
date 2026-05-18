@@ -1,0 +1,208 @@
+---
+title: "7.13 — Long-context training: position interpolation, NTK-aware, YaRN"
+chapter: 7
+order: 13
+estimatedMinutes: 22
+goal: "Understand the training-side complement to 6.13: how a 4k- or 8k-context model is extended to 32k, 128k, or 1M tokens via RoPE-scaling techniques (linear position interpolation, NTK-aware, YaRN) plus a short long-context continued-training phase. State the standard recipe and the compute cost relative to the base pretraining run."
+prerequisites: ["ch7-training-language-models/7.12-chinchilla", "ch6-attention-transformer/6.13-long-context", "ch6-attention-transformer/6.7-rope"]
+---
+
+## 1. Why this session exists
+
+[6.13](/session/ch6-attention-transformer/6.13-long-context) introduced three families of long-context attention from the *architecture* side: sliding-window, ALiBi, and RoPE-scaling. The discussion there was mostly about *inference* — what runs at deployment. This session is the *training* counterpart: **how do you actually train a model that handles 32k–1M tokens of context?**
+
+The brute-force answer — pretrain at the target context from scratch — is prohibitively expensive. Attention compute scales as $T^2 d$ per layer ([6.12 §2.1](/session/ch6-attention-transformer/6.12-compute-and-memory)). A 1M-context full pretraining run would cost on the order of $100^2 = 10{,}000\times$ more attention compute than a 10k-context run at the same number of training tokens. No frontier lab does this.
+
+The modern recipe is two-stage:
+
+1. **Pretrain at moderate context** ($4k$ or $8k$). Use most of the compute budget. This is the run that does most of the "intelligence" learning.
+2. **Continue training at longer context** ($32k \to 128k \to 1M$) for a small fraction of the compute (typically $0.1$–$1\%$). Apply RoPE-frequency scaling to extend the model's positional understanding to the new lengths *without retraining from scratch*.
+
+The technique stack: linear position interpolation ([Chen et al., 2023](https://arxiv.org/abs/2306.15595)), NTK-aware scaling, and YaRN ([Peng et al., 2023](https://arxiv.org/abs/2309.00071)) on the architectural side; long-document training data + a small continued-training run on the training side.
+
+This session covers the training-side complement: when each technique is applied, the compute cost of the continued-training phase, and what long-context training data looks like.
+
+---
+
+## 2. Recap: RoPE-scaling, as seen from training
+
+From [6.13 §4](/session/ch6-attention-transformer/6.13-long-context), the three RoPE-scaling techniques in increasing order of sophistication:
+
+- **Linear position interpolation** (Chen et al., 2023). Map positions linearly into the trained range: $\tilde m = m \cdot T_\text{train} / T_\text{target}$. Equivalent to scaling all RoPE rotation angles by $\alpha = T_\text{train} / T_\text{target}$. Works up to ~$4\times$ extension.
+- **NTK-aware scaling** (community discovery, mid-2023). Scale the *base* of RoPE's frequency schedule, not the angles directly. Preserves high-frequency pairs; scales low-frequency pairs. Works up to ~$8\times$ extension without fine-tuning.
+- **YaRN** (Peng, Quesnelle, Fan, Shippole, 2023). Apply different scalings to different RoPE frequency bands (piecewise: don't touch high-frequencies, NTK-scale mid-frequencies, linearly-interpolate low-frequencies). Plus a small fine-tune. Works up to ~$32\times$ extension. The 2024–2026 default.
+
+The training-time question is: **after applying the scaling, how much continued training do you need?**
+
+### 2.1 The "no retraining" promise
+
+Position interpolation, NTK-aware, and YaRN are designed so that *some* extension is possible *without any additional training*. You take a 4k-trained model, apply the scaling formula, and run inference at 32k. The quality is acceptable for short extension factors ($\sim 2$–$4\times$). For larger extensions, quality degrades — the model still has "never seen these effective rotations" in some sub-layers.
+
+A short continued-training phase fixes this. The model adapts to the new effective rotations across a few thousand to a few hundred thousand additional training steps, at much less cost than full pretraining.
+
+---
+
+## 3. The two-stage training pipeline
+
+A standard 2024–2026 long-context recipe:
+
+### 3.1 Stage 1: base pretraining (Chinchilla-style)
+
+- Context length: $T_1 = 4k$ or $T_1 = 8k$.
+- Token budget: full Chinchilla-like budget, e.g. $\sim 10$ T tokens.
+- RoPE base frequency: $\theta_i = 10000^{-2i/d}$ (standard).
+- Compute: dominant cost of the project.
+
+This is the part covered by [7.1](/session/ch7-training-language-models/7.1-pretraining-data)–[7.12](/session/ch7-training-language-models/7.12-chinchilla). The model learns language, world knowledge, reasoning. Long-context skills are *not yet* trained.
+
+### 3.2 Stage 2: long-context continued training
+
+- Context length: $T_2 \gg T_1$, typically $T_2 / T_1 \in \{4, 8, 16, 32\}$.
+- Apply RoPE scaling: linear, NTK-aware, or YaRN.
+- Token budget: small — typically $\sim 100$–$800$ B tokens, ~$1$–$5\%$ of the base pretraining.
+- Data: long-document corpus (books, full code repos, papers).
+- LR: low (continuing from the base, in the annealing-like regime).
+
+The model adapts to the rescaled rotations and learns to use the longer context productively.
+
+### 3.3 Stage 2.5: extended-context annealing
+
+Sometimes a third stage: continue training at the target context with the **highest-quality** long-context data — long technical books, full software repos, multi-document QA pairs. This is the long-context analogue of MiniCPM annealing ([7.5 §4](/session/ch7-training-language-models/7.5-data-mixing-curriculum)).
+
+The total long-context cost is roughly $1$–$5\%$ of the base pretraining. **For under $5\%$ extra compute, you take a $4k$ model to $128k$ context.** This is why long-context training is now standard.
+
+---
+
+## 4. What the continued-training does
+
+Three things, in increasing subtlety:
+
+### 4.1 Re-adapts the RoPE frequencies
+
+The base model's attention heads have learned to use the *original* RoPE rotations. After scaling, those rotations change — some by orders of magnitude. The model needs a few thousand steps to re-orient: which frequencies encode short-range vs long-range information, how to interpret the new low-frequency pairs.
+
+For linear interpolation, all rotations are *smaller* than during pretraining, so the model needs to re-learn that "close together" now means "very small rotation difference" rather than the previous scale. For NTK-aware, only the low frequencies change meaningfully — adaptation is faster.
+
+### 4.2 Trains the layers to use long-range structure
+
+Even if RoPE is perfectly rescaled, the model has *never seen* a 32k-token document during pretraining. The attention heads haven't learned to attend across thousands of tokens; the FFN hasn't seen long-range syntactic or semantic dependencies. Stage 2's long documents teach the model these patterns.
+
+This is why simply applying RoPE scaling at inference (no training) only works up to a point — the model's higher-level patterns (which token to attend to, what to remember from 10k tokens ago) are untrained.
+
+### 4.3 Fixes degenerate behaviour
+
+At very long context without training, models often exhibit failure modes:
+
+- **Lost in the middle** (Liu et al., 2023, [arXiv:2307.03172](https://arxiv.org/abs/2307.03172)): performance dips for information in the *middle* of a long context, even when the model technically has access. The "needle in a haystack" benchmark probes for this.
+- **Attention sinks misalignment** ([6.13 §2.2](/session/ch6-attention-transformer/6.13-long-context)): models trained at short context concentrate attention disproportionately on early tokens. At long context, this becomes a bottleneck.
+- **Position-OOD repetition**: at lengths well beyond training, models sometimes lapse into repetition or degraded generation.
+
+Stage 2 training trains these patterns away (or at least flattens them).
+
+---
+
+## 5. Compute cost in detail
+
+Long-context training is *not free*. Attention is $T^2$ in compute, so a stage-2 step at $T_2 = 32k$ costs $16\times$ more attention compute than a stage-1 step at $T_1 = 8k$. Per-token, training at $T = 128k$ is $\sim 256\times$ more expensive per token than at $T = 8k$.
+
+The total compute for stage 2 is thus
+
+$$
+C_\text{stage 2} \approx 6 N D_2 + (\text{attention's }T^2 \text{ correction}) \approx 6 N D_2 \cdot \frac{1}{1 + T_2/(4d)}.
+$$
+
+For $T_2 = 32k$, $d = 4096$: $T_2 / (4d) = 2$, so attention adds ~50% to the per-token cost. For $T_2 = 128k$: $T_2 / (4d) = 8$, attention adds ~$8\times$ to per-token compute.
+
+The math:
+
+| Target context $T_2$ | Per-token cost vs $T_1 = 8k$ | Typical $D_2$ | Total stage-2 cost |
+|---|---:|---:|---:|
+| $32$k | $\sim 1.5\times$ | $200$B tokens | $\sim 1\%$ of base |
+| $128$k | $\sim 5\times$ | $200$B tokens | $\sim 4\%$ of base |
+| $1$M | $\sim 30\times$ | $50$B tokens | $\sim 10\%$ of base |
+
+A 128k-context extension costs roughly $4\%$ of the original pretraining. A 1M-context extension costs $\sim 10\%$. Both are tractable; both are now routinely done.
+
+### 5.1 What enables it: sequence and context parallelism
+
+Without **sequence parallelism** and **context parallelism** ([7.9 §6](/session/ch7-training-language-models/7.9-tensor-pipeline-parallelism)), training at 128k+ context would not fit in GPU memory at any reasonable batch size. The activation memory (attention scores especially) scales as $T^2 d$ per layer per device, which at $T = 128k$ is GB-per-block-per-device.
+
+Sequence parallelism shards the activation along $T$ across the TP devices. Context parallelism (Liu et al., 2023, *Ring Attention*) shards attention itself, with partial sums passed around in a ring. Together, they make $1$M+ context training memory-feasible.
+
+These are the load-bearing engineering ingredients for stage 2.
+
+---
+
+## 6. The data side of long-context
+
+Where does the long-context training data come from?
+
+- **Books.** Project Gutenberg + Books3 + similar give ~$10^{11}$ tokens of natural long-form text, often 30k–200k tokens per document.
+- **Code repositories.** Concatenated repository contents — many GitHub repositories are 100k–1M tokens of code, often coherent (one project's worth).
+- **Scientific papers.** Full-text arXiv and similar give 5k–50k tokens per paper.
+- **Document collections.** Multi-document QA datasets (long-form RAG, summarisation) provide artificial long contexts assembled from multiple short ones.
+- **Synthetic long contexts.** Concatenations of related documents, multi-turn dialogues, etc.
+
+For 1M-context training (e.g., Gemini 1.5), the data is dominated by *concatenated* and *synthetic* long contexts because natural single documents of 1M+ tokens are rare.
+
+### 6.1 Why short-context-only pretraining doesn't suffice
+
+A natural question: even if you can't pretrain at 128k, why not just include a few long documents in the $8k$ pretraining mix (truncated/chunked appropriately)? Answer: you can, and you do, but it doesn't substitute for stage 2. The model can't attend across the chunk boundary; the long-range patterns it learns are bounded by the $8k$ window.
+
+You need the stage 2 step where the model *actually sees* a single forward pass over the long document, with attention reaching across all of it.
+
+---
+
+## 7. Inference-time techniques carry over
+
+The architectural techniques of [6.13](/session/ch6-attention-transformer/6.13-long-context) apply at training too:
+
+- **Sliding-window attention** (Mistral). Cap each token's attention range at $w$. Stage 2 with sliding-window costs $O(T_2 w)$ instead of $O(T_2^2)$ — substantial saving.
+- **ALiBi** (Press et al.). Drop explicit PE, use a linear bias. Trains at one length and extrapolates at inference; can extend at training time too.
+- **FlashAttention** (Cap 10.5 (FlashAttention)). Memory-efficient kernel; makes attention's $T^2$ memory term irrelevant. Universal in 2024–2026 training.
+
+A 2024 frontier recipe combines: stage-1 pretrain at $8k$ with FlashAttention. Stage 2 at $32k$–$128k$ with YaRN-scaled RoPE + sequence parallelism + FlashAttention. Stage 2.5 (optional) at $1M$ with context parallelism + Ring Attention.
+
+LLaMA-3 long-context variants, Mistral Large, Qwen2 long-context, Gemini 1.5 all follow some version of this.
+
+<Aside type="note">
+**The "needle in a haystack" benchmark.** Originally a Twitter joke (Greg Kamradt, 2023): "hide a sentence at position $X$ in $T$ tokens of distractor text; can the model retrieve it?" It became the canonical long-context evaluation. Modern models score near-perfectly on this *at* their advertised context length, but performance degrades smoothly past it. RULER, BABILong, and LongBench are more substantive benchmarks; needle-in-a-haystack is the marketing-friendly one. Pass it, and you can claim your context length; pass RULER, and the claim is actually meaningful.
+</Aside>
+
+---
+
+## 8. Caveats and limits
+
+Long-context training is robust but imperfect:
+
+- **Diminishing returns past $\sim 128$k.** Beyond there, additional context length adds inference and training cost faster than it adds capability for typical tasks.
+- **In-context retrieval $\neq$ reasoning.** A model with 1M context can find a needle in a haystack but may not *reason* over all 1M tokens. Long-context capability is necessary but not sufficient.
+- **Continued-training data drift.** Stage 2's narrow data distribution (long documents) can pull the model away from general capabilities. Modern recipes blend in short-context data too, in small proportions.
+
+These are open frontiers. Long-context-capable reasoning models (o1, R1, Claude 3.7 with extended thinking) are the 2025–2026 follow-up.
+
+---
+
+## 9. What we keep going forward
+
+Three things:
+
+1. **Two-stage long-context training.** Stage 1: short context, full Chinchilla budget. Stage 2: long context, RoPE scaling + ~1–5% extra compute. The dominant 2024–2026 recipe.
+2. **RoPE scaling is the engine.** Linear interpolation up to $4\times$, NTK-aware up to $8\times$, YaRN to $32\times+$. YaRN is the default.
+3. **The data is harder than the algorithm.** Stage 2 needs genuine long documents; concatenations partially substitute. Sequence and context parallelism make 128k+ training memory-tractable.
+
+[Next session](/session/ch7-training-language-models/7.14-gpt3-paper-read) closes Chapter 7 with a guided read of the **GPT-3 paper** (Brown et al., 2020) — the historical pivot point. The paper now reads as a snapshot of the Kaplan-era recipe; we'll identify what survives, what doesn't, and why GPT-3 was a watershed despite its architectural simplicity.
+
+<SelfTest>
+
+**(a)** Why is full pretraining at $T = 128$k from scratch impractical? Quantify (use [6.12 §2.1](/session/ch6-attention-transformer/6.12-compute-and-memory)) — at the same training tokens, how much more attention compute would $T = 128$k cost than $T = 8$k?
+
+**(b)** Stage 2 typically uses $1$–$5\%$ of the base pretraining compute. State the rough cost ratio for $T_2 / T_1 = 16$ extension, given the formula in §5.
+
+**(c)** RoPE scaling (linear interpolation, NTK-aware, YaRN) is applied *before* stage 2 training starts. Explain what each does (one sentence per technique). Which is the modern default and why?
+
+**(d)** Why does adding "a few long documents" to stage-1 pretraining not substitute for stage 2? (Hint: think about what the attention sub-layer can and cannot do within a fixed context window.)
+
+**(e)** Read [Liu et al., 2023, "Lost in the Middle"](https://arxiv.org/abs/2307.03172) §3. What is the failure mode they describe, and how does stage-2 long-context training mitigate it?
+
+</SelfTest>

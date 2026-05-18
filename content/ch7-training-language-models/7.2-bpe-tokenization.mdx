@@ -1,0 +1,383 @@
+---
+title: "7.2 — BPE tokenization end-to-end"
+chapter: 7
+order: 2
+estimatedMinutes: 30
+goal: "Implement Byte-Pair Encoding from scratch on a toy corpus; understand why subword tokenization beats word-level (OOV, vocabulary size) and character-level (sequence length); know what byte-level BPE (GPT-2 onward) buys; pair with Karpathy's 'Let's build the GPT tokenizer'."
+prerequisites: ["ch7-training-language-models/7.1-pretraining-data", "ch5-sequence-modeling/5.1-tokenization"]
+---
+
+## 1. Why this session exists
+
+[5.1](/session/ch5-sequence-modeling/5.1-tokenization) introduced tokenization in the abstract: split a UTF-8 byte stream into a sequence of integer IDs drawn from a fixed vocabulary, and feed those IDs into the embedding matrix ([5.2](/session/ch5-sequence-modeling/5.2-embeddings-word2vec)). This session makes one specific algorithm — **Byte-Pair Encoding (BPE)** — concrete enough that you could implement it from a blank file.
+
+BPE is *the* tokenization algorithm of modern LLMs. GPT-2, GPT-3, GPT-4, LLaMA, Mistral, Qwen, DeepSeek, Claude — every frontier model uses BPE or a close variant (SentencePiece's BPE mode, tiktoken). Knowing it cold matters because:
+
+- **It controls the model's "atomic units".** What counts as one token determines compute, context length budget, and how the model treats numbers, code, emoji, non-Latin scripts, and rare words.
+- **Training-data tokens vs model-vocabulary tokens are different.** Reporting "2 T training tokens" depends on which tokenizer you use; a model with a larger vocabulary measures fewer tokens for the same text.
+- **Tokenizer choices are not free.** They affect downstream loss, multi-lingual performance, and code/math handling in measurable, sometimes large ways.
+
+This session: the algorithm with worked example, byte-level BPE and why GPT-2 introduced it, vocabulary sizes in practice, and the now-canonical pitfalls (number tokenization, encoding edge cases, glitch tokens). Pair this with [Karpathy's "Let's build the GPT tokenizer"](https://www.youtube.com/watch?v=zduSFxRajkE) lecture — they cover the same algorithm; reading + watching nails it.
+
+---
+
+## 2. Why subword?
+
+Three options for the unit of tokenization:
+
+| Unit | Vocabulary size | Sequence length | OOV handling |
+|---|---:|---:|---|
+| **Words** | $10^5$–$10^7$ | shortest | Crashes on unseen words; "supercalifragilistic" → `<UNK>` |
+| **Characters** | $\sim 10^2$ | longest | None needed; every word decomposes to known characters |
+| **Subwords (BPE)** | $10^4$–$10^5$ | medium | Decompose unseen words into known subword pieces |
+
+Word-level tokenization was the standard in pre-2018 NLP and fails on the open-vocabulary problem: every misspelling, neologism, technical term, proper noun is OOV unless you allocate a vocabulary entry for it, which blows up the embedding matrix and the LM-head projection.
+
+Character-level avoids OOV but makes sequences too long — a $T = 2048$ context window of English characters covers $\sim 1000$ tokens of useful content (English averages ~4–5 characters per word + whitespace). Attention's $T^2 d$ cost ([6.12](/session/ch6-attention-transformer/6.12-compute-and-memory)) makes this prohibitive at scale.
+
+Subword tokenization gets the best of both: a vocabulary of $\sim 50{,}000$ subwords whose statistics match the language (frequent subwords are common; rare words decompose into multiple pieces). BPE is the canonical learning algorithm.
+
+---
+
+## 3. The BPE algorithm
+
+**Sennrich, Haddow & Birch, 2016, *Neural Machine Translation of Rare Words with Subword Units*** ([arXiv:1508.07909](https://arxiv.org/abs/1508.07909)). Adapted from an older lossless-compression algorithm by Gage (1994), originally designed to compress strings by greedily replacing common byte pairs with new symbols.
+
+### 3.1 Training BPE: pseudocode
+
+Inputs: a corpus of text, a target vocabulary size $V$.
+
+```
+1. Pre-tokenize the corpus into "pre-tokens" (typically whitespace-split words).
+2. Initialise vocabulary = all unique characters in the corpus.
+3. Represent each pre-token as a sequence of vocabulary symbols.
+4. Repeat until |vocabulary| == V:
+      a. Count all adjacent symbol pairs in the corpus (with their frequencies).
+      b. Find the most frequent pair (a, b).
+      c. Add the new symbol ab to the vocabulary.
+      d. Replace every occurrence of the pair (a, b) with the symbol ab in the corpus.
+5. Output: the vocabulary and the (ordered) list of merges.
+```
+
+The output is two things:
+
+- **A vocabulary** $V$: a set of symbols (single characters or merged subwords).
+- **A merge table**: an ordered list of pairs $(a_i, b_i) \to ab_i$ — the merges performed, in order. The order is critical because tokenization at inference applies merges in the same order.
+
+### 3.2 Worked example
+
+Tiny corpus, word-frequency form (Sennrich §3.2):
+
+```
+"low" : 5
+"lower" : 2
+"newest" : 6
+"widest" : 3
+```
+
+Each word starts as a sequence of single characters with a special end-of-word marker `</w>`:
+
+```
+l o w </w>        : 5
+l o w e r </w>    : 2
+n e w e s t </w>  : 6
+w i d e s t </w>  : 3
+```
+
+Initial vocabulary: `{l, o, w, e, r, n, s, t, i, d, </w>}` — 11 symbols.
+
+**Iteration 1.** Count adjacent pairs:
+
+```
+(l,o)      : 5 + 2          = 7
+(o,w)      : 5 + 2          = 7
+(w,</w>)   : 5              = 5
+(w,e)      : 2 + 6          = 8     ← max
+(e,r)      : 2              = 2
+(r,</w>)   : 2              = 2
+(n,e)      : 6              = 6
+(e,w)      : 6              = 6
+(e,s)      : 6 + 3          = 9     ← max (revised)
+(s,t)      : 6 + 3          = 9     ← tied
+(t,</w>)   : 6 + 3          = 9     ← tied
+(w,i)      : 3              = 3
+(i,d)      : 3              = 3
+(d,e)      : 3              = 3
+```
+
+Tie-breaking is implementation-dependent; let's say we pick `(e, s)` first. Merge `e` + `s` → `es`. Apply:
+
+```
+l o w </w>          : 5
+l o w e r </w>      : 2
+n e w es t </w>     : 6
+w i d es t </w>     : 3
+```
+
+Vocabulary now: `{l, o, w, e, r, n, s, t, i, d, </w>, es}` — 12 symbols.
+
+**Iteration 2.** Recount pairs and pick the new max. The pair `(es, t)` now has count 9, so it wins. Merge → `est`.
+
+```
+l o w </w>          : 5
+l o w e r </w>      : 2
+n e w est </w>      : 6
+w i d est </w>      : 3
+```
+
+Vocabulary: `{l, o, w, e, r, n, s, t, i, d, </w>, es, est}` — 13 symbols.
+
+**Iteration 3.** Now `(est, </w>)` has count 9 (top), merge → `est</w>`.
+
+After enough iterations, frequent words coalesce into single tokens; rare words remain as multi-token sequences. The vocabulary grows to the target size $V$.
+
+### 3.3 Encoding at inference
+
+To tokenize a new word at inference, do exactly the same merges in the same order:
+
+```
+Input word: "lowest"
+Initial:    l o w e s t </w>
+Apply merges in training order:
+  (e, s) → es:    l o w es t </w>
+  (es, t) → est:  l o w est </w>
+  (est, </w>) → est</w>:  l o w est</w>
+  ... continue with later merges if applicable
+Output token IDs: [id(l), id(o), id(w), id(est</w>)]
+```
+
+Note: the encoder must follow the *exact training merge order*. Modern implementations precompile this into a deterministic finite-state automaton or a priority queue.
+
+### 3.4 BPE as compression
+
+Each iteration reduces the corpus length (in symbols) by the count of the most-frequent pair: $|\text{corpus}'| = |\text{corpus}| - \text{freq}(a, b)$. After $V - V_0$ iterations, the corpus has been compressed by the cumulative pair frequencies. BPE is **literally a compression algorithm** — Gage (1994) introduced it for lossless data compression; Sennrich rediscovered it as a tokeniser. The two views are mathematically the same.
+
+---
+
+## 4. Pre-tokenization
+
+Step 1 of §3.1 — "pre-tokenize" — hides a subtle decision. GPT-2 onward, BPE is *not* applied directly to raw text; it is applied to *pre-tokens* split by a regex. The GPT-2 pre-tokenizer regex (the source-of-truth one in `tiktoken`/`tokenizers`) is:
+
+```
+'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+
+```
+
+Translated:
+
+- `'s|'t|'re|'ve|'m|'ll|'d`: keep English contractions ('s, 't, 're, 've, 'm, 'll, 'd) as their own pre-tokens.
+- ` ?\p{L}+`: a run of letters, optionally preceded by one space.
+- ` ?\p{N}+`: a run of digits, optionally preceded by one space.
+- ` ?[^\s\p{L}\p{N}]+`: a run of punctuation/symbols.
+- `\s+(?!\S)`: trailing whitespace.
+- `\s+`: any other whitespace run.
+
+This regex has two implications:
+
+**(a) The leading space is part of the token.** The pre-tokenizer puts ` ?` (zero-or-one space) at the start of letter/digit/symbol runs, so the leading-space variant of a word is *different* from the leading-no-space variant. " hello" and "hello" tokenize differently. This is why you see both `Ġhello` (the leading-space-hello) and `hello` (the no-space-hello) in GPT-2's vocabulary — the `Ġ` is the visible representation of a leading space.
+
+**(b) Numbers are split by digit runs.** "123456" pre-tokenises as one chunk; "12 34" as two. But — and this is the subtle part — *within* a digit run, BPE merges can produce arbitrary tokenisation. "12345" might become a single token if it appeared often in training, or four tokens if not.
+
+LLaMA and GPT-4 went further: they pre-split numbers into *individual digits* (regex: `\p{N}` instead of `\p{N}+`), so every digit is its own pre-token. This makes arithmetic substantially more learnable; multi-digit numbers no longer get arbitrary subword splits.
+
+---
+
+## 5. Byte-level BPE (GPT-2 onward)
+
+**Radford et al., 2019, GPT-2.** Replaced character-level BPE with **byte-level BPE**: instead of starting with Unicode characters as the base alphabet, start with the 256 raw bytes. The vocabulary is then *strictly* a superset of all possible byte sequences — meaning **any UTF-8 string can be tokenised without falling back to `<UNK>`**. There is no out-of-vocabulary case, ever.
+
+### 5.1 The 256-byte base alphabet
+
+UTF-8 has 256 distinct byte values. Some are printable ASCII (`0x20`–`0x7E`), most are not (control characters, multi-byte UTF-8 continuation bytes). GPT-2 maps non-printable bytes to *printable Unicode characters* purely for display purposes — so the tokenizer's vocabulary is always human-readable. The mapping (defined in the `bytes_to_unicode()` function of GPT-2's code) takes byte 0 (NUL) to `Ā`, byte 32 (space) to `Ġ`, byte 256-of-the-mapping range, etc. This is cosmetic; the underlying operation is on bytes.
+
+### 5.2 What byte-level BPE buys
+
+- **Lossless and universal.** Any UTF-8 input — emoji, Devanagari, Mandarin, Klingon, raw binary — tokenises without OOV. This was the killer feature.
+- **Compositional Unicode handling.** A new emoji (added to Unicode after training) tokenises as its sequence of UTF-8 bytes. The model can read it character-by-character; not great, but not catastrophic.
+- **Simpler pre-processing.** No NFC/NFD normalisation issues, no character-set assumptions, no special tokens for unseen scripts.
+
+### 5.3 What byte-level BPE costs
+
+- **More tokens per non-Latin character.** A Chinese character takes 3 UTF-8 bytes; without specialised vocabulary entries, that's 3 byte-level BPE tokens. Multi-lingual models (mBLOOM, Qwen) build large vocabularies (100K+) to cover non-Latin scripts efficiently.
+- **Vocabulary "wastes" entries on raw bytes.** The 256 byte slots are always reserved, even though most aren't useful in English text.
+
+### 5.4 SentencePiece — the LLaMA tokenizer
+
+LLaMA uses **SentencePiece** ([Kudo & Richardson, 2018, arXiv:1808.06226](https://arxiv.org/abs/1808.06226)) in BPE mode. SentencePiece treats the input as a raw Unicode stream (not pre-split), and learns the same BPE algorithm but with the *whitespace itself* as a regular character (`▁`, the lower-eighth-block) rather than a pre-tokenizer separator. The difference from GPT-2 byte-level BPE is mostly cosmetic — both end up with subword vocabularies that handle arbitrary UTF-8 — but SentencePiece is often considered cleaner because it has no language-specific pre-tokenizer regex.
+
+### 5.5 tiktoken — the OpenAI tokenizer
+
+OpenAI's `tiktoken` library ([github.com/openai/tiktoken](https://github.com/openai/tiktoken)) is the high-performance reference implementation of GPT-2/GPT-3.5/GPT-4 byte-level BPE. The `cl100k_base` encoding (GPT-4) has 100K vocabulary entries, with a few hundred special tokens (`<|endoftext|>`, role markers for chat, etc.). It is fast (Rust-backed) and easy to inspect:
+
+```python
+import tiktoken
+enc = tiktoken.get_encoding("cl100k_base")
+enc.encode("Hello, world!")
+# [9906, 11, 1917, 0]
+enc.decode([9906, 11, 1917, 0])
+# 'Hello, world!'
+```
+
+---
+
+## 6. Vocabulary sizes in practice
+
+A short table:
+
+| Model | Tokenizer | Vocabulary size |
+|---|---|---:|
+| GPT-2 | byte-level BPE | 50,257 |
+| GPT-3 | byte-level BPE (same as GPT-2) | 50,257 |
+| GPT-3.5 / GPT-4 (`cl100k_base`) | byte-level BPE | 100,256 |
+| GPT-4o (`o200k_base`) | byte-level BPE | 200,019 |
+| LLaMA-1, LLaMA-2 | SentencePiece BPE | 32,000 |
+| LLaMA-3 | SentencePiece BPE | 128,000 |
+| Mistral | SentencePiece BPE | 32,000 |
+| Qwen-2 | tiktoken-style BPE | 151,646 |
+
+Trends:
+
+- Vocabulary sizes have grown ($32K \to 100K \to 200K$) as multi-lingual coverage and code-density increase. Each new vocabulary entry costs $d$ parameters in the embedding *and* $d$ in the LM head (if tied, just $d$).
+- LLaMA-2's $32K$ vocabulary is small (English + code-centric); LLaMA-3's $128K$ adds substantial multi-lingual coverage.
+- The "right" vocabulary size grows roughly logarithmically with corpus size; doubling the corpus doesn't double the vocabulary.
+
+---
+
+## 7. The pitfalls
+
+Three classes of issues that bite real implementations.
+
+### 7.1 Number tokenization
+
+If digits can merge during BPE training, a model sees common numbers as single tokens and rare numbers as multi-token sequences:
+
+- `2024` → maybe 1 token
+- `2023` → maybe 1 token
+- `2021` → maybe 1 token
+- `2026` → maybe 3 tokens (1 leading + 2 trailing)
+
+This makes the model better at *seen* numbers and worse at *rare* ones, with arbitrary discontinuities. Arithmetic suffers: "What is 2026 - 2023?" tokenises into ~5 tokens; the model has to recompose digit-level addition out of subword chunks.
+
+**Fix (LLaMA-3, GPT-4):** pre-split numbers into individual digits before BPE. Every digit is one token; multi-digit numbers are guaranteed digit-sequences. Arithmetic and number-handling benchmarks improve substantially.
+
+### 7.2 Encoding edge cases
+
+Two strings that *look* identical can tokenise differently due to invisible Unicode:
+
+- "café" vs "café" — first uses precomposed `é` (U+00E9), second uses combining `e` + acute accent (U+0301). Different byte sequences → different tokens.
+- ZWNJ (zero-width non-joiner), bidirectional override marks, mathematical italic letters — all bite real applications.
+
+The fix is to apply Unicode normalisation (NFC) before tokenization; most modern tokenizers do.
+
+### 7.3 Glitch tokens
+
+When a tokenizer is trained on a different distribution from the LLM, you can end up with tokens in the vocabulary that the model has barely seen during training. Famous example: `SolidGoldMagikarp`, a token that appeared a few times in early CommonCrawl scrapes (a Reddit username) and was preserved in GPT-2/3's BPE vocab but rarely seen at training time. Asking GPT-3 about `SolidGoldMagikarp` produced wild hallucinations because the embedding for that token had received almost no gradient updates.
+
+Such "glitch tokens" are a structural feature of frozen-vocabulary models. The fix is to re-train the tokenizer alongside the model, or to delete obvious glitch entries pre-deployment.
+
+---
+
+## 8. A 50-line BPE implementation
+
+Take an hour and implement BPE from scratch. The full implementation is short:
+
+```python
+from collections import Counter, defaultdict
+
+def get_pair_counts(corpus):
+    """Count adjacent symbol pairs across all words, weighted by frequency."""
+    pairs = Counter()
+    for word, freq in corpus.items():
+        symbols = word.split()
+        for i in range(len(symbols) - 1):
+            pairs[(symbols[i], symbols[i + 1])] += freq
+    return pairs
+
+def merge_pair(pair, corpus):
+    """Replace every occurrence of `pair` with the merged symbol in the corpus."""
+    a, b = pair
+    merged = a + b
+    new_corpus = {}
+    for word, freq in corpus.items():
+        symbols = word.split()
+        out = []
+        i = 0
+        while i < len(symbols):
+            if i < len(symbols) - 1 and symbols[i] == a and symbols[i + 1] == b:
+                out.append(merged)
+                i += 2
+            else:
+                out.append(symbols[i])
+                i += 1
+        new_corpus[" ".join(out)] = freq
+    return new_corpus
+
+def train_bpe(word_freqs, n_merges):
+    """
+    word_freqs : {"l o w </w>": 5, "l o w e r </w>": 2, ...}
+    n_merges   : number of merges to perform.
+    Returns: list of (pair, merged) tuples in merge order.
+    """
+    corpus = dict(word_freqs)
+    merges = []
+    for _ in range(n_merges):
+        pairs = get_pair_counts(corpus)
+        if not pairs:
+            break
+        best = max(pairs, key=pairs.get)
+        corpus = merge_pair(best, corpus)
+        merges.append(best)
+    return merges, corpus
+
+# Toy corpus from §3.2:
+word_freqs = {
+    "l o w </w>": 5,
+    "l o w e r </w>": 2,
+    "n e w e s t </w>": 6,
+    "w i d e s t </w>": 3,
+}
+merges, final = train_bpe(word_freqs, n_merges=10)
+for i, m in enumerate(merges):
+    print(f"merge {i + 1}: {m[0]} + {m[1]} -> {m[0] + m[1]}")
+```
+
+Run it. Verify the first few merges match §3.2. Now write the *encoder*: given a new word, apply the same merges in the same order.
+
+For byte-level BPE, prepend a `bytes_to_unicode()` step that converts the input UTF-8 bytes to the GPT-2 printable-Unicode representation, then run the same algorithm on those characters. ~150 lines of Python total for a full byte-level BPE tokenizer; see Karpathy's `minbpe` library ([github.com/karpathy/minbpe](https://github.com/karpathy/minbpe)) for a clean reference.
+
+<Aside type="note">
+**Karpathy's "Let's build the GPT tokenizer" lecture** ([YouTube](https://www.youtube.com/watch?v=zduSFxRajkE), 2024) walks through this exact implementation in ~2 hours, building byte-level BPE from scratch and reproducing the GPT-2 vocabulary. The lecture pairs directly with the algorithm here and shows the implementation in real-time. Watch it after §8.
+</Aside>
+
+---
+
+## 9. What we keep going forward
+
+BPE turns a UTF-8 byte stream into a sequence of integers drawn from a fixed vocabulary of $\sim 30K$–$200K$ subword pieces:
+
+$$
+\text{UTF-8 text} \xrightarrow{\text{byte map}} \text{base symbols} \xrightarrow{\text{merge table}} \text{tokens}.
+$$
+
+Five things to remember:
+
+1. **Subword, not word, not character.** Best of both: fixed-size vocabulary, no OOV.
+2. **Byte-level BPE handles any UTF-8.** GPT-2 onwards; no `<UNK>` ever.
+3. **Pre-tokenization matters.** Numbers should split per-digit (LLaMA-3, GPT-4); whitespace handled via leading-space variants.
+4. **Vocabulary size $\in [30K, 200K]$**, growing with corpus size and multi-lingual coverage.
+5. **The tokenizer is a permanent part of the model.** You can't easily swap it post-training.
+
+[Next session](/session/ch7-training-language-models/7.3-forward-pass-at-scale) returns to the architecture side: pick GPT-2-small as a worked-out instance, write down every shape, and count the parameters end to end.
+
+<SelfTest>
+
+**(a)** Run the §3.2 example by hand for two iterations after the `(e, s)` and `(es, t)` merges. What is the next merge and why?
+
+**(b)** Why does GPT-2 byte-level BPE never produce `<UNK>` tokens, even for inputs containing emoji, Klingon, or random bytes? Trace through what happens for the byte sequence `0xF0 0x9F 0xA4 0x96` (the robot face emoji 🤖).
+
+**(c)** Suppose your corpus is 1 T tokens with the GPT-2 tokenizer (vocabulary 50,257). You retokenise the same corpus with the GPT-4 tokenizer (`cl100k_base`, vocabulary 100,256). Will the token count go up or down, and roughly by how much? Why?
+
+**(d)** A model trained with BPE that merges digits arbitrarily has worse arithmetic performance than one with per-digit tokenization. Explain in two sentences why this is *structural*, not just empirical.
+
+**(e)** Implement the §8 BPE trainer and run it on the toy corpus. Verify that after 10 merges, the four input words tokenise into how many total tokens? Now repeat with a much larger toy corpus of your choice (e.g., the first 1000 words of *Moby Dick* repeated word-by-word) and discuss the resulting merges.
+
+</SelfTest>

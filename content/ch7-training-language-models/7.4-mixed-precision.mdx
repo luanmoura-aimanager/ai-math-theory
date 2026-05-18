@@ -1,0 +1,284 @@
+---
+title: "7.4 — Mixed precision training (fp16, bf16)"
+chapter: 7
+order: 4
+estimatedMinutes: 22
+goal: "Compare fp32, fp16, and bf16 number formats; derive why fp16 needs loss scaling and bf16 does not; understand the modern recipe (compute in fp16/bf16, master weights and optimiser state in fp32); place this as the standard pretraining setup."
+prerequisites: ["ch7-training-language-models/7.3-forward-pass-at-scale", "ch0-math-foundations/0.10-numerical-stability"]
+---
+
+## 1. Why this session exists
+
+Training a 124M-parameter GPT-2-small in pure fp32 costs $\sim 250$ MB for parameters, $\sim 500$ MB for forward activations and per-step gradients, and another $\sim 1.5$ GB for Adam moments — call it 6 GB total. Pure fp32 is fine at this scale. But at GPT-3-175B scale, *just the parameters* are $700$ GB in fp32 — well beyond a single accelerator. And $A_\text{100}$/H100/H200 hardware delivers $2$–$4\times$ more throughput on fp16/bf16 matmuls than on fp32. So training at fp32 in 2026 is doubly suboptimal: memory-wasteful *and* compute-suboptimal.
+
+The fix is **mixed precision**: compute *most* of the forward and backward passes in fp16 or bf16, but keep an fp32 *master copy* of the weights and optimiser state. The matmuls run on the fast tensor cores; the optimiser update remains numerically robust.
+
+Two flavours dominate:
+
+- **fp16 mixed precision** (NVIDIA Apex AMP, "fp16"). Original Micikevicius et al. (2017) recipe. Needs *loss scaling* — multiply the loss by a large constant before backward, divide gradients back at the end — to prevent activation/gradient underflow.
+- **bf16 mixed precision** ("bfloat16"). Google's TPU-native format. Same exponent range as fp32; no loss scaling needed. The modern default.
+
+This session derives both, motivates each design choice from the IEEE-754 number-representation bits, and arrives at the mixed-precision recipe that every modern pretraining script uses.
+
+---
+
+## 2. Three number formats: fp32, fp16, bf16
+
+All three are IEEE-754-style floats: $\text{sign} \cdot 2^{\text{exp} - \text{bias}} \cdot 1.\text{mantissa}$. They differ in how the 16 or 32 bits are split.
+
+| Format | Total bits | Exponent bits | Mantissa bits | Range (±) | Smallest normal | Decimal precision |
+|---|---:|---:|---:|:--:|:--:|:--:|
+| **fp32** | 32 | 8 | 23 | $\sim 10^{\pm 38}$ | $\sim 1.2 \cdot 10^{-38}$ | $\sim 7$ digits |
+| **fp16** | 16 | 5 | 10 | $\sim 10^{\pm 4.8}$ | $\sim 6.1 \cdot 10^{-5}$ | $\sim 3$ digits |
+| **bf16** | 16 | 8 | 7 | $\sim 10^{\pm 38}$ | $\sim 1.2 \cdot 10^{-38}$ | $\sim 2.4$ digits |
+
+The two 16-bit formats trade differently:
+
+- **fp16** keeps more mantissa bits (precision) at the cost of a much narrower exponent range. Maximum representable value $\approx 6.5 \cdot 10^4$; underflow below $\approx 6.1 \cdot 10^{-5}$.
+- **bf16** matches fp32's exponent (same range, same overflow threshold) but only has 7 mantissa bits — about 2.4 decimal digits of precision.
+
+The key intuition: **fp16 underflows easily, bf16 doesn't**. This single fact drives every design choice below.
+
+### 2.1 Why bf16 was designed
+
+Google introduced bfloat16 in 2017 ([Wang & Kanwar, 2019, *BFloat16: the secret to high performance on Cloud TPUs*](https://cloud.google.com/blog/products/ai-machine-learning/bfloat16-the-secret-to-high-performance-on-cloud-tpus)) specifically for deep-learning workloads. The observation: in DL training, *dynamic range* matters more than precision. Activation values span many orders of magnitude (small attention logits, large vocabulary logits, tiny gradients deep in the stack), and underflow truncates them to zero — an irrecoverable error. Imprecision, on the other hand, manifests as small noise on each parameter update, which often *helps* generalisation.
+
+So bf16 made the right trade-off for DL: same exponent as fp32 (no underflow problems), fewer mantissa bits (slightly noisier values, mostly harmless).
+
+The hardware caught up: NVIDIA's A100 (2020) and onwards support bf16 natively, with the same throughput as fp16. TPUs have used bf16 since their inception. As of 2026, **bf16 is the default mixed-precision format for new pretraining runs**.
+
+---
+
+## 3. Mixed precision: the standard recipe
+
+The Micikevicius et al. (2017) recipe ([arXiv:1710.03740](https://arxiv.org/abs/1710.03740)), now universal:
+
+1. **Master weights in fp32.** Keep one copy of every parameter in fp32. This is the "true" copy.
+2. **Cast to fp16/bf16 for the forward and backward passes.** Compute the forward pass with fp16/bf16 weights and activations; compute the backward pass with fp16/bf16 gradients.
+3. **Accumulate gradients into fp32.** The gradient itself is in fp16/bf16, but the gradient *accumulator* (especially when summing across micro-batches in gradient accumulation, [7.6](/session/ch7-training-language-models/7.6-gradient-accumulation)) is in fp32.
+4. **Optimiser update in fp32.** Adam's $m, v$ moments and the parameter update use fp32 arithmetic on the fp32 master weights.
+5. **Re-cast master weights to fp16/bf16** for the next forward pass.
+
+Schematically per step:
+
+```
+fp32 master weights ──cast──> fp16/bf16 weights
+                              │
+                              ▼
+                              forward(input, weights)  -- fp16/bf16
+                              │
+                              ▼
+                              loss (fp32 scalar)
+                              │
+                              ▼
+                              backward()  -- fp16/bf16 grads
+                              │
+                              ▼
+                              fp32 gradient accumulator
+                              │
+                              ▼
+                              Adam(fp32 weights, fp32 m, fp32 v, fp32 grads)
+                              │
+                              ▼
+                              updated fp32 master weights
+```
+
+What this buys:
+
+- **Compute speed.** The matmuls (forward and backward) run on fp16/bf16 tensor cores, $2$–$4\times$ faster than fp32.
+- **Memory.** Activations are stored in fp16/bf16 (half the size). The fp32 master weights and Adam state are still fp32, so the optimiser state cost is unchanged.
+
+What this does *not* trade off:
+
+- The Adam update is in fp32 — same numerical robustness as full-fp32 training.
+- The master weights are in fp32 — accumulated tiny updates don't get lost.
+
+---
+
+## 4. fp16 mixed precision: loss scaling
+
+If you skip §5 and stop at §3, the recipe works on bf16 but **fails on fp16**. The reason is gradient underflow.
+
+### 4.1 The underflow problem
+
+Forward activations in a Transformer typically have magnitudes $\sim 10^{-1}$ to $10^{1}$ — well within fp16's range. So far so good.
+
+Gradients are different. The backward pass multiplies by Jacobians, and Jacobians of deep networks tend to have small spectral norms in many places (see [2.9](/session/ch2-mlps-backprop/2.9-vanishing-exploding-gradients) and [6.9](/session/ch6-attention-transformer/6.9-residual-connections)). After 12–96 layers of chain rule, *some gradient values* can reach magnitudes $\sim 10^{-7}$, $10^{-8}$, or even smaller — well below fp16's smallest normal value $\sim 6.1 \cdot 10^{-5}$. **They underflow to zero**, and the corresponding parameters never update.
+
+bf16 doesn't have this problem because its smallest normal is $\sim 1.2 \cdot 10^{-38}$, far below any reasonable gradient.
+
+### 4.2 The fix: loss scaling
+
+Before backward, scale the loss by a large constant $S$:
+
+$$
+\mathcal{L}' = S \cdot \mathcal{L}.
+$$
+
+By linearity of differentiation, *every* gradient is scaled by $S$:
+
+$$
+\nabla \mathcal{L}' = S \cdot \nabla \mathcal{L}.
+$$
+
+Pick $S$ large enough that $S \cdot \nabla \mathcal{L}$ fits comfortably within fp16's normal range. Typical $S \in [2^{10}, 2^{16}]$. Then, before the optimiser update, *unscale*:
+
+$$
+\nabla \mathcal{L} = \frac{\nabla \mathcal{L}'}{S}.
+$$
+
+The unscaling happens in fp32 (since we accumulate the gradient in fp32 anyway), so the precision is preserved.
+
+### 4.3 Dynamic loss scaling
+
+Picking $S$ is delicate: too small and gradients still underflow; too large and gradients overflow. **Dynamic loss scaling** (used by PyTorch AMP and Apex AMP):
+
+1. Start with a large $S$ (say $S = 2^{16}$).
+2. After each backward, check whether any gradient is `inf` or `NaN`.
+3. If yes: divide $S$ by 2 and skip the optimiser step.
+4. If no: keep $S$, optionally double $S$ every $N$ steps to probe the upper bound.
+
+The system finds the largest $S$ that doesn't overflow, automatically.
+
+### 4.4 fp16 mixed precision in PyTorch
+
+```python
+scaler = torch.cuda.amp.GradScaler()           # dynamic loss scaling
+for batch in train_loader:
+    optimizer.zero_grad()
+    with torch.cuda.amp.autocast(dtype=torch.float16):
+        logits = model(batch.input_ids)
+        loss = F.cross_entropy(logits, batch.targets)
+    scaler.scale(loss).backward()              # scale loss by S
+    scaler.unscale_(optimizer)                  # divide gradients by S
+    torch.nn.utils.clip_grad_norm_(...)         # optional gradient clipping
+    scaler.step(optimizer)                      # skips if any overflow
+    scaler.update()                             # adjusts S adaptively
+```
+
+Five extra lines compared to full-fp32. Routine in 2020-era pretraining; less common now because bf16 is simpler.
+
+---
+
+## 5. bf16 mixed precision: simpler
+
+With bf16, the loss-scaling step disappears. There's no underflow risk because bf16 covers fp32's full dynamic range. The recipe:
+
+```python
+for batch in train_loader:
+    optimizer.zero_grad()
+    with torch.cuda.amp.autocast(dtype=torch.bfloat16):
+        logits = model(batch.input_ids)
+        loss = F.cross_entropy(logits, batch.targets)
+    loss.backward()
+    torch.nn.utils.clip_grad_norm_(...)
+    optimizer.step()
+```
+
+No `GradScaler`, no `unscale_`, no overflow checks. **This is the standard 2024–2026 recipe.**
+
+The cost is bf16's lower precision — 7 mantissa bits, about 2.4 decimal digits. In practice this means:
+
+- **Gradient noise** is slightly higher. Mostly benign; sometimes acts as a tiny regulariser.
+- **Embedding lookups and very small operations** can be slightly imprecise. Negligible in pretraining.
+- **Activation outliers** that benefit from many mantissa bits get clipped. This is the main quality trade-off vs fp16, and is measurable in some benchmarks; but for pretraining at scale, it doesn't matter.
+
+The headline trade-off: **bf16 trades a tiny quality loss (often unmeasurable) for substantial implementation simplicity and no underflow risk**. Every major pretraining framework (Megatron-LM, DeepSpeed, FairScale, PyTorch native FSDP) defaults to bf16.
+
+<Aside type="note">
+**fp8 training is the next step.** Hopper-generation GPUs (H100, H200, B200) added native fp8 support, with two flavours: E4M3 (4 exponent, 3 mantissa — closer to fp16's design) and E5M2 (5 exponent, 2 mantissa — closer to bf16's design). Training in fp8 with appropriate per-tensor scaling is the cutting edge as of 2026 — DeepSeek-V3 trained largely in fp8, achieving $\sim 1.8\times$ further speedup over bf16. The general recipe is the same: cast to fp8 for forward/backward, accumulate in fp32, master weights in fp32. We touch fp8 again in Cap 10 (inference quantisation).
+</Aside>
+
+---
+
+## 6. Where mixed precision can fail
+
+A few practical pitfalls.
+
+### 6.1 Reduction operations
+
+A reduction (e.g., `tensor.sum()` along an axis) accumulates many values into one. Even in bf16, the accumulator can lose precision after many additions. The fix: cast to fp32 *for the reduction*, then cast back.
+
+This matters for:
+
+- **Softmax denominators.** Summing $\exp(\cdot)$ across the vocabulary (50K+ entries) is precision-sensitive. PyTorch's `F.softmax` casts internally to fp32 if the input is fp16.
+- **LayerNorm variance.** Variance is a reduction over $d$ entries; same precaution.
+- **Cross-entropy loss.** Sums log-softmax across positions; cast to fp32 for the reduction.
+
+Modern frameworks handle these internally; you usually don't see the casts.
+
+### 6.2 Outlier activations
+
+A single very large activation in a wide tensor can dominate a reduction. Modern Transformers exhibit *systematic* outliers — a handful of channels with activations 10–100× larger than the rest, reproducible across layers. Dettmers et al. (2022, *LLM.int8()*, [arXiv:2208.07339](https://arxiv.org/abs/2208.07339)) characterised this. fp16/bf16 handle it well; pure int8 inference does not — see Cap 10.6.
+
+### 6.3 Initialization scale
+
+Default PyTorch initialisations are designed for fp32. With bf16 forward, very small initial weights can lose precision; very large ones can clip. The pre-LN block ([6.10](/session/ch6-attention-transformer/6.10-pre-vs-post-norm)) plus standard Xavier/He initialisation ([2.10](/session/ch2-mlps-backprop/2.10-weight-initialization)) sits in the safe range — no adjustment needed. This is one more reason pre-LN became the default.
+
+---
+
+## 7. Memory budget revisited
+
+From [7.3 §5.6](/session/ch7-training-language-models/7.3-forward-pass-at-scale), GPT-2-small in mixed-precision training:
+
+- Master weights (fp32): $4 N$ bytes
+- Working weights (bf16): $2 N$ bytes
+- Gradients (bf16, but accumulator fp32): $2 N + 4 N = 6 N$ bytes
+- Adam $m, v$ (fp32): $8 N$ bytes
+- Activations (bf16): $\sim 30\text{–}50 \cdot N$ bytes at training context
+
+Roughly, per parameter:
+
+$$
+\underbrace{4}_{\text{master}} + \underbrace{2}_{\text{working}} + \underbrace{6}_{\text{grad + acc}} + \underbrace{8}_{m, v} = \boxed{20\text{ bytes per parameter}} \quad \text{(non-activation)}
+$$
+
+Plus activations on top. For LLaMA-7B, the non-activation memory is $20 \cdot 7 \cdot 10^9 = 140$ GB — already beyond a single GPU. This is the precise reason for **FSDP/ZeRO-3** (Cap 7.10 (FSDP/ZeRO)), which shards each of these tensors across devices.
+
+A common piece of jargon: "**20 GB per billion parameters of non-activation training memory in mixed precision with Adam**". This is the headline budget number for distributed-training planning.
+
+---
+
+## 8. Why fp32 still exists in the recipe
+
+A question that always comes up: if bf16 covers fp32's range, why keep fp32 anywhere?
+
+The answer is **noise accumulation**. Adam's $m, v$ moments accumulate gradient information across many steps:
+
+$$
+m_t = \beta_1 m_{t-1} + (1 - \beta_1) g_t.
+$$
+
+After $T$ steps, $m_t$ is a weighted sum of $T$ gradients. With bf16's $\sim 7$-mantissa-bit precision, the accumulated noise from rounding errors grows as $\sqrt{T}$. For $T = 10^5$ steps (typical pretraining), $\sqrt{T} \cdot \epsilon \approx 100 \cdot 2^{-7} \approx 1$ — i.e., the accumulated noise reaches the *magnitude of $m_t$ itself*. The optimiser's signal is drowned in noise.
+
+Master weights in fp32 (with their $\sim 7$ decimal digits) keep $\sqrt{T} \cdot \epsilon \approx 10^5 \cdot 2^{-23} \approx 10^{-2}$ — negligible. So fp32 for the optimiser state is necessary to prevent training divergence over many steps.
+
+This is the structural reason for the mixed-precision design: fp16/bf16 for the *single-step* computations (which don't accumulate); fp32 for the *across-step* state (which does).
+
+---
+
+## 9. What we keep going forward
+
+The modern recipe in one paragraph: **forward and backward in bf16, gradients accumulated in fp32, master weights and Adam state in fp32, no loss scaling needed.** This is the default in PyTorch 2.x (`torch.cuda.amp.autocast(dtype=torch.bfloat16)`), Megatron-LM, DeepSpeed, FSDP. It gives $\sim 2$–$3 \times$ speed-up over pure fp32, halves activation memory, and is numerically essentially equivalent.
+
+Pitfalls to watch:
+
+1. Reductions cast to fp32 internally.
+2. fp16 mixed precision works too but needs `GradScaler` for loss scaling.
+3. fp8 (Hopper+ hardware) is the cutting edge for further $\sim 1.5\times$ speed-up.
+
+[Next session](/session/ch7-training-language-models/7.5-data-mixing-curriculum) returns to the data side: now that we have the data ([7.1](/session/ch7-training-language-models/7.1-pretraining-data)), the tokenizer ([7.2](/session/ch7-training-language-models/7.2-bpe-tokenization)), and the precision recipe, **how do we sequence the data** during training? Domain weighting, curriculum, annealing.
+
+<SelfTest>
+
+**(a)** State the smallest normal positive value of fp16, bf16, and fp32. Argue, given that a typical Transformer training run sees gradient values down to $\sim 10^{-7}$, why fp16 *without* loss scaling fails but bf16 doesn't.
+
+**(b)** Derive that scaling the loss by $S$ multiplies every gradient by $S$. (One line — chain rule.)
+
+**(c)** A model has $N = 7 \times 10^9$ parameters. Compute the non-activation training memory (master + working + grads + Adam) in bf16 mixed precision. Confirm against the "20 GB per billion parameters" rule of §7.
+
+**(d)** Cast a small example by hand: take the value $0.000123456789$. Round it to fp16, bf16, and fp32. Compute the relative error of each. Which format is *better* for this value, and which is *worse*? (Hint: this value's exponent is small but its dynamic range fits easily in all three.)
+
+**(e)** Argue why the fp32 master weights are necessary even though bf16 covers the full dynamic range of fp32. (Hint: it's an *accumulation* argument; see §8.)
+
+</SelfTest>
