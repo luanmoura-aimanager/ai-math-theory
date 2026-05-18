@@ -1,0 +1,125 @@
+---
+title: "6.B — Learned positional embeddings (GPT-2 style)"
+chapter: 6
+order: 18
+estimatedMinutes: 14
+goal: "Define learned absolute positional embedding as a (max_len × d) parameter matrix; understand its pros (simple, drop-in) and cons (no extrapolation, fixed context); place it as the GPT-1/2/3 choice that was superseded by RoPE."
+prerequisites: ["ch6-attention-transformer/6.A-sinusoidal-pe", "ch6-attention-transformer/6.6-why-positional-info"]
+---
+
+## 1. Why this appendix exists
+
+The original AIAYN Transformer used **sinusoidal** PE ([Appendix 6.A](/session/ch6-attention-transformer/6.A-sinusoidal-pe)). The OpenAI GPT family (GPT-1 in 2018, GPT-2 in 2019, GPT-3 in 2020) replaced it with the simplest possible alternative: a **learned parameter matrix** of position vectors, looked up by index. Same additive use ($\tilde X + \text{PE}$), but the PE is now $\theta$ — updated by gradient descent like any other parameter.
+
+Modern LLMs since 2022 have moved to RoPE ([6.7](/session/ch6-attention-transformer/6.7-rope)) for the reasons covered there. Learned PE survives mostly in **nanoGPT** (the reference implementation we walked through in 6.16), in BERT and its descendants, and in any pre-2022 codebase you may run into.
+
+This appendix is short. It defines the construction, lists pros and cons, and finishes the survey of "where did the PE go" started in 6.6.
+
+---
+
+## 2. The construction
+
+Fix a maximum context length $T_\text{max}$ (this is the "block size" in nanoGPT, e.g. 1024 for GPT-2). Allocate a parameter matrix
+
+$$
+\boxed{\ W_\text{pos} \in \mathbb{R}^{T_\text{max} \times d}. \ }
+$$
+
+Row $i$ of $W_\text{pos}$ is the position-$i$ embedding. At forward time, for a sequence of length $T \leq T_\text{max}$, the position-augmented input is
+
+$$
+X = \tilde X + W_\text{pos}[:T] \in \mathbb{R}^{T \times d},
+$$
+
+i.e. take the first $T$ rows of $W_\text{pos}$ and add them, position-wise, to the token embeddings.
+
+In PyTorch (as in [6.16](/session/ch6-attention-transformer/6.16-nanogpt-walkthrough)):
+
+```python
+self.wpe = nn.Embedding(config.block_size, config.n_embd)
+# ...
+pos = torch.arange(0, t, dtype=torch.long, device=device)   # (t,)
+pos_emb = self.wpe(pos)                                     # (t, n_embd)
+x = self.drop(tok_emb + pos_emb)
+```
+
+`nn.Embedding(T_max, d)` *is* the $W_\text{pos}$ matrix. The `arange` produces position indices $0, 1, \dots, T - 1$, and the embedding lookup returns the corresponding $d$-vectors.
+
+### 2.1 Parameter count
+
+$$
+\#\theta_\text{learned-PE} = T_\text{max} \cdot d.
+$$
+
+For GPT-2 ($T_\text{max} = 1024, d = 768$): $\sim 786$k parameters. For GPT-3 ($T_\text{max} = 2048, d = 12{,}288$): $\sim 25$M parameters — small compared to the 175B total, but non-trivial.
+
+By comparison, sinusoidal PE (Appendix 6.A) has *zero* parameters, and RoPE ([6.7](/session/ch6-attention-transformer/6.7-rope)) has zero parameters. Learned PE is the only positional scheme with nonzero parameter count among the three we've covered.
+
+---
+
+## 3. What learned PE buys
+
+The argument for learned PE in 2018–2019 was empirical: "We don't know what the right positional structure is, so let gradient descent figure it out." Three observed virtues:
+
+1. **Matches or slightly beats sinusoidal on standard benchmarks.** AIAYN itself reported, in Table 3, that learned PE gave near-identical translation BLEU. So there was no quality loss in switching.
+2. **Simpler to implement.** One line of `nn.Embedding` versus the formula. No hyperparameter ($10000$) to choose.
+3. **Trainable to whatever the model wants.** In principle, the model can learn whatever positional structure helps the loss — sinusoidal patterns, locality biases, syntax-aligned offsets, anything.
+
+What did the model *actually* learn? Empirically, learned PE rows for nearby positions are similar (smooth in position), and the principal components of $W_\text{pos}$ resemble low-frequency sinusoids. The model effectively *rediscovers* sinusoidal-like patterns when given the freedom — confirming the AIAYN design *was* the right shape, but the model can learn it from data.
+
+---
+
+## 4. The fatal weakness: no extrapolation
+
+Learned PE has *exactly* $T_\text{max}$ rows. At inference, you cannot evaluate the model at any position $\geq T_\text{max}$ — the embedding lookup would index out of bounds.
+
+This means:
+
+- **Fixed maximum context length.** A GPT-2 model trained at $T_\text{max} = 1024$ cannot, structurally, handle a length-1025 sequence. nanoGPT's `assert t <= self.config.block_size` enforces this.
+- **No cheap context extension.** To increase $T_\text{max}$ after training, you would need to allocate a longer $W_\text{pos}$, initialise the new rows somehow (random? extrapolated?), and probably fine-tune. None of this works gracefully.
+- **Sensitivity to position drift.** Train on sequences of length 1024, infer on document-like data with sequences of length 800 — the model sees a position-row distribution it didn't fully cover during training, with some quality loss.
+
+Sinusoidal PE was *supposed* to fix this with its deterministic-at-every-position formula (Appendix 6.A §4.2), but it didn't extrapolate well either, for empirical-distribution reasons rather than structural ones. RoPE ([6.7](/session/ch6-attention-transformer/6.7-rope)) genuinely fixed it: rotation-based encoding is defined at every position *and* parameterisations (NTK-aware, YaRN — [6.13 §4](/session/ch6-attention-transformer/6.13-long-context)) extend trained context windows cheaply at inference.
+
+For these reasons, every model from LLaMA-1 onward has used RoPE. Learned PE survives in nanoGPT (for pedagogical reasons — it's the simplest), in BERT-and-descendants (for legacy compatibility with pre-2022 checkpoints), and in a few smaller research models.
+
+---
+
+## 5. Comparison table: the three positional schemes
+
+| Property | Sinusoidal (6.A) | Learned (6.B) | RoPE (6.7) |
+|---|---|---|---|
+| Parameter count | 0 | $T_\text{max} \cdot d$ | 0 |
+| Where applied | Input embedding (additive) | Input embedding (additive) | Inside attention (multiplicative) |
+| Defined at all positions? | Yes, mathematically | No, only up to $T_\text{max}$ | Yes, mathematically |
+| Extrapolation in practice | Poor | None (hard limit) | Good with scaling (YaRN) |
+| Dependency in $q^\top k$ | Mixes content & position | Mixes content & position | Pure function of $n - m$ |
+| Used by | AIAYN (2017) | GPT-1/2/3, BERT, nanoGPT | LLaMA, Mistral, Qwen, Gemini, modern LLMs |
+
+The historical progression is clear: AIAYN (sinusoidal) → GPT family (learned, simpler) → modern LLMs (RoPE, both properties). The two appendices document the first two stops; the main path is RoPE.
+
+<Aside type="history">
+**Why GPT-1 dropped sinusoidal in 2018.** Radford et al.'s [GPT-1 technical report](https://cdn.openai.com/research-covers/language-unsupervised/language_understanding_paper.pdf) does not explicitly justify the switch from sinusoidal to learned PE; it simply states learned position embeddings. BERT (Devlin et al., 2018) made the same choice for the same reason: simplicity, no empirical loss. The community-wide assumption from 2018 to 2021 was "learned is the modern default, sinusoidal is a historical curiosity." That ordering reversed with RoPE.
+</Aside>
+
+---
+
+## 6. Summary
+
+Learned PE is the simplest positional scheme: one $(T_\text{max} \times d)$ parameter matrix, looked up by position index, added to the token embedding. Parameter count $T_\text{max} d$. No extrapolation beyond $T_\text{max}$ — the structural reason it has been replaced in modern LLMs. Survives in nanoGPT, BERT, and pre-2022 codebases.
+
+This finishes the survey of positional encodings begun in [6.6](/session/ch6-attention-transformer/6.6-why-positional-info). The main path uses RoPE ([6.7](/session/ch6-attention-transformer/6.7-rope)); the two appendices cover the historical predecessors. With Chapter 6 closed, Chapter 7 turns to training: how a 1B–1T-parameter Transformer is actually pretrained on a corpus of internet-scale text.
+
+<SelfTest>
+
+**(a)** For GPT-2 ($T_\text{max} = 1024, d = 768$), compute the parameter count of $W_\text{pos}$ and as a fraction of the total 124M parameters of the model. Compare to the parameter count of sinusoidal PE and RoPE.
+
+**(b)** Argue why a model trained with learned PE at $T_\text{max} = 1024$ *cannot* process a sequence of length 2048 without modification, and why a model trained with sinusoidal PE *can* (even if it does so poorly).
+
+**(c)** A research paper proposes "extending context by extrapolating $W_\text{pos}$": fit a low-rank model to the trained $W_\text{pos}$ rows and extrapolate to new rows. State two reasons this might or might not work, and why RoPE scaling (6.13) is preferred in practice.
+
+**(d)** Read the relevant `forward` method in nanoGPT (6.16 §6.2). Identify the three lines that implement learned PE: the buffer creation, the position-index `arange`, and the embedding lookup-and-add.
+
+**(e)** What was the principal component analysis of trained $W_\text{pos}$ rows expected to reveal — and what did it actually reveal? (Hint: see §3 of this appendix.)
+
+</SelfTest>

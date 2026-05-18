@@ -1,0 +1,176 @@
+---
+title: "6.14 — KV cache (preview for inference)"
+chapter: 6
+order: 14
+estimatedMinutes: 22
+goal: "Derive why keys and values for past tokens do not change during autoregressive decoding; quantify the per-step compute and memory savings from caching them; preview GQA/MQA as a KV-cache shrink; place the KV cache as the dominant memory cost of long-context inference."
+prerequisites: ["ch6-attention-transformer/6.12-compute-and-memory", "ch6-attention-transformer/6.5-causal-masking"]
+---
+
+## 1. Why this session exists
+
+A Transformer generates text one token at a time. To produce token $T + 1$ it must run the model on the sequence $(t_1, \dots, t_T)$ and project the *last* output position $z_T$ onto vocabulary logits. To then produce token $T + 2$ it must... run the model again on $(t_1, \dots, t_T, t_{T+1})$? Re-doing $T+1$ tokens of forward computation for each *single* new token would be quadratic-cumulative — generating $N$ tokens after a $T$-token prompt would cost $\sum_{i = 1}^{N} (T + i) \cdot 24 d^2$ in FFN alone, which is roughly the same as one giant forward pass over the full $(T + N)$ context.
+
+The fix is a structural observation that follows from the causal mask of [6.5](/session/ch6-attention-transformer/6.5-causal-masking): **for any past position $j < T + 1$, the keys $k_j$ and values $v_j$ do not change** when a new token $t_{T+1}$ is appended. They depend only on the embedding of $t_j$ and the model weights — neither of which moves. Cache them once; reuse them for every subsequent generation step.
+
+The result is the **KV cache**: a per-layer per-head store of all previously-seen $K, V$ matrices, accumulated as generation proceeds. Compute per new token drops from $O((T + i) d^2)$ to $O(d^2)$ for the FFN and from $O((T + i)^2 d)$ to $O((T + i) d)$ for attention — both *linear* in the cache size. The KV cache is *the* enabling optimisation of fast autoregressive inference.
+
+This session derives the cache, counts its size, and previews the architectural variants (GQA/MQA — full treatment in Cap 8.3 — and MLA — full treatment in Cap 8.5) that shrink it for very long contexts.
+
+---
+
+## 2. Why $K$ and $V$ don't change
+
+Recall the forward pass of one Transformer block on input $X \in \mathbb{R}^{T \times d}$. Inside multi-head attention (6.4) we compute, per head:
+
+$$
+Q = X W_Q, \qquad K = X W_K, \qquad V = X W_V,
+$$
+
+each in $\mathbb{R}^{T \times d_h}$ (with separate $W_Q, W_K, W_V$ per head). Then $S = Q K^\top / \sqrt{d_h}$, apply the causal mask, softmax row-wise, multiply by $V$.
+
+When we append a new token at position $T + 1$:
+
+- The new embedding $x_{T+1} \in \mathbb{R}^d$ is computed (token + RoPE applied per-head).
+- New $Q, K, V$ entries are derived from $x_{T+1}$ alone: $q_{T+1} = x_{T+1} W_Q$, similarly $k_{T+1}, v_{T+1}$.
+- **The old rows $k_1, \dots, k_T$ and $v_1, \dots, v_T$ are unchanged.** They depend on $x_1, \dots, x_T$ and on $W_K, W_V$ — neither has moved.
+
+The causal mask of [6.5](/session/ch6-attention-transformer/6.5-causal-masking) further guarantees that position $T + 1$'s output depends only on $q_{T+1}$ and on $k_1, \dots, k_{T+1}, v_1, \dots, v_{T+1}$ — never on any *future* $K, V$.
+
+So the right computation for one new token is:
+
+1. Read cached $K_\text{past} \in \mathbb{R}^{T \times d_h}, V_\text{past} \in \mathbb{R}^{T \times d_h}$.
+2. Compute fresh $q_{T+1}, k_{T+1}, v_{T+1}$ (each in $\mathbb{R}^{d_h}$) from the new token's embedding.
+3. Append: $K_\text{new} = [K_\text{past}; k_{T+1}]$, $V_\text{new} = [V_\text{past}; v_{T+1}]$.
+4. Compute the *single-row* attention $q_{T+1}^\top K_\text{new}^\top / \sqrt{d_h}$, softmax-mix with $V_\text{new}$ to get the output.
+5. Store $K_\text{new}, V_\text{new}$ as the cache for the next step.
+
+No quadratic work over the past tokens. The "expensive" $Q K^\top$ matmul collapses to one query vector against the full $K$ matrix, $O(T d_h)$ per head.
+
+---
+
+## 3. Compute count per generated token
+
+Per block, per generated token, the cost decomposes as:
+
+| Op | FLOPs (1 batch, 1 step) |
+|---|---|
+| Project new token to $Q, K, V, $ output | $4 \cdot 2 d^2 = 8 d^2$ |
+| Attention scores $q_{T+1}^\top K^\top$ (per head) | $h \cdot 2 d_h T = 2 d T$ |
+| Mix $\text{softmax}(s) V$ (per head) | $h \cdot 2 T d_h = 2 d T$ |
+| FFN | $16 d^2$ |
+| **Total/block** | $\boxed{\ 24 d^2 + 4 d T \ }$ |
+
+Multiply by $L$ blocks. Compare to **prefill** (one forward pass over a length-$T$ prompt, [6.12 §2.3](/session/ch6-attention-transformer/6.12-compute-and-memory)):
+
+$$
+\#\text{FLOPs}_\text{prefill/block} = 24 T d^2 + 4 T^2 d.
+$$
+
+Setting $T = 1$ in the prefill formula recovers exactly the per-step count, confirming the cache is mathematically equivalent to "one forward pass over a 1-token sequence with a longer K, V context."
+
+Generating $N$ tokens after a $T_p$-token prompt: prefill cost $24 T_p d^2 + 4 T_p^2 d$ once, then $N$ steps of $24 d^2 + 4 d (T_p + i)$ each. For $T_p = 2048, d = 4096, N = 200$:
+
+- Prefill: $\approx 8.93 \times 10^{11}$ FLOPs per block.
+- Per generation step: $\approx 4.0 \times 10^8 + 1.3 \times 10^7$ per block — three orders of magnitude smaller.
+
+This is *why* "first token is slow, subsequent tokens are fast" is the dominant latency profile of LLM inference.
+
+---
+
+## 4. Memory: the KV cache size
+
+The cache stores all $K$ and $V$ entries for *every layer*, *every head*, for the entire decoded sequence. Total size, in elements:
+
+$$
+\#\text{elements}_\text{KV} = 2 \cdot L \cdot h \cdot d_h \cdot T \cdot \text{batch}.
+$$
+
+(The 2 is for $K$ and $V$ together; $h \cdot d_h = d$.) In bytes, multiply by the bytes-per-element of the storage dtype (fp16: 2 bytes; fp8: 1 byte; int8: 1 byte).
+
+$$
+\boxed{\ \#\text{bytes}_\text{KV} = 2 \cdot 2 \cdot L \cdot d \cdot T \cdot \text{batch} = 4 \cdot L \cdot d \cdot T \cdot \text{batch}. \ }
+$$
+
+Numerical examples (single batch, fp16):
+
+| Model | $L$ | $d$ | $T = 4{,}096$ | $T = 32{,}768$ | $T = 128{,}000$ |
+|---|---:|---:|---:|---:|---:|
+| GPT-2 small | 12 | 768 | 0.15 GB | 1.2 GB | 4.7 GB |
+| LLaMA-7B | 32 | 4096 | 2.1 GB | 17 GB | 67 GB |
+| LLaMA-70B | 80 | 8192 | 11 GB | 86 GB | 336 GB |
+| GPT-3 (175B) | 96 | 12288 | 19 GB | 154 GB | 605 GB |
+
+At $T = 128{,}000$, the KV cache for LLaMA-70B is *larger than 4× H100 80GB GPUs combined*. This is the structural reason long-context inference is hard, and the motivation for everything in §5–§6.
+
+---
+
+## 5. Architectural variants that shrink the cache
+
+The bytes-per-token of the KV cache is $4 L d$ in fp16 — exactly the cache size of *one* token across all layers. Cutting this number is the central design lever of modern LLMs.
+
+### 5.1 GQA: Grouped-Query Attention
+
+**Ainslie, Shazeer, et al., 2023, *GQA: Training Generalized Multi-Query Transformer Models from Multi-Head Checkpoints*** ([arXiv:2305.13245](https://arxiv.org/abs/2305.13245)). Idea: keep $h$ *query* heads, but share $K, V$ across groups. With $g$ groups, you have $h/g$ K-heads and V-heads:
+
+$$
+\text{cache shrink factor} = \frac{g}{h}.
+$$
+
+For LLaMA-70B with $h = 64, g = 8$: cache is reduced by $8 / 64 = 1/8$. The 86 GB cache at 32k context drops to $\approx 11$ GB.
+
+GQA is the dominant variant in modern open LLMs (LLaMA-2-70B, LLaMA-3, Mistral, Qwen). The extreme case $g = 1$ — every head shares one set of K, V — is **MQA** (Multi-Query Attention, Shazeer 2019). MQA cuts the cache to $1 / h$ but loses some quality; GQA's "small $g$" recovers most of MHA's quality at a small fraction of the cache.
+
+Full treatment in Cap 8.3; the right place to learn it is *after* this session, because the motivation is purely the cache size.
+
+### 5.2 MLA: Multi-head Latent Attention
+
+**DeepSeek-V2** (DeepSeek-AI, 2024, [arXiv:2405.04434](https://arxiv.org/abs/2405.04434)). A further compression: instead of storing $K, V$ directly, store a *latent* $c_t \in \mathbb{R}^{d_c}$ with $d_c \ll d$ per token; reconstruct $K, V$ via learned projections at attention time. The cache reduces from $2 L d$ per token to $L d_c$ per token, a $\sim 10\times$ shrink at iso-quality.
+
+MLA powers DeepSeek-V2, V3, and R1. We will derive it in Cap 8.5; place it mentally as "the next step beyond GQA when the cache is still the bottleneck."
+
+### 5.3 Quantising the cache
+
+A blunter but effective tool: store the cache in **fp8 or int8** instead of fp16 — half the memory, with measurable but tolerable quality loss. Modern inference servers (vLLM, TensorRT-LLM) implement this. We discuss it in Cap 10.6 (Quantization).
+
+### 5.4 Sliding-window inference
+
+If the model uses sliding-window attention ([6.13 §2](/session/ch6-attention-transformer/6.13-long-context)), the KV cache only needs to hold the *last $w$ tokens*. The cache becomes a rolling buffer of constant size — **constant memory streaming generation**. Mistral 7B's 4k window cache, used at 32k context, occupies the same memory as the prompt-prefix cache: $\approx 0.5 \cdot 4096 / 32768 = 1/16$ of the full cache.
+
+---
+
+## 6. PagedAttention and continuous batching
+
+Two further optimisations specific to *serving* LLMs to many users:
+
+**PagedAttention** (Kwon et al., 2023, *Efficient Memory Management for Large Language Model Serving with PagedAttention*, [arXiv:2309.06180](https://arxiv.org/abs/2309.06180)). Standard inference allocates the KV cache as one contiguous chunk per request — wasteful when requests have different lengths (you pre-allocate for the max). PagedAttention divides the cache into fixed-size "pages" (e.g., 16 tokens each) and a per-request page table, like an OS virtual-memory subsystem. Memory fragmentation drops by ~10×, allowing 2–4× more concurrent requests on the same hardware. This is the foundation of **vLLM** and most modern LLM-serving stacks. Full treatment in Cap 10.8.
+
+**Continuous batching** (Yu et al., 2022, *Orca*). Group requests with different ages into the same batch dynamically — when one request finishes, immediately add a new one without waiting for the whole batch to complete. Doubles throughput on real workloads. Also Cap 10.8.
+
+Both rely on the KV cache existing as a separable per-request memory unit. The KV cache *is* the per-request state; everything else (model weights, activations during prefill) is shared.
+
+---
+
+## 7. Practical takeaways
+
+Three things to remember:
+
+1. **The KV cache is the dominant memory cost of long-context inference.** $4 L d T$ bytes in fp16. For $T \sim 100$k on a 70B-scale model, this hits hundreds of GB.
+2. **The cache compute saving is large.** Per-token attention cost drops from $O((T+i)^2 d)$ to $O((T+i) d)$; per-token FFN cost drops from $O((T+i) d^2)$ to $O(d^2)$. Generation is ~$1000\times$ cheaper per token than prefill.
+3. **Modern architectures (GQA, MLA) target the cache directly.** The $4 L d T$ formula has only $T$ as a fixed user-controlled term; cutting $L d$ at iso-quality is the central inference-side engineering challenge of 2024–2026.
+
+[Next session](/session/ch6-attention-transformer/6.15-numpy-attention) implements scaled dot-product attention by hand in numpy — verifying every shape and the softmax-rows-sum-to-1 invariant on a small example.
+
+<SelfTest>
+
+**(a)** Argue why, with causal attention, the keys $k_j$ and values $v_j$ at position $j$ do not change when a new token is appended at position $T + 1$. What would change in a *bidirectional* model (BERT-style)?
+
+**(b)** Compute the KV-cache size in GB for LLaMA-7B at $T = 4096$, $T = 32{,}768$, $T = 128{,}000$ (single batch, fp16, $L = 32, d = 4096$). Verify against §4's table.
+
+**(c)** Derive the per-block FLOP count for one generation step: $24 d^2 + 4 d T$ in §3. Why does the attention term scale linearly with $T$ here, but quadratically with $T$ during prefill?
+
+**(d)** For GQA with $h = 64$ query heads and $g = 8$ groups, write the K-head count and V-head count. Compute the KV-cache size of LLaMA-70B-with-GQA at $T = 32{,}768$ and compare to plain MHA at the same context.
+
+**(e)** A request to a vLLM server has a 2k prompt and asks for 200 generated tokens. State (i) the prefill compute, (ii) the per-step generation compute, (iii) the total generated tokens' attention compute. Express each in terms of $d$ and $L$. Which dominates the total latency?
+
+</SelfTest>

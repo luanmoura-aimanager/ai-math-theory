@@ -1,0 +1,218 @@
+---
+title: "6.12 — Compute and memory: O(T²d) attention, O(Td²) FFN"
+chapter: 6
+order: 12
+estimatedMinutes: 22
+goal: "Count FLOPs and memory cost of one Transformer block as a function of (T, d, L); identify the attention-vs-FFN crossover at T ≈ 4d; understand why attention dominates long-context cost and FFN dominates short-context cost; quantify activation memory for training."
+prerequisites: ["ch6-attention-transformer/6.11-transformer-block-aiayn"]
+---
+
+## 1. Why this session exists
+
+Once you can write the forward pass ([6.11](/session/ch6-attention-transformer/6.11-transformer-block-aiayn)) you owe yourself an answer to "how much does it cost to run it?" The cost has two halves — *attention* and *FFN* — that scale differently with sequence length $T$ and width $d$:
+
+$$
+\#\text{FLOPs}_\text{attention} \sim T^2 d, \qquad \#\text{FLOPs}_\text{FFN} \sim T d^2.
+$$
+
+The two costs cross at $T \sim d$. For pretraining-length contexts $T = 2{,}048, 4{,}096$ and modern widths $d = 4096, 8192$, **FFN dominates compute**. For long-context inference at $T = 32{,}768, 128{,}000, 1{,}000{,}000$, **attention dominates**. This single crossover dictates almost every architectural choice in modern LLMs: from sliding-window attention (6.13), to KV cache (6.14), to FlashAttention (Cap 10.5), to GQA/MQA (Cap 8.3) — they all chase one or the other of these terms.
+
+This session counts the FLOPs precisely and counts the memory both for inference (KV cache) and for training (activation memory). After you have the numbers in hand, the architectural variants of Chapter 8 and Chapter 10 become straightforward optimisations of one of the two terms.
+
+---
+
+## 2. The two regimes, derived
+
+Recall one Transformer block has two sub-layers, attention and FFN, each preceded by a LayerNorm. We will count *matrix multiplications* (matmuls) — they dominate every other cost (LN, softmax, biases, activations).
+
+Conventions, fixed throughout:
+
+- $T$ = sequence length (number of tokens in context).
+- $d$ = residual-stream width ($d_\text{model}$).
+- $h$ = number of attention heads; $d_h = d / h$ is the head dimension.
+- $d_\text{ff} = 4 d$ = FFN inner width.
+- $L$ = number of blocks.
+- One "FLOP" = one multiply-add (i.e. we count $2$ scalar ops per FMA, the standard convention).
+
+A matmul of two matrices of shape $(A, B)$ and $(B, C)$ costs $2 \cdot A \cdot B \cdot C$ FLOPs.
+
+### 2.1 Attention sub-layer FLOPs
+
+The attention sub-layer of one block does (see [6.4 §3.1](/session/ch6-attention-transformer/6.4-multi-head-attention)):
+
+| Op | Shape | FLOPs |
+|---|---|---|
+| Project $X$ to $Q, K, V$ | $(T, d) \cdot (d, d)$, three times | $6 T d^2$ |
+| Score $S = Q K^\top$ (per head) | $h \cdot (T, d_h) \cdot (d_h, T)$ | $2 T^2 d$ |
+| Apply $S V$ (per head) | $h \cdot (T, T) \cdot (T, d_h)$ | $2 T^2 d$ |
+| Output projection $W_O$ | $(T, d) \cdot (d, d)$ | $2 T d^2$ |
+| **Total attention** | | $\boxed{\ 8 T d^2 + 4 T^2 d \ }$ |
+
+The $8 T d^2$ term is the four projections ($Q, K, V, O$). The $4 T^2 d$ term is the score-and-mix ($Q K^\top$ + $S V$). RoPE, masking, and softmax are $O(T^2)$ each and we drop them.
+
+### 2.2 FFN sub-layer FLOPs
+
+The FFN ([6.8 §5](/session/ch6-attention-transformer/6.8-ffn)) is two matmuls with $d_\text{ff} = 4 d$:
+
+| Op | Shape | FLOPs |
+|---|---|---|
+| $W_1$: $(T, d) \cdot (d, d_\text{ff})$ | $(T, d) \cdot (d, 4d)$ | $8 T d^2$ |
+| $W_2$: $(T, d_\text{ff}) \cdot (d_\text{ff}, d)$ | $(T, 4d) \cdot (4d, d)$ | $8 T d^2$ |
+| **Total FFN** | | $\boxed{\ 16 T d^2 \ }$ |
+
+### 2.3 Per-block total
+
+Summing:
+
+$$
+\boxed{\ \#\text{FLOPs per block} = \underbrace{8 T d^2 + 4 T^2 d}_{\text{attention}} + \underbrace{16 T d^2}_{\text{FFN}} = 24 T d^2 + 4 T^2 d. \ }
+$$
+
+For $L$ blocks, multiply by $L$. Drop biases, norms, and the embedding/output (those are $\Theta(L d)$ or $\Theta(V T d)$; the latter is comparable in magnitude only at very small models, e.g. GPT-2-small).
+
+---
+
+## 3. The crossover at $T = 4 d$
+
+Setting attention compute equal to FFN compute:
+
+$$
+8 T d^2 + 4 T^2 d \;=\; 16 T d^2
+\;\;\Longleftrightarrow\;\; 4 T d \;=\; 8 d^2
+\;\;\Longleftrightarrow\;\; \boxed{\ T = 2 d. \ }
+$$
+
+(If we drop the $8 T d^2$ projection cost of attention and only count the score-mix $4 T^2 d$, the crossover is $T = 4 d$; depending on what one chooses to "attribute" to attention, the crossover is in the band $[2d, 4d]$. Most authors use $T \approx 4d$.)
+
+For LLaMA-7B ($d = 4096$) this is $T \in [8192, 16384]$. So:
+
+- **Pretraining** at $T = 2048$ or $T = 4096$ → well below the crossover → **FFN dominates**.
+- **Long-context inference** at $T = 32768$ or $T = 128000$ → well above the crossover → **attention dominates**.
+
+This single inequality dictates where every "make Transformers efficient" effort focuses:
+
+- *Short context.* Optimise FFN: SwiGLU (Cap 8.4) makes it expressive; MoE (Cap 8.6) makes it conditional.
+- *Long context.* Optimise attention: sliding window (6.13), FlashAttention I/O (Cap 10.5), GQA/MQA (Cap 8.3), KV cache (6.14), linear attention (Mamba, Cap 8.7).
+
+<Aside type="note">
+**The empirical rule.** A handy back-of-envelope: training FLOPs per token per parameter ≈ $6$. Derive it: total forward FLOPs are $\approx 2 \cdot (\#\theta)$ per token if attention is dominated by the FFN's $16 T d^2 = 16 \cdot (\#\theta_\text{ffn})$ structure; backward adds another factor of 2 (the gradient pass does two matmuls per matmul forward); and updates contribute another small constant. Net: train-FLOPs $\approx 6 \cdot N \cdot D$ where $N$ = parameter count and $D$ = total training tokens. Chinchilla (Cap 7.12) uses exactly this formula.
+</Aside>
+
+---
+
+## 4. Memory: activations and KV cache
+
+FLOPs are *time*; memory is *space*. Both bottleneck Transformer scaling, often before FLOPs do.
+
+### 4.1 KV cache (inference)
+
+At autoregressive *inference* (generating one token at a time), the keys and values of all previous tokens do not change. We cache them to avoid recomputation; the cache stores
+
+$$
+\boxed{\ \text{KV-cache size} = 2 \cdot L \cdot h \cdot d_h \cdot T \cdot \text{batch} \cdot (\text{bytes/elem}). \ }
+$$
+
+The factor $2$ is for K and V together. For LLaMA-7B (one batch, fp16):
+
+$$
+\text{KV-cache} = 2 \cdot 32 \cdot 32 \cdot 128 \cdot T \cdot 2 \text{ bytes} = 0.524\, T \text{ MB}.
+$$
+
+At $T = 4096$: $\approx 2$ GB. At $T = 32{,}768$: $\approx 17$ GB. At $T = 128{,}000$: $\approx 67$ GB — larger than a single H100's 80 GB. This is *why* GQA (Cap 8.3) — sharing K, V heads across multiple Q heads — and MLA (Cap 8.5) — low-rank K, V compression — exist: shrinking the $h \cdot d_h$ factor in the KV-cache formula.
+
+For a full discussion of the KV cache see [6.14](/session/ch6-attention-transformer/6.14-kv-cache).
+
+### 4.2 Activation memory (training)
+
+During training we must store every intermediate activation for the backward pass (autodiff, [2.11](/session/ch2-mlps-backprop/2.11-autodiff-forward-reverse)). Per token, per block, the largest activations are:
+
+- The output of each sub-layer: $T \cdot d$ floats.
+- The attention scores: $h \cdot T \cdot T$ floats — this is the **$T^2$ memory cost**.
+- The FFN hidden: $T \cdot d_\text{ff} = T \cdot 4d$ floats.
+
+For long context, $h T^2 \gg T d_\text{ff}$. A 32-head, $T = 8192$ model stores $32 \cdot 8192^2 = 2 \times 10^9$ scores *per block*, in fp16: $4$ GB per block, $128$ GB across 32 blocks. This is the *primary* reason long-context training is hard, and the *primary* reason for **FlashAttention** (Cap 10.5), which recomputes the scores on-the-fly instead of materialising them.
+
+### 4.3 The 4-quadrant cost grid
+
+Putting it together:
+
+| | Short $T$ ($T \ll 4d$) | Long $T$ ($T \gg 4d$) |
+|---|---|---|
+| **Compute** | FFN dominates ($16 T d^2$) | Attention dominates ($4 T^2 d$) |
+| **Memory** | FFN hidden ($4 T d$) | Attention scores ($T^2$) |
+
+Most architectural choices in modern LLMs map onto one cell of this grid.
+
+---
+
+## 5. Worked example: LLaMA-7B
+
+Numbers for one forward pass:
+
+- $d = 4096, L = 32, h = 32, d_h = 128$.
+- $d_\text{ff} = 4d = 16384$ (LLaMA actually uses $\frac{2}{3} \cdot 4d = 10922$ rounded to $11008$ for SwiGLU; we'll use $4d$ here for clarity).
+
+### 5.1 $T = 2048$ (pretraining context)
+
+$$
+\begin{aligned}
+\text{Attn FLOPs/block} &= 8 \cdot 2048 \cdot 4096^2 + 4 \cdot 2048^2 \cdot 4096 \\
+&= 2.75 \times 10^{11} + 6.87 \times 10^{10} = 3.43 \times 10^{11}. \\
+\text{FFN FLOPs/block} &= 16 \cdot 2048 \cdot 4096^2 = 5.50 \times 10^{11}. \\
+\text{Total/block} &= 8.93 \times 10^{11}. \\
+\text{Total/forward} &= 32 \cdot 8.93 \times 10^{11} = 2.86 \times 10^{13}.
+\end{aligned}
+$$
+
+FFN/attention ratio $\approx 1.6$; FFN dominates (matches §3 crossover prediction at $T < 4d$).
+
+### 5.2 $T = 32768$ (long-context inference)
+
+$$
+\begin{aligned}
+\text{Attn FLOPs/block} &= 8 \cdot 32768 \cdot 4096^2 + 4 \cdot 32768^2 \cdot 4096 \\
+&= 4.40 \times 10^{12} + 1.76 \times 10^{13} = 2.20 \times 10^{13}. \\
+\text{FFN FLOPs/block} &= 16 \cdot 32768 \cdot 4096^2 = 8.80 \times 10^{12}.
+\end{aligned}
+$$
+
+Attention/FFN ratio $\approx 2.5$; attention dominates — by a wide margin, and growing as $T^2$.
+
+This is the structural reason "long context is expensive". The cost is not abstract; it follows directly from the $T^2 d$ vs $T d^2$ counting we just did.
+
+---
+
+## 6. Generation cost vs prefill cost
+
+A subtlety specific to LLMs: during *generation*, the model processes one token at a time, with all previous keys/values cached. Per generated token, *effective* $T_\text{generated} = 1$ but $T_\text{context}$ is the cache length. The FLOPs become:
+
+- **Prefill (one forward over the prompt of length $T_p$):** the cost we just derived, scaling as $T_p d^2$ + $T_p^2 d$.
+- **Per generated token:** one row of $Q$ attends to all $T$ cached K, V; the FFN runs on one position. Cost is $\sim 8 d^2 + 4 T d + 16 d^2$ FLOPs per token — *linear* in $T$ at the attention term.
+
+Generating $N$ tokens, total cost $\sim N (24 d^2 + 4 T d)$. The cumulative cost scales as $N \cdot T$ (attention term) — still quadratic in *combined* sequence length, but distributed across $N$ separate calls rather than one big one. This is what makes the KV cache an enormous practical win for inference; see [6.14](/session/ch6-attention-transformer/6.14-kv-cache).
+
+---
+
+## 7. Putting it together
+
+Three numbers to remember:
+
+1. **Per-block FLOPs:** $24 T d^2 + 4 T^2 d$. Roughly: $24 T d^2$ for FFN-and-projections, $4 T^2 d$ for the score-and-mix.
+2. **Crossover:** at $T = 2d$ to $4d$, the two terms are equal. Below: FFN dominates. Above: attention dominates.
+3. **KV-cache memory:** $2 L h d_h T$ elements per batch. Linear in $T$, *quadratic* in model depth × width product. The dominant memory of long-context inference.
+
+[Next session](/session/ch6-attention-transformer/6.13-long-context) turns to the **long-context regime** — what architectural variants exist to bend the $T^2 d$ term back down to $T d$ or $T \log T$, while preserving model quality.
+
+<SelfTest>
+
+**(a)** Re-derive the per-block FLOP count $24 T d^2 + 4 T^2 d$. Identify which matrix multiplications contribute the $24 T d^2$ term and which contribute the $4 T^2 d$ term.
+
+**(b)** For GPT-2 small ($d = 768, L = 12, T = 1024$), compute the forward-pass FLOPs and identify whether attention or FFN dominates. Repeat at $T = 8192$ for the same model.
+
+**(c)** The KV-cache size for LLaMA-7B at $T = 4096$ in fp16 is about $2$ GB. Verify this number from $2 L h d_h T \cdot 2$. Now compute the KV-cache size for LLaMA-70B at $T = 32768$ in fp16, given $L = 80, h = 64, d_h = 128$.
+
+**(d)** Argue why the activation memory of the attention sub-layer scales as $h T^2$ (per block) during training, and why this becomes the dominant memory cost at long context. Connect this to the FlashAttention motivation in Cap 10.5.
+
+**(e)** Per generated token (after prefill), state the FLOPs as a function of $T$ (cache length). Why is this *linear* in $T$ rather than quadratic? What is the cumulative cost of generating $N$ tokens?
+
+</SelfTest>

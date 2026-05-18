@@ -201,39 +201,65 @@ prerequisites: []
 
 ## Chapter 6 — Attention and the Transformer
 
-*Note: this chapter is being written across two messages. References below cover sessions 6.1–6.8 (Part 1). Sessions 6.9–6.16 and Appendices 6.A, 6.B add further references in Part 2.*
-
 **Textbooks.**
 
 - **Prince, S. J. D.** (2023). *Understanding Deep Learning,* §12 (Sequence-to-Sequence Models) and §13 (Transformers). MIT Press. — Attention as soft lookup (6.1), scaled dot-product attention (6.2), multi-head attention (6.4).
-- **Raschka, S.** (2024). *Build a Large Language Model (From Scratch),* Chapters 3–4. Manning. — Self-attention implementation (6.3, 6.4), causal masking (6.5).
+- **Raschka, S.** (2024). *Build a Large Language Model (From Scratch),* Chapters 3–4. Manning. — Self-attention implementation (6.3, 6.4), causal masking (6.5), pre-norm block (6.10–6.11).
 - **Bishop, C. M., & Bishop, H.** (2024). *Deep Learning: Foundations and Concepts,* §12 (Transformers). Springer. — Concise modern treatment of all attention components.
 
 **Primary papers — core attention and Transformer.**
 
-- **Vaswani, A., Shazeer, N., Parmar, N., et al.** (2017). "Attention is all you need". *NeurIPS*. [arXiv:1706.03762](https://arxiv.org/abs/1706.03762) — The Transformer paper. Scaled dot-product attention (6.2), multi-head attention (6.4), encoder–decoder cross-attention (6.3), sinusoidal positional encoding (Appendix 6.A), the FFN sub-layer (6.8).
+- **Vaswani, A., Shazeer, N., Parmar, N., et al.** (2017). "Attention is all you need". *NeurIPS*. [arXiv:1706.03762](https://arxiv.org/abs/1706.03762) — The Transformer paper. Scaled dot-product attention (6.2), multi-head attention (6.4), encoder–decoder cross-attention (6.3), sinusoidal positional encoding (Appendix 6.A), the FFN sub-layer (6.8), post-LN block diagram (6.10), full architecture read (6.11).
 - **Bahdanau, D., Cho, K., & Bengio, Y.** (2014). "Neural machine translation by jointly learning to align and translate". [arXiv:1409.0473](https://arxiv.org/abs/1409.0473) — First "neural attention" paper; additive attention as a precursor to scaled dot-product (6.1, 6.2).
 - **Luong, M.-T., Pham, H., & Manning, C. D.** (2015). "Effective approaches to attention-based neural machine translation". *EMNLP*. [arXiv:1508.04025](https://arxiv.org/abs/1508.04025) — Dot-product attention variants (6.2).
-- **Radford, A., Narasimhan, K., Salimans, T., & Sutskever, I.** (2018). "Improving language understanding by generative pre-training" (GPT-1). OpenAI technical report. — Decoder-only Transformer with causal self-attention (6.3, 6.5).
-- **Radford, A., Wu, J., Child, R., et al.** (2019). "Language models are unsupervised multitask learners" (GPT-2). OpenAI technical report. — Learned absolute positional encoding (Appendix 6.B), pre-LN variant (6.10, Part 2).
+- **Radford, A., Narasimhan, K., Salimans, T., & Sutskever, I.** (2018). "Improving language understanding by generative pre-training" (GPT-1). OpenAI technical report. — Decoder-only Transformer with causal self-attention (6.3, 6.5); first use of learned PE (Appendix 6.B).
+- **Radford, A., Wu, J., Child, R., et al.** (2019). "Language models are unsupervised multitask learners" (GPT-2). OpenAI technical report. — Learned absolute positional encoding (Appendix 6.B), pre-LN variant (6.10), the architectural skeleton of every modern decoder-only LLM (6.11).
 
 **Primary papers — positional encodings.**
 
 - **Shaw, P., Uszkoreit, J., & Vaswani, A.** (2018). "Self-attention with relative position representations". *NAACL*. [arXiv:1803.02155](https://arxiv.org/abs/1803.02155) — First relative positional encoding (6.6 §4.2).
 - **Raffel, C., Shazeer, N., Roberts, A., et al.** (2020). "Exploring the limits of transfer learning with a unified text-to-text transformer" (T5). *JMLR*. [arXiv:1910.10683](https://arxiv.org/abs/1910.10683) — Bucketed relative positional bias (6.6 §4.2).
 - **Su, J., Lu, Y., Pan, S., et al.** (2021). "RoFormer: Enhanced transformer with rotary position embedding". [arXiv:2104.09864](https://arxiv.org/abs/2104.09864) — Rotary positional embedding (RoPE) (6.7).
+- **Press, O., Smith, N. A., & Lewis, M.** (2021). "Train short, test long: Attention with linear biases enables input length extrapolation" (ALiBi). [arXiv:2108.12409](https://arxiv.org/abs/2108.12409) — Linear-distance bias inside softmax; length extrapolation (6.13 §3).
+- **Chen, S., Wong, S., Chen, L., & Tian, Y.** (2023). "Extending context window of large language models via positional interpolation". [arXiv:2306.15595](https://arxiv.org/abs/2306.15595) — Linear interpolation of RoPE frequencies for context extension (6.13 §4.1).
+- **Peng, B., Quesnelle, J., Fan, H., & Shippole, E.** (2023). "YaRN: Efficient context window extension of large language models". [arXiv:2309.00071](https://arxiv.org/abs/2309.00071) — Piecewise RoPE scaling (NTK-aware + linear-interpolation hybrid) (6.13 §4.3).
+
+**Primary papers — residual connections and normalisation placement.**
+
+- **He, K., Zhang, X., Ren, S., & Sun, J.** (2015). "Deep residual learning for image recognition" (ResNet). [arXiv:1512.03385](https://arxiv.org/abs/1512.03385) — Identity skip connections; the architectural innovation imported wholesale into the Transformer (6.9).
+- **He, K., Zhang, X., Ren, S., & Sun, J.** (2016). "Identity mappings in deep residual networks". [arXiv:1603.05027](https://arxiv.org/abs/1603.05027) — Pre-activation ResNet; the structural blueprint behind pre-LN Transformer (6.10 §6).
+- **Veit, A., Wilber, M. J., & Belongie, S.** (2016). "Residual networks behave like ensembles of relatively shallow networks". [arXiv:1605.06431](https://arxiv.org/abs/1605.06431) — Implicit-ensemble view of residual networks (6.9 Aside).
+- **Zhang, H., Dauphin, Y. N., & Ma, T.** (2019). "Fixup initialization: Residual learning without normalization". [arXiv:1901.09321](https://arxiv.org/abs/1901.09321) — Identity-initialisation tricks for very deep residual stacks (6.9 §4).
+- **Wang, Q., Li, B., Xiao, T., et al.** (2019). "Improving deep transformer with depth-scaled initialization and merged attention" (a.k.a. learning deep Transformers). [arXiv:1908.11365](https://arxiv.org/abs/1908.11365) — Early analysis of post-LN instability; motivation for pre-LN (6.10 §4.2).
+- **Xiong, R., Yang, Y., He, D., et al.** (2020). "On layer normalization in the Transformer architecture". [arXiv:2002.04745](https://arxiv.org/abs/2002.04745) — Theoretical analysis: post-LN gradient grows as √L, pre-LN is O(1) (6.10 §5).
+- **Wang, H., Ma, S., Dong, L., et al.** (2022). "DeepNet: Scaling Transformers to 1000 layers" (DeepNorm). [arXiv:2203.00555](https://arxiv.org/abs/2203.00555) — Stable post-norm variant via residual scaling (6.10 §8).
+- **Shleifer, S., Weston, J., & Ott, M.** (2021). "NormFormer: Improved transformer pretraining with extra normalization". [arXiv:2110.09456](https://arxiv.org/abs/2110.09456) — Additional norm placements for deeper models (6.10 §8).
+
+**Primary papers — long-context attention.**
+
+- **Beltagy, I., Peters, M. E., & Cohan, A.** (2020). "Longformer: The long-document transformer". [arXiv:2004.05150](https://arxiv.org/abs/2004.05150) — Sliding-window + global attention with dilations (6.13 §2).
+- **Jiang, A. Q., Sablayrolles, A., Mensch, A., et al.** (2023). "Mistral 7B". [arXiv:2310.06825](https://arxiv.org/abs/2310.06825) — Sliding-window attention at scale; pairs with attention sinks (6.13 §2).
+- **Xiao, G., Tian, Y., Chen, B., Han, S., & Lewis, M.** (2023). "Efficient streaming language models with attention sinks" (StreamingLLM). [arXiv:2309.17453](https://arxiv.org/abs/2309.17453) — Attention sinks for constant-memory streaming (6.13 §2.2).
+
+**Primary papers — KV-cache and inference-side optimisations.**
+
+- **Shazeer, N.** (2019). "Fast transformer decoding: One write-head is all you need" (Multi-Query Attention). [arXiv:1911.02150](https://arxiv.org/abs/1911.02150) — MQA: share K, V across heads to shrink the KV cache (6.14 §5.1).
+- **Ainslie, J., Lee-Thorp, J., de Jong, M., et al.** (2023). "GQA: Training generalized multi-query transformer models from multi-head checkpoints". [arXiv:2305.13245](https://arxiv.org/abs/2305.13245) — Grouped-query attention; the modern default in LLaMA-2-70B, LLaMA-3, Mistral, Qwen (6.14 §5.1; full treatment Cap 8.3).
+- **DeepSeek-AI** (2024). "DeepSeek-V2: A strong, economical, and efficient mixture-of-experts language model" (MLA). [arXiv:2405.04434](https://arxiv.org/abs/2405.04434) — Multi-head latent attention; low-rank K, V compression (6.14 §5.2; full treatment Cap 8.5).
+- **Kwon, W., Li, Z., Zhuang, S., et al.** (2023). "Efficient memory management for large language model serving with PagedAttention" (vLLM). [arXiv:2309.06180](https://arxiv.org/abs/2309.06180) — OS-style paging for the KV cache (6.14 §6; full treatment Cap 10.8).
+- **Yu, G.-I., Jeong, J. S., Kim, G.-W., Kim, S., & Chun, B.-G.** (2022). "Orca: A distributed serving system for transformer-based generative models". *OSDI*. — Continuous batching (6.14 §6).
 
 **Primary papers — interpretability of heads and FFN.**
 
-- **Olsson, C., Elhage, N., Nanda, N., et al.** (2022). "In-context learning and induction heads". Anthropic. [transformer-circuits.pub](https://transformer-circuits.pub/2022/in-context-learning-and-induction-heads/index.html) — Induction heads as the mechanism behind in-context learning (6.4 §4).
+- **Olsson, C., Elhage, N., Nanda, N., et al.** (2022). "In-context learning and induction heads". Anthropic. [transformer-circuits.pub](https://transformer-circuits.pub/2022/in-context-learning-and-induction-heads/index.html) — Induction heads as the mechanism behind in-context learning (6.4 §4); residual-stream view (6.11 §4).
 - **Geva, M., Schuster, R., Berant, J., & Levy, O.** (2021). "Transformer feed-forward layers are key-value memories". *EMNLP*. [arXiv:2012.14913](https://arxiv.org/abs/2012.14913) — FFN as parametric associative memory (6.8 §6).
 - **Shazeer, N.** (2020). "GLU variants improve Transformer". [arXiv:2002.05202](https://arxiv.org/abs/2002.05202) — SwiGLU / GeGLU; modern FFN variant (6.8 Aside; full treatment in Cap 8.4).
 
-**Lecture series and online resources.**
+**Lecture series, online resources, and reference implementations.**
 
 - **3Blue1Brown.** "But what is a GPT? Visual intro to Transformers" and "Attention in transformers, step-by-step". [3blue1brown.com](https://www.3blue1brown.com/) — Visual introduction to attention (6.1, 6.2).
-- **Karpathy, A.** "Let's build GPT: from scratch, in code, spelled out". [karpathy.ai](https://karpathy.ai/zero-to-hero.html) — Hand-built Transformer (pairs with 6.15–6.16 in Part 2).
-- **Karpathy, A.** *nanoGPT.* [github.com/karpathy/nanoGPT](https://github.com/karpathy/nanoGPT) — Reference implementation read in 6.16 (Part 2).
+- **Karpathy, A.** "Let's build GPT: from scratch, in code, spelled out". [YouTube](https://www.youtube.com/watch?v=kCc8FmEb1nY); part of the Zero-to-Hero series at [karpathy.ai](https://karpathy.ai/zero-to-hero.html) — Live coding of a Transformer; pairs directly with 6.15–6.16.
+- **Karpathy, A.** *nanoGPT.* [github.com/karpathy/nanoGPT](https://github.com/karpathy/nanoGPT) — Reference implementation walked through line-by-line in 6.16.
 - **Alammar, J.** (2018). "The illustrated Transformer". [jalammar.github.io](https://jalammar.github.io/illustrated-transformer/) — Canonical visual walkthrough (6.4, 6.8).
 
 ---

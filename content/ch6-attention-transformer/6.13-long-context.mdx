@@ -1,0 +1,206 @@
+---
+title: "6.13 — Long-context attention: sliding window, ALiBi, and RoPE scaling"
+chapter: 6
+order: 13
+estimatedMinutes: 26
+goal: "Survey three families of long-context mechanisms — sliding-window attention (Mistral), ALiBi bias-based positions (Press et al., 2021), and RoPE scaling techniques (linear, NTK-aware, YaRN) — that let a model trained on a few-k context handle 32k, 128k, or 1M tokens."
+prerequisites: ["ch6-attention-transformer/6.12-compute-and-memory", "ch6-attention-transformer/6.7-rope"]
+---
+
+## 1. Why this session exists
+
+[6.12](/session/ch6-attention-transformer/6.12-compute-and-memory) made the cost of long-context attention precise: the score-and-mix term $4 T^2 d$ dominates for $T \gtrsim 4d$, and the KV cache grows linearly in $T$. A 128k-token prompt for a $d = 4096$ model costs roughly $128^2 \cdot 4096 / 2048^2 = 1024 \times$ more attention FLOPs than a 2k prompt, and 64$\times$ more KV-cache memory.
+
+This session surveys three families of techniques that bend the cost curve back. Each attacks a different piece:
+
+1. **Sliding-window attention** (Mistral, Longformer). Restrict each token to a local window of width $w$. Per-token cost drops from $O(T d)$ to $O(w d)$, total to $O(T w d)$. Global reach is recovered through layer-by-layer "information bubbling".
+2. **ALiBi** (Press et al., 2021). Drop *explicit* positional encodings; add a linear bias $-m_h \cdot |i - j|$ inside the softmax. Trains at one length and extrapolates to longer contexts at inference time, *without retraining*.
+3. **RoPE scaling** (linear, NTK-aware, YaRN). Reuse a RoPE-trained model at much longer context by rescaling its rotational frequencies. The dominant approach in 2024–2026 LLMs that ship with 128k+ context windows.
+
+By session end you should be able to read the long-context section of any 2024–2026 model card (LLaMA-3, Mistral, Gemini, Claude) and identify which combination they use.
+
+---
+
+## 2. Sliding-window attention
+
+The simplest idea: cap the attention range. Pick a window size $w$ (Mistral 7B uses $w = 4096$) and let each token $t$ attend only to the previous $w$ tokens, i.e. positions in $[t - w + 1, t]$. The mask becomes a **band** rather than a lower-triangle:
+
+$$
+\text{mask}(i, j) = \begin{cases}
+0 & \text{if } 0 \leq i - j \leq w - 1, \\
+-\infty & \text{otherwise.}
+\end{cases}
+$$
+
+The score matrix $S = Q K^\top / \sqrt{d_k}$ has the same shape as before, but only a band of width $w$ contributes after softmax. Per-token attention cost drops from $O(T d)$ to $O(w d)$; total attention cost is $O(T w d)$ instead of $O(T^2 d)$ — **linear in $T$**.
+
+### 2.1 Why local attention does not blind the model to distant content
+
+A natural concern: if every token only sees the past $w$ tokens, how does information at position $1$ reach position $T \gg w$? Answer: through the **layer stack**.
+
+Each layer is a sliding window of size $w$. After $L$ layers stacked, an output token has an *effective receptive field* of $L \cdot w$. The Longformer paper (Beltagy et al., 2020, [arXiv:2004.05150](https://arxiv.org/abs/2004.05150)) calls this the "Transformer's CNN-like receptive field" — each layer extends the local view, and the composition reaches arbitrary distances given enough layers.
+
+For Mistral 7B: $w = 4096, L = 32$. Effective receptive field $= 32 \cdot 4096 = 131072$ — comfortably enough to cover the 32k context the model trains on.
+
+<Aside type="note">
+**The receptive-field argument is a worst-case bound.** Information at position $1$ *can* reach position $T$ in $\lceil T / w \rceil$ layers. Whether it *does* depends on what the model learns; empirically, sliding-window models route global information by combining few-token "summarizing" heads at lower layers with broader heads at upper layers. The headline number $L \cdot w$ is the maximum range, not the typical effective range.
+</Aside>
+
+### 2.2 Variants: dilated, global tokens, attention sinks
+
+Three commonly-paired ideas:
+
+- **Dilated windows** (Beltagy et al.): at layer $\ell$, use a stride-$s_\ell$ window so that the receptive field grows *multiplicatively* with depth.
+- **Global tokens.** A small set of "always-attended" positions (e.g., \[CLS\], the first $k$ tokens) that every layer attends to in full. Resolves the early-token bottleneck.
+- **Attention sinks** (Xiao et al., 2023, [arXiv:2309.17453](https://arxiv.org/abs/2309.17453)). Always include the first 4 tokens in the window. Empirically, language models concentrate disproportionate attention on these "sink" tokens; including them in any local window prevents the softmax from being starved of well-positioned mass. StreamingLLM uses this to extend context indefinitely with constant memory.
+
+Mistral 7B uses plain sliding window + a few attention sinks. The combination matches full attention on standard benchmarks at significantly lower cost.
+
+### 2.3 Compute and memory savings
+
+Per block:
+
+$$
+\#\text{FLOPs}_\text{attn,sliding} = 8 T d^2 + 4 T w d.
+$$
+
+The score-mix is now linear in $T$ (with $w$ as the multiplicative constant). For $T = 32768, w = 4096, d = 4096$:
+
+$$
+\frac{T w d}{T^2 d} = \frac{w}{T} = \frac{4096}{32768} = \frac{1}{8},
+$$
+
+an 8× reduction. Memory follows: KV-cache *can* be capped at $w$ tokens (rolling buffer), making **constant-memory** streaming generation possible.
+
+---
+
+## 3. ALiBi: Attention with Linear Biases
+
+**ALiBi** (Press, Smith, Lewis, 2021, [arXiv:2108.12409](https://arxiv.org/abs/2108.12409)) takes a different angle: keep full attention, but **drop explicit positional encodings entirely**. Replace them with a fixed *bias* added to the attention scores that depends only on relative position:
+
+$$
+\boxed{\ S_{ij} = \frac{q_i^\top k_j}{\sqrt{d_k}} - m_h \cdot (i - j). \ }
+$$
+
+(For causal attention $i \geq j$, so the bias is non-negative inside softmax-pre-image.) Here $m_h > 0$ is a *fixed* (not learned) per-head slope; ALiBi recommends $m_h = 2^{-8 h^*/H}$ for head $h^* = 1, \dots, H$, giving a geometric progression of slopes across heads.
+
+### 3.1 Why this is "positional information"
+
+The bias $-m_h (i - j)$ is a *monotonically decreasing function of distance*. Closer keys score higher (less penalty); distant keys score lower (more penalty). The model still uses softmax to choose where to look, but the *prior* over relative positions is encoded directly in the bias.
+
+Different heads have different slopes $m_h$:
+
+- **Steep slopes** ($m_h$ large) → head attends mostly to nearby tokens.
+- **Shallow slopes** ($m_h$ small) → head attends to a wider range, including distant tokens.
+
+The geometric schedule ensures coverage of multiple timescales — analogous to RoPE's per-pair frequency schedule (6.7 §4), but simpler.
+
+### 3.2 The headline property: length extrapolation
+
+ALiBi's pitch is **train at length $T_\text{train}$, infer at length $T_\text{infer} \gg T_\text{train}$, without finetuning**. Because the bias is just $-m_h |i - j|$, it is well-defined at *any* distance — there is no learned-PE table that runs out of rows, no rotation frequency tuned to a specific window. Press et al. demonstrated training at $T = 1024$ and using the same model at $T = 16{,}384$ with no quality degradation; the equivalent learned-PE model collapses past its training length.
+
+This is what "length extrapolation" *means* and ALiBi is the cleanest example. It buys universally-defined positional information by giving up *learned* position-conditioning entirely — the function $-m_h (i - j)$ is fixed for ever.
+
+### 3.3 Trade-offs vs RoPE
+
+ALiBi is simple and extrapolates cleanly, but it has a structural ceiling: every head's bias is monotonic in distance. There is no way to express "this token at distance 5 is special" except via the content-dependent $q^\top k$ term — which is also doing the heavy lifting in any attention model. RoPE, in contrast, lets the dot product $\langle q_m, k_n \rangle$ have *arbitrary* dependence on $n - m$ (modulated by content), at the cost of being defined only up to the trained-frequency range.
+
+In practice: ALiBi is used by BLOOM, MPT-7B, and a few smaller research models. Most frontier LLMs use **RoPE + scaling techniques** (§4 below) for long context, because RoPE's flexibility outweighs its training-length issue when you can fix the latter.
+
+---
+
+## 4. RoPE scaling
+
+Modern frontier LLMs are RoPE-trained (6.7). The challenge: RoPE's rotation rate for pair $i$ is $\theta_i = 10000^{-2i/d}$, which is chosen so that the full set of $d/2$ frequencies covers wavelengths from ~$1$ token (high frequency) to ~$10000$ tokens (low frequency). Train on $T = 4096$ — every position is within the low-frequency wavelength, and the model learns to use them. At inference with $T = 32768$, positions wrap multiple times in the low-frequency pairs and the model has never been exposed to those wrap-points.
+
+The fix is to **rescale the rotation frequencies** so that the model "sees" the longer context as if it were shorter. Three flavours.
+
+### 4.1 Position interpolation (linear scaling)
+
+**Chen et al., 2023, *Extending Context Window of Large Language Models via Positional Interpolation*** ([arXiv:2306.15595](https://arxiv.org/abs/2306.15595)). Idea: instead of rotating by angle $m \theta_i$ at position $m$, rotate by $\alpha \cdot m \cdot \theta_i$ with $\alpha = T_\text{train} / T_\text{target}$. Equivalently, map positions linearly into the training range:
+
+$$
+\boxed{\ \tilde m = m \cdot \frac{T_\text{train}}{T_\text{target}}. \ }
+$$
+
+At $T_\text{target} = 4 T_\text{train}$, every rotation angle is scaled by $\frac{1}{4}$. The model never sees a rotation angle it was not trained on. A short fine-tune (~1000 steps) lets the model adapt to the new effective resolution.
+
+Linear interpolation is the simplest scaling and works well up to about $4 \times$ extension. Past that, the lowest frequencies become so squashed that they lose discriminating power between nearby positions.
+
+### 4.2 NTK-aware scaling
+
+The Neural Tangent Kernel observation (anonymous community post on r/LocalLLaMA, June 2023; later formalised in the YaRN paper): linear interpolation squashes *all* frequencies, including the high-frequency ones that the model uses for local order. Better idea — scale the *base* of the frequency schedule rather than the rotation rate directly. Set
+
+$$
+\boxed{\ \theta_i^\text{NTK} = \big(\alpha \cdot 10000\big)^{-2i/d}, \qquad \alpha = \Big(\frac{T_\text{target}}{T_\text{train}}\Big)^{d / (d - 2)}. \ }
+$$
+
+The exponent $d / (d - 2) \approx 1$ for large $d$, so $\alpha \approx T_\text{target} / T_\text{train}$. The effect: high-frequency pairs (small $i$, $\theta_i$ near $1$) are barely changed; low-frequency pairs (large $i$, $\theta_i$ near $10000^{-1}$) are stretched. Local order is preserved; global position information is rescaled.
+
+NTK-aware extends up to about $8 \times$ training length with no fine-tuning at all.
+
+### 4.3 YaRN
+
+**Peng, Quesnelle, Fan, Shippole, 2023, *YaRN: Efficient Context Window Extension of Large Language Models*** ([arXiv:2309.00071](https://arxiv.org/abs/2309.00071)). Refines NTK-aware: instead of one global $\alpha$, apply *different* scalings to different frequency bands. Three regions:
+
+- **High-frequency pairs.** Already wrap many times within $T_\text{train}$; the model treats them as essentially uniform over $[0, 2\pi]$. Don't rescale.
+- **Mid-frequency pairs.** Partially wrapped. Use NTK-aware scaling.
+- **Low-frequency pairs.** Less than one full period in $T_\text{train}$. Linear-interpolate (gentlest scaling).
+
+The piecewise schedule is parameterised by two cut-off frequencies $\alpha$ and $\beta$ chosen by inspection. YaRN also includes a small fine-tune step (~$0.1\%$ of pretraining tokens) that adapts the model to the new effective frequencies. Together, YaRN extends 4k-trained models to 64k or 128k with near-zero loss in quality.
+
+YaRN is the de facto context-extension method in 2024–2026 LLM releases. LLaMA-3 long-context variants, DeepSeek-V2, Qwen-2 long-context — all use YaRN or close variants.
+
+<Aside type="note">
+**The interpolation–extrapolation trade-off.** With linear interpolation, the *worst* RoPE frequency is squashed by factor $\alpha$ — the model loses some positional resolution but is never given a brand-new rotation. With pure NTK-aware extrapolation, the *highest* frequencies are preserved but the *lowest* frequencies wrap beyond their training range. YaRN combines both by frequency band: keep what's safe, rescale what's not. This is the right move because RoPE's frequency schedule itself spans many orders of magnitude (6.7 §4), so the right scaling is not uniform across frequencies.
+</Aside>
+
+---
+
+## 5. The 2026 long-context recipe
+
+What a frontier LLM actually does to ship a 128k+ context window:
+
+1. **Pretrain** at a moderate context (e.g., LLaMA-3 trains at 8k).
+2. **Continue training at longer context** (e.g., 32k–128k) using RoPE scaling (linear or NTK-aware as a warm start, YaRN for final).
+3. **Add long-context-targeted data**: long documents, books, code repos, technical papers.
+4. **(Optional) Sliding-window attention** as an additional cost-cutter at inference, paired with attention sinks.
+5. **Evaluate on long-context benchmarks**: Needle-in-a-Haystack, RULER, LongBench, BABILong.
+
+The total compute for long-context extension is typically $0.1$–$1\%$ of the pretraining compute. The model emerges with a 4k–8k "native" base and a 32k–1M-capable inference window after RoPE scaling + a brief continued training run.
+
+Three frontier examples (rough sketches; exact recipes vary):
+
+- **LLaMA-3-8B-Instruct-128k.** Trained at 8k, extended to 128k via RoPE scaling + 800B tokens of long-context training.
+- **Mistral Large 2.** RoPE + sliding-window attention; 128k context.
+- **Gemini 1.5 Pro.** 1M context via a combination of long-context training, sliding-window-and-cross-attention, and Ring Attention (sequence parallelism, beyond this chapter).
+
+---
+
+## 6. What we keep going forward
+
+Three different ways to make attention long-context-capable, each addressing a different cost:
+
+$$
+\begin{aligned}
+\textbf{Sliding window} &: \text{cap each token's attention range at } w. \quad O(T w d). \\
+\textbf{ALiBi} &: \text{drop PE, add a linear-distance bias inside softmax}. \\
+\textbf{RoPE scaling} &: \text{stretch RoPE frequencies (linear / NTK-aware / YaRN)}.
+\end{aligned}
+$$
+
+Modern frontier LLMs combine RoPE scaling (the dominant choice) with sliding-window attention (for inference cost). ALiBi is used by a few smaller models and remains the cleanest *theoretical* answer to the length-extrapolation problem. The KV cache itself (next session, [6.14](/session/ch6-attention-transformer/6.14-kv-cache)) is the other big inference-side optimisation, and lands properly there.
+
+<SelfTest>
+
+**(a)** Compute the per-block FLOP saving of sliding-window attention with $w = 4096$ versus full attention at $T = 32768$, given $d = 4096$. Now compute the same ratio at $T = 131072$.
+
+**(b)** Argue why, in a sliding-window Transformer with $L$ layers and window $w$, information from position $1$ can reach position $L w$ within the same forward pass. Is the path linear or non-linear in $L$?
+
+**(c)** Write the ALiBi attention score for a head with slope $m_h = 0.125$ at positions $i = 100, j = 70$, given $q_i^\top k_j / \sqrt{d_k} = 2.0$. Recompute for $j = 50$. Argue that the model still has full freedom to attend to $j = 50$ if $q_i^\top k_j$ is large enough.
+
+**(d)** RoPE linear interpolation at $\alpha = T_\text{train}/T_\text{target} = 1/4$ rescales each rotation angle by $\tfrac{1}{4}$. State what happens to (i) the wavelength of the highest-frequency RoPE pair, (ii) the wavelength of the lowest-frequency RoPE pair, under this rescaling. Why does this break "local order" for very large $\alpha$?
+
+**(e)** YaRN applies different scalings to different RoPE frequency bands. Explain why, intuitively, high-frequency pairs are safe to leave alone, while low-frequency pairs must be rescaled.
+
+</SelfTest>

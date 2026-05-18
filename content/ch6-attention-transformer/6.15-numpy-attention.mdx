@@ -1,0 +1,292 @@
+---
+title: "6.15 — Implementation day: hand-write self-attention in numpy"
+chapter: 6
+order: 15
+estimatedMinutes: 25
+goal: "Implement single-head causal self-attention from scratch in numpy on a length-8, d=4 example; verify every shape; verify the softmax-rows-sum-to-1 invariant; verify the causal mask blocks future positions; sanity-check the gradient direction by finite differences."
+prerequisites: ["ch6-attention-transformer/6.2-scaled-dot-product-attention", "ch6-attention-transformer/6.5-causal-masking"]
+---
+
+## 1. Why this session exists
+
+We have written the formula
+
+$$
+\text{Attn}(Q, K, V) = \text{softmax}\!\Big(\frac{Q K^\top}{\sqrt{d_k}} + M\Big) V
+$$
+
+half a dozen times across [6.2](/session/ch6-attention-transformer/6.2-scaled-dot-product-attention)–[6.5](/session/ch6-attention-transformer/6.5-causal-masking). Now we type it. The point of an implementation day is not learning numpy — it is making the four shapes ($Q, K, V, S$), the mask, and the row-wise softmax *concrete*. After this session you can sketch attention from memory and you have a sanity test you can run on any new attention variant you encounter.
+
+We will use a tiny example: one batch, one head, sequence length $T = 8$, head dimension $d_k = 4$. Small enough to inspect by hand; large enough to make every dimension visible. The full script is ~50 lines of numpy; you should be able to write it without looking at this page after the first read-through.
+
+---
+
+## 2. Setup
+
+```python
+import numpy as np
+
+np.random.seed(0)
+
+T = 8          # sequence length
+d_k = 4        # head dimension
+d_v = 4        # value dimension (we'll use d_k = d_v for clarity)
+
+# A tiny input embedding sequence (T x d), already after embedding + RoPE,
+# so each row is one token's hidden vector at d=4.
+X = np.random.randn(T, d_k).astype(np.float64)
+print("X shape:", X.shape)            # (8, 4)
+```
+
+`X` is our $T \times d_k$ input — for a single-head model, $d = d_k$. In a real Transformer this would be the LayerNormalised input of the attention sub-layer ([6.10](/session/ch6-attention-transformer/6.10-pre-vs-post-norm)).
+
+We need the three projection matrices $W_Q, W_K, W_V \in \mathbb{R}^{d_k \times d_k}$ (we'll skip the $W_O$ output projection since it's just one matmul on the result).
+
+```python
+W_Q = np.random.randn(d_k, d_k).astype(np.float64) * 0.1
+W_K = np.random.randn(d_k, d_k).astype(np.float64) * 0.1
+W_V = np.random.randn(d_k, d_v).astype(np.float64) * 0.1
+```
+
+The $\times 0.1$ scale is a stand-in for Xavier-initialised weights; the goal is just to make the post-softmax outputs not degenerate.
+
+---
+
+## 3. Computing $Q, K, V$
+
+```python
+Q = X @ W_Q          # (T, d_k)
+K = X @ W_K          # (T, d_k)
+V = X @ W_V          # (T, d_v)
+
+print("Q:", Q.shape, "K:", K.shape, "V:", V.shape)
+# Q: (8, 4) K: (8, 4) V: (8, 4)
+```
+
+Notice that $Q, K, V$ all live in the same space here only because $d_k = d_v$ and we're single-head; in general they would have shapes $(T, d_k), (T, d_k), (T, d_v)$.
+
+---
+
+## 4. The score matrix
+
+The unscaled scores are $Q K^\top$:
+
+```python
+S_raw = Q @ K.T              # (T, T)
+S = S_raw / np.sqrt(d_k)     # divide by sqrt(d_k) -- the "scaled" of scaled dot-product
+print("S shape:", S.shape)   # (8, 8)
+```
+
+Why $\sqrt{d_k}$? Because, for $Q, K$ with standardised entries, $\mathbb{E}[\| Q_i K_j^\top \|] \sim \sqrt{d_k}$ — and feeding raw scores into softmax would push it into saturation (one entry $\to 1$, all others $\to 0$, gradients $\to 0$). We covered this in [6.2 §4](/session/ch6-attention-transformer/6.2-scaled-dot-product-attention).
+
+Sanity check: $S$ should be a $T \times T$ matrix with no positivity constraint — every entry can be any real number. Print a few rows:
+
+```python
+print(S[:3])
+# something like
+# [[-0.067  0.181 -0.094  0.041 ...]
+#  [ 0.103 -0.022  0.117 -0.083 ...]
+#  ...]
+```
+
+Mixed signs, magnitudes around $0.1$. Good.
+
+---
+
+## 5. The causal mask
+
+For autoregressive (decoder) attention, position $i$ may only attend to $j \leq i$. We forbid $j > i$ by adding $-\infty$ in those entries *before* the softmax. Equivalently, with a large negative constant:
+
+```python
+mask = np.triu(np.ones((T, T)), k=1) * -1e9     # upper triangle: -1e9; lower triangle + diag: 0
+print("mask:")
+print(mask.astype(int))
+# [[ 0  -1e9 -1e9 -1e9 -1e9 -1e9 -1e9 -1e9]
+#  [ 0    0 -1e9 -1e9 -1e9 -1e9 -1e9 -1e9]
+#  [ 0    0    0 -1e9 -1e9 -1e9 -1e9 -1e9]
+#  ...
+#  [ 0    0    0    0    0    0    0    0]]
+
+S_masked = S + mask
+```
+
+After this addition, $S_\text{masked}[i, j] = -10^9$ for $j > i$. The softmax of $-10^9$ is $\approx 0$ (numerically), so the mask effectively zeros out future positions in the attention weights.
+
+In a real Transformer, modern implementations use either:
+
+- Adding a $-\infty$ mask (what we did), or
+- Filling with a very-negative number (e.g., the minimum representable in the dtype), or
+- Native masked-softmax kernels (FlashAttention, Cap 10.5).
+
+---
+
+## 6. Row-wise softmax (numerically stable)
+
+The softmax must be applied **along each row** of $S_\text{masked}$ — each query position $i$ produces a probability distribution over the $T$ key positions.
+
+A direct softmax `exp(x) / sum(exp(x))` overflows or underflows for large $x$. The standard fix is the **log-sum-exp trick**: subtract the row-max first.
+
+```python
+def softmax(x, axis=-1):
+    x_max = np.max(x, axis=axis, keepdims=True)   # shape: same as x but reduced
+    e = np.exp(x - x_max)                          # never overflows
+    return e / np.sum(e, axis=axis, keepdims=True)
+
+A = softmax(S_masked, axis=-1)        # (T, T) attention weights
+print("A shape:", A.shape)
+print("Row sums:", A.sum(axis=1))     # should be all ones
+# Row sums: [1. 1. 1. 1. 1. 1. 1. 1.]
+```
+
+The check `A.sum(axis=1)` is the **softmax-rows-sum-to-1 invariant**: every row of attention weights is a probability distribution. If this is not all-ones, you have a bug. Run it for every new attention variant you implement; it has saved more debugging hours than any other test.
+
+Inspect the upper triangle of $A$:
+
+```python
+print("Upper triangle (should be ~0):")
+print(A * np.triu(np.ones((T, T)), k=1))
+# [[0.  0.  0.  0.  ...]
+#  [0.  0.  0.  0.  ...]
+#  ...]
+```
+
+All entries $A[i, j]$ for $j > i$ are essentially zero, as the mask intended.
+
+---
+
+## 7. Mixing values
+
+Finally, multiply the attention weights by the values $V$:
+
+```python
+Y = A @ V                  # (T, d_v)
+print("Y shape:", Y.shape) # (8, 4)
+```
+
+Output $Y$ has the same shape as the input embedding $X$. Each row $Y[i]$ is a weighted sum of value vectors:
+
+$$
+Y_i = \sum_{j = 1}^{T} A[i, j] \cdot V_j = \sum_{j \leq i} A[i, j] \cdot V_j.
+$$
+
+The second equality holds because $A[i, j] = 0$ for $j > i$ (causal mask). So position $i$'s output is a convex combination of past value vectors, weighted by softmax-attention scores.
+
+---
+
+## 8. Assembling the full forward pass
+
+Pulling it together, here's the complete single-head causal self-attention as a numpy function:
+
+```python
+def single_head_attention(X, W_Q, W_K, W_V):
+    T, d_k = X.shape[0], W_Q.shape[1]
+    Q = X @ W_Q              # (T, d_k)
+    K = X @ W_K              # (T, d_k)
+    V = X @ W_V              # (T, d_v)
+    S = Q @ K.T / np.sqrt(d_k)              # (T, T)
+    mask = np.triu(np.ones((T, T)), k=1) * -1e9
+    A = softmax(S + mask, axis=-1)          # (T, T)
+    return A @ V             # (T, d_v)
+
+Y = single_head_attention(X, W_Q, W_K, W_V)
+print(Y.shape)               # (8, 4)
+```
+
+Ten lines. Run it, check shapes, check row-sums, check upper triangle of $A$.
+
+---
+
+## 9. Sanity checks
+
+Run all four of these whenever you debug an attention implementation:
+
+```python
+# (1) Shape check
+assert Q.shape == (T, d_k)
+assert K.shape == (T, d_k)
+assert V.shape == (T, d_v)
+assert A.shape == (T, T)
+assert Y.shape == (T, d_v)
+
+# (2) Softmax rows sum to 1
+assert np.allclose(A.sum(axis=1), 1.0, atol=1e-6)
+
+# (3) Causal mask: upper triangle of A is zero
+assert np.allclose(np.triu(A, k=1), 0.0, atol=1e-6)
+
+# (4) Output Y is causal: Y[0] depends only on V[0] (since row 0 of A has
+#     only A[0,0]=1 nonzero). Verify by hand.
+assert np.allclose(Y[0], V[0])
+
+print("All checks passed.")
+```
+
+Test 4 is a nice trick: position 0 can only attend to position 0 (everything else is masked), so its attention row is $[1, 0, 0, \dots]$ and its output equals $V[0]$ exactly. Any deviation indicates a mask bug.
+
+---
+
+## 10. Verifying the gradient direction by finite differences
+
+A common "did I implement this right" test is to numerically check the gradient. Pick any scalar $\mathcal{L}(Y)$ (we'll use $\mathcal{L} = \tfrac{1}{2}\|Y\|^2$), perturb one entry of $W_Q$, and compare the analytical and numerical derivatives.
+
+```python
+def loss(X, W_Q, W_K, W_V):
+    Y = single_head_attention(X, W_Q, W_K, W_V)
+    return 0.5 * np.sum(Y**2)
+
+# Numerical gradient of loss w.r.t. W_Q[0, 0]
+eps = 1e-6
+W_Q_pos = W_Q.copy(); W_Q_pos[0, 0] += eps
+W_Q_neg = W_Q.copy(); W_Q_neg[0, 0] -= eps
+num_grad = (loss(X, W_Q_pos, W_K, W_V) - loss(X, W_Q_neg, W_K, W_V)) / (2 * eps)
+print(f"Numerical d L / d W_Q[0,0] = {num_grad:.6f}")
+```
+
+If you also implement the *backward* pass by hand (chain rule through softmax — exercise (e) below), you can compare. For our purposes here, the forward pass and the numerical sanity check are enough.
+
+<Aside type="note">
+**Numerical-stability reminder.** The softmax trick (subtract the row-max) is not optional. If you replace it with the naive `np.exp(S) / np.sum(np.exp(S), axis=1, keepdims=True)`, you will get `nan` for any model where the scores exceed $\sim 700$ in absolute value (because `np.exp(700) = inf`). Production kernels (FlashAttention, PyTorch's `F.scaled_dot_product_attention`) use the same trick. See [0.10](/session/ch0-math-foundations/0.10-numerical-stability) for the underlying log-sum-exp argument.
+</Aside>
+
+---
+
+## 11. Extending: multi-head, batched, with RoPE
+
+What we've written is "one batch, one head, no RoPE". The full multi-head batched version is a small extension:
+
+- **Multi-head.** Reshape $Q, K, V$ from $(B, T, d)$ to $(B, T, h, d_h)$ and transpose to $(B, h, T, d_h)$. Run the attention pipeline per head in parallel via batched matmul. Concatenate at the end and project with $W_O$.
+- **Batched.** Add a leading batch dimension $B$ everywhere; `Q @ K.T` becomes `np.einsum('bhid,bhjd->bhij', Q, K)`.
+- **RoPE.** Before computing scores, rotate each $Q$ and $K$ row by $R(m \theta)$ at position $m$ (6.7).
+- **Output projection.** Multiply the per-head outputs (concatenated to $(B, T, d)$) by $W_O \in \mathbb{R}^{d \times d}$ to mix heads.
+
+Exercise: write multi-head batched attention. It is ~30 lines of numpy, including RoPE. The next session ([6.16](/session/ch6-attention-transformer/6.16-nanogpt-walkthrough)) walks through nanoGPT's PyTorch implementation, which does the same thing with batched matmul.
+
+---
+
+## 12. What we keep going forward
+
+Attention is ten lines of numpy. The invariants are:
+
+1. $Q, K, V$ shapes: $(T, d_k), (T, d_k), (T, d_v)$.
+2. Score matrix: $(T, T)$.
+3. Softmax rows sum to 1, by row.
+4. Causal mask: upper triangle of $A$ is zero.
+5. Output shape: $(T, d_v)$.
+
+If any of these fails, you have a bug. Type the code, run the checks, keep the file as a reference whenever you need to read someone else's attention implementation in the future.
+
+[Next session](/session/ch6-attention-transformer/6.16-nanogpt-walkthrough) walks line-by-line through `nanoGPT/model.py` — Karpathy's reference implementation — which does exactly this in PyTorch with batched multi-head, the full pre-LN block, and a tiny LM head.
+
+<SelfTest>
+
+**(a)** Implement the single-head causal self-attention function from §8 in numpy. Verify all four sanity checks in §9 on a $T = 8, d_k = 4$ random example.
+
+**(b)** Modify your implementation to print, for each row of $A$, the indices $j$ where $A[i, j] > 0.1$. For $i = 0$ how many such indices are there? For $i = 7$ how many can there be? (Tip: the causal mask sets an upper bound.)
+
+**(c)** Replace the causal mask with a *sliding-window* mask of width $w = 3$ ([6.13 §2](/session/ch6-attention-transformer/6.13-long-context)). Print $A$ and confirm that only a band of width 3 around the diagonal has nonzero entries.
+
+**(d)** Replace the scaled $1 / \sqrt{d_k}$ with an unscaled version. Compute the maximum and minimum entry of $A$ over all rows. What happens for large $d_k$? Why does the $\sqrt{d_k}$ matter?
+
+**(e)** Derive the backward pass for the attention output $Y = A V$ with respect to $V$, given a gradient $\partial \mathcal{L} / \partial Y$. (Hint: this is just matrix-matrix gradient — write it in numerator layout from [0.2](/session/ch0-math-foundations/0.2-matrix-calculus).) Compare the analytical derivative to a finite-difference numerical check.
+
+</SelfTest>

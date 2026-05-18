@@ -1,0 +1,224 @@
+---
+title: "6.11 — Putting it together: the full decoder-only Transformer + AIAYN read"
+chapter: 6
+order: 11
+estimatedMinutes: 32
+goal: "Draw the full decoder-only Transformer end-to-end (embedding → N pre-LN blocks → final LN → LM head); count its parameters; then read Vaswani et al. (2017) section-by-section and identify what we have built and what differs."
+prerequisites: ["ch6-attention-transformer/6.10-pre-vs-post-norm", "ch6-attention-transformer/6.7-rope", "ch6-attention-transformer/6.5-causal-masking"]
+---
+
+## 1. Why this session exists
+
+Sessions 6.1 through 6.10 have built every piece of one Transformer block:
+
+- **Attention** (6.1 → 6.2 → 6.3 → 6.4 → 6.5 → 6.6 → 6.7): scaled dot-product, multi-head, causal-masked, position-aware via RoPE.
+- **FFN** (6.8): position-wise two-layer MLP with $d_\text{ff} = 4d$.
+- **Residuals** (6.9): identity skips that break the multiplicative chain rule.
+- **Pre-LN** (6.10): LayerNorm inside the residual branch, depth-independent gradient flow.
+
+This session puts them together. We draw the full **decoder-only Transformer** — the architecture of GPT-2, GPT-3, LLaMA, Mistral, Qwen, the model class behind ~every modern LLM — and count its parameters. Then we read *Attention Is All You Need* (Vaswani et al., 2017) end-to-end with the explicit goal of "underline three things that now feel obvious that did not before."
+
+After this session you will be able to write the architecture in $\sim 60$ lines of pseudocode and read the original paper without confusion.
+
+---
+
+## 2. The full decoder-only architecture
+
+Let $V$ be the vocabulary size, $T$ the maximum context length, $d$ the residual-stream width (a.k.a. `d_model`, `d_embed`), $L$ the number of blocks, $h$ the number of attention heads. A decoder-only Transformer maps an input token sequence $\mathbf{t} = (t_1, \dots, t_T) \in \{0, \dots, V-1\}^T$ to a sequence of next-token logits $\boldsymbol{\ell}_1, \dots, \boldsymbol{\ell}_T \in \mathbb{R}^V$.
+
+### 2.1 The forward pass, end-to-end
+
+$$
+\begin{aligned}
+\text{(embedding)}\quad & X^{(0)} = E[\mathbf{t}] \in \mathbb{R}^{T \times d}, \\[0.3em]
+\text{(block $\ell = 1, \dots, L$)}\quad & X^{(\ell-1/2)} = X^{(\ell-1)} + \text{MHA}\!\Big(\text{LN}_1^{(\ell)}(X^{(\ell-1)})\Big), \\
+& X^{(\ell)} \;= X^{(\ell-1/2)} + \text{FFN}\!\Big(\text{LN}_2^{(\ell)}(X^{(\ell-1/2)})\Big), \\[0.3em]
+\text{(final norm)}\quad & Z = \text{LN}_\text{final}\!\big(X^{(L)}\big), \\[0.3em]
+\text{(LM head)}\quad & \boldsymbol{\ell}_t = Z_t\, E^\top \quad \text{(weight tied to embedding)}.
+\end{aligned}
+$$
+
+Each line corresponds to one block of computation we have already covered:
+
+- **Embedding $E$.** A $(V, d)$ matrix; row $i$ is the vector for token $i$. (5.2)
+- **RoPE.** Applied *inside* MHA, to $Q$ and $K$ only, before the dot product. (6.7) No additive PE row anywhere; RoPE is the only positional information the model sees.
+- **MHA.** Multi-head causal self-attention. (6.4 + 6.5) Output projection $W_O$ included.
+- **FFN.** Position-wise $W_2 \sigma(W_1 \cdot)$ with $d_\text{ff} = 4d$. (6.8)
+- **LN.** Pre-norm: norm inside each residual branch, plus one $\text{LN}_\text{final}$ at the top. (3.8 + 6.10)
+- **LM head.** Project the final hidden state $Z_t$ back to vocabulary logits. Weight-tied: the LM-head matrix is the *transpose* of the embedding $E$ — same parameters, used at both ends. (5.2)
+
+That is the entire model. Pseudocode:
+
+```python
+def transformer_forward(t):                   # t : (T,) token ids
+    X = E[t]                                  # (T, d)
+    for ell in range(L):
+        # attention sub-layer
+        X = X + MHA(LN1[ell](X))              # (T, d)
+        # FFN sub-layer
+        X = X + FFN(LN2[ell](X))              # (T, d)
+    Z = LN_final(X)                           # (T, d)
+    logits = Z @ E.T                          # (T, V)
+    return logits
+```
+
+Twelve lines. The hidden complexity sits inside `MHA` and `FFN`, which we have already opened up in 6.4 and 6.8.
+
+### 2.2 The training objective
+
+The model is trained by **causal next-token cross-entropy**, exactly the language-modelling objective of [5.3](/session/ch5-sequence-modeling/5.3-language-modeling-objective). For a target sequence $\mathbf{y} = (y_1, \dots, y_T)$ with $y_t = t_{t+1}$ (next-token target),
+
+$$
+\mathcal{L}(\theta) = -\frac{1}{T} \sum_{t = 1}^{T} \log p_\theta(y_t \mid \mathbf{t}_{1:t}) = -\frac{1}{T} \sum_{t = 1}^{T} \log \text{softmax}(\boldsymbol{\ell}_t)_{y_t}.
+$$
+
+The *causal mask* of 6.5 is exactly what makes $\boldsymbol{\ell}_t$ depend only on $\mathbf{t}_{1:t}$. There is no separate "encoder" or "decoder" in a decoder-only model; one stack does everything.
+
+---
+
+## 3. Parameter count
+
+We have the per-block formulas from [6.4](/session/ch6-attention-transformer/6.4-multi-head-attention) and [6.8](/session/ch6-attention-transformer/6.8-ffn):
+
+$$
+\#\theta_\text{attn} \approx 4 d^2, \qquad \#\theta_\text{ffn} \approx 8 d^2.
+$$
+
+Plus two LayerNorms per block at $2d$ each ($\gamma, \beta$ vectors, each in $\mathbb{R}^d$), and a final $\text{LN}_\text{final}$. Per block:
+
+$$
+\#\theta_\text{block} \approx 12 d^2 + 4d.
+$$
+
+For the full model with $L$ blocks plus the embedding/output:
+
+$$
+\boxed{\ \#\theta_\text{model} \approx \underbrace{V d}_{\text{embedding}} \;+\; \underbrace{L \cdot 12 d^2}_{\text{blocks}} \;+\; \underbrace{2d}_{\text{final LN}}. \ }
+$$
+
+The embedding and LM-head are *tied*, so they count once. Biases and norm scales contribute $O(L d)$ — negligible at scale.
+
+### 3.1 Sanity-check known model sizes
+
+| Model | $d$ | $L$ | $h$ | $V$ | Predicted $\#\theta$ | Reported |
+|---|---:|---:|---:|---:|---:|---:|
+| GPT-2 small | 768 | 12 | 12 | 50,257 | $\approx 124$M | 124M |
+| GPT-2 medium | 1024 | 24 | 16 | 50,257 | $\approx 355$M | 355M |
+| GPT-3 (175B) | 12,288 | 96 | 96 | 50,257 | $\approx 174$B | 175B |
+| LLaMA-7B | 4096 | 32 | 32 | 32,000 | $\approx 6.7$B | 6.7B |
+| LLaMA-70B | 8192 | 80 | 64 | 32,000 | $\approx 70$B | 70B |
+
+The $12 L d^2$ term dominates at scale: GPT-3 has $\approx 12 \cdot 96 \cdot 12{,}288^2 \approx 1.74 \times 10^{11}$ parameters from blocks alone, against $\approx 6 \times 10^8$ from the embedding. Embeddings matter for small models, blocks dominate for large ones.
+
+### 3.2 What is *not* counted here
+
+- **Biases.** Modern LLMs (LLaMA, Mistral, Qwen) drop biases entirely; the formula $12 d^2$ is exact in that case modulo the LN scales.
+- **SwiGLU.** Replaces the FFN's $W_1$ with two parallel matrices ([6.8 Aside, 8.4](/session/ch6-attention-transformer/6.8-ffn)), giving $\approx 3 \cdot d \cdot d_\text{ff}$ instead of $2 \cdot d \cdot d_\text{ff}$. To hold parameter count constant, LLaMA uses $d_\text{ff} \approx \tfrac{2}{3} \cdot 4d$.
+- **GQA/MQA.** Reduces the K, V projection sizes; saves a fraction of the $4 d^2$ attention term. (8.3, with the KV-cache motivation in 6.14.)
+- **RoPE base frequencies.** Free; no parameters.
+
+These are second-order; the $12 L d^2$ block term is the right first-order story for any decoder-only model.
+
+---
+
+## 4. The "residual stream" recap
+
+[6.9 §5](/session/ch6-attention-transformer/6.9-residual-connections) introduced the residual stream — the single $d$-vector that flows from input embedding to the final LN, modified by every sub-layer's correction. With pre-LN (6.10) the picture is exact:
+
+$$
+X^{(L)} = E[\mathbf{t}] \;+\; \sum_{\ell = 1}^{L} \Big[\, \text{MHA}^{(\ell)} + \text{FFN}^{(\ell)} \,\Big]\!\big(\text{LN}\text{-inputs}\big).
+$$
+
+Each block adds two corrections (one from MHA, one from FFN). Everything the model "knows" lives in this stream; everything that comes out of a sub-layer is *added* to it, never *replacing* it. This is the entire interpretability story of Chapter 11 ([Anthropic Transformer Circuits](https://transformer-circuits.pub/), Olsson et al. 2022).
+
+---
+
+## 5. Read: *Attention Is All You Need* (Vaswani et al., 2017)
+
+Time to sit with the paper. Open [arXiv:1706.03762](https://arxiv.org/abs/1706.03762) and read it section by section. You should now find every section either *obvious* (because we covered it more carefully than the paper does) or *historically interesting* (because the field has moved on).
+
+**Reading guide (≈30 min):**
+
+- **Abstract + §1 (Introduction).** Position the paper: replace recurrence and convolutions with attention only. Note the original motivation was *machine translation*, not language modelling.
+- **§2 (Background).** Cites Extended Neural GPU, ByteNet, ConvS2S — all attempts to parallelise sequence modelling without recurrence. None of them are used today; the Transformer obsoleted them.
+- **§3.1 (Encoder and Decoder Stacks).** Two stacks of $N = 6$ blocks. Decoder has an extra **cross-attention** sub-layer (6.3) on top of the masked self-attention. The decoder-only architecture (GPT family) discards the encoder; modern LLMs are §3.1's decoder side, alone.
+- **§3.2.1 (Scaled Dot-Product Attention).** The single most-cited formula of the paper. We derived it in 6.2.
+- **§3.2.2 (Multi-Head Attention).** Why $h = 8$ parallel heads of dimension $d/h = 64$. We derived it in 6.4; the modern frontier uses $h \in \{32, 64, 96, 128\}$ at $d \in \{4096, 8192, 12288\}$.
+- **§3.3 (Position-wise Feed-Forward).** Three-line FFN definition. We spent a whole session (6.8) on it.
+- **§3.4 (Embeddings and Softmax).** Notes weight tying between embedding and output projection — `tied_weights` in your pseudocode. Mentions the $\sqrt{d_\text{model}}$ scaling on embeddings (idiosyncratic, mostly dropped in modern LLMs).
+- **§3.5 (Positional Encoding).** The original sinusoidal PE. Now in our [Appendix 6.A](/session/ch6-attention-transformer/6.A-sinusoidal-pe); main-path replaced by RoPE.
+- **§4 (Why Self-Attention).** Three columns: complexity per layer ($O(n^2 d)$ for attention vs $O(n d^2)$ for recurrence), parallelisability, maximum path length between any two positions. This is the strategic argument; we revisit complexity in detail in 6.12.
+- **§5 (Training).** WMT2014 English-German, 8 P100 GPUs, 4-day training. Adam with the inverse-square-root warmup schedule (3.7 § warmup) at 4000 steps. Label smoothing $\epsilon = 0.1$.
+- **§6 (Results).** SOTA BLEU on EN-DE and EN-FR translation. A small ablation grid in Table 3.
+- **§7 (Conclusion).** Foreshadows future work in non-translation tasks.
+
+### 5.1 Three things that should now feel obvious
+
+After reading, write down three statements from the paper that *now* feel intuitive but would have been hard to motivate a week ago. The exact three are personal; here are common ones:
+
+1. **"Why $\sqrt{d_k}$ in the softmax."** §3.2.1 motivates it with one line about variance. We derived it carefully in [6.2 §4](/session/ch6-attention-transformer/6.2-scaled-dot-product-attention).
+2. **"Why multiple heads in parallel."** §3.2.2 says "allows the model to jointly attend to information from different representation subspaces." We made the case in [6.4 §3](/session/ch6-attention-transformer/6.4-multi-head-attention): one $(d_\text{model}, d_\text{model})$ projection vs $h$ smaller ones gives the same FLOP count but $h$ specialised heads.
+3. **"Why residual + LN around every sub-layer."** §3.1 says "We employ a residual connection around each of the two sub-layers, followed by layer normalization." We spent a session on each ([6.9](/session/ch6-attention-transformer/6.9-residual-connections), [6.10](/session/ch6-attention-transformer/6.10-pre-vs-post-norm)).
+
+### 5.2 What the paper does *not* contain
+
+Worth knowing what is *missing* in AIAYN that we have, post-hoc, made canonical:
+
+- **Pre-norm.** AIAYN is post-norm. Pre-norm (6.10) was added by GPT-2 and is the modern default.
+- **RoPE.** AIAYN uses sinusoidal additive PE; RoPE (6.7) was introduced by Su et al. (2021) and is the modern default.
+- **SwiGLU.** AIAYN uses ReLU FFN; SwiGLU (Cap 8.4) is the modern default.
+- **RMSNorm.** AIAYN uses LayerNorm; RMSNorm (3.8) is the modern default in LLaMA/Mistral.
+- **GQA / KV cache.** AIAYN has full MHA and no inference-side cache; both (6.14, 8.3) came later.
+
+In other words: AIAYN is the *load-bearing skeleton*; everything since has been "what muscles to hang on it." The 2017 paper got the skeleton right.
+
+---
+
+## 6. The decoder-only family tree
+
+For a sense of how this one architecture has scaled:
+
+| Year | Model | Architectural diffs from AIAYN |
+|---|---|---|
+| 2018 | GPT-1 | Decoder-only; learned PE; standard MHA, ReLU FFN, post-LN. |
+| 2019 | GPT-2 | + pre-LN; otherwise same. |
+| 2020 | GPT-3 | Same as GPT-2, scaled to 175B. |
+| 2022 | PaLM | + SwiGLU; + RoPE; + parallel attention/FFN. |
+| 2023 | LLaMA-1, 2 | + RoPE; + SwiGLU; + RMSNorm; pre-norm. |
+| 2023 | Mistral 7B | LLaMA-2-style + sliding-window attention (6.13). |
+| 2023 | LLaMA-2-70B | + grouped-query attention (8.3). |
+| 2024 | LLaMA-3 | + tied embeddings only at smaller sizes; very deep. |
+| 2024 | DeepSeek-V2 | + multi-head latent attention (Cap 8.5). |
+| 2024–26 | Frontier LLMs | All decoder-only, all pre-norm, almost all RoPE, almost all GQA/MLA. |
+
+All of these are *the same skeleton* — embedding → N pre-LN blocks → final LN → LM head — with substitutions in (FFN non-linearity, PE scheme, KV-head sharing, norm type). The skeleton has been frozen since 2019.
+
+<Aside type="history">
+**The "GPT-style" decoder-only Transformer was not the first.** AIAYN itself has an encoder and a decoder. GPT-1 (Radford et al., 2018) dropped the encoder; BERT (Devlin et al., 2018) dropped the decoder and used a masked-language-modelling objective with bidirectional attention. The decoder-only choice prevailed for *generative* models because it lets one model do both representation learning and generation in a single causal stack — there is no asymmetry between training and inference. The encoder-only branch (BERT) still dominates *embedding/retrieval* models (E5, BGE) but has been displaced from generative tasks. Encoder-decoder models like T5 are now mostly historical, with niche use in translation and some structured tasks (see Cap 8.A).
+</Aside>
+
+---
+
+## 7. What we keep going forward
+
+$$
+\text{decoder-only LLM:} \quad E[\mathbf{t}] \;\longrightarrow\; \underbrace{L \times \big(\text{pre-LN block}\big)}_{\text{the residual stream}} \;\longrightarrow\; \text{LN}_\text{final} \;\longrightarrow\; \cdot E^\top
+$$
+
+Sixty lines of pseudocode (with `MHA` and `FFN` opened up). $\approx 12 L d^2$ parameters in the blocks. Trained by causal next-token cross-entropy. Augmented by RoPE inside attention. This is the architecture of every frontier LLM in 2026.
+
+[Next session](/session/ch6-attention-transformer/6.12-compute-and-memory) opens up the compute and memory cost — where attention's $O(T^2 d)$ dominates, where the FFN's $O(T d^2)$ dominates, and what this implies for context-length scaling.
+
+<SelfTest>
+
+**(a)** For GPT-2 small ($d = 768, L = 12, h = 12, V = 50{,}257$), compute the total parameter count from the formula $V d + 12 L d^2 + 2d$. Check against the headline number 124M.
+
+**(b)** Write the forward pass of a decoder-only Transformer in 12 lines of pseudocode (as in §2.1). Mark, with comments, where: (i) RoPE applies, (ii) the causal mask applies, (iii) the residual additions happen.
+
+**(c)** Read AIAYN §3 (about 4 pages). Underline three statements that you now find obvious that you would have struggled to motivate a week ago.
+
+**(d)** AIAYN uses post-LN; GPT-2 onward use pre-LN. Why did this single change make scaling to 100+ layers feasible? (Recap [6.10](/session/ch6-attention-transformer/6.10-pre-vs-post-norm) in two sentences.)
+
+**(e)** A decoder-only model and an encoder-only BERT-style model differ in two ways: (i) the attention mask, (ii) the training objective. State each difference in one sentence and explain why decoder-only is preferred for generative LLMs.
+
+</SelfTest>

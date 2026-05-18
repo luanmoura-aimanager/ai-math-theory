@@ -1,0 +1,179 @@
+---
+title: "6.A — Sinusoidal positional encoding (original AIAYN)"
+chapter: 6
+order: 17
+estimatedMinutes: 18
+goal: "Define the sinusoidal positional encoding PE(pos, 2i) = sin(pos / 10000^{2i/d}); show that PE(pos + k) is a linear function of PE(pos); understand why this property motivates the design; place sinusoidal PE as a historical (now-superseded) ancestor of RoPE."
+prerequisites: ["ch6-attention-transformer/6.6-why-positional-info"]
+---
+
+## 1. Why this appendix exists
+
+The original *Attention Is All You Need* paper (Vaswani et al., 2017) handled positions with an **additive sinusoidal encoding**: compute a deterministic vector $\text{PE}(\text{pos}) \in \mathbb{R}^d$ from sinusoids of geometrically-progressing frequencies, and *add* it to the token embedding before the first block. The Transformer was thus position-aware at the input layer, and every subsequent layer inherited that signal through the residual stream ([6.9](/session/ch6-attention-transformer/6.9-residual-connections)).
+
+This was the canonical positional encoding from 2017 to ~2020. Then learned PE (GPT-2 — Appendix 6.B) and rotary PE ([6.7](/session/ch6-attention-transformer/6.7-rope)) displaced it. Sinusoidal PE survives in the literature as the *historical reference design* and in a few niche models (some encoder-decoder text-to-speech systems, some scientific Transformers). The math is short and instructive — particularly the property "$\text{PE}(\text{pos} + k)$ is a linear function of $\text{PE}(\text{pos})$" that motivated the design — and worth knowing if you read pre-2020 papers.
+
+This appendix gives the definition, proves the linearity property, and identifies what made the design *almost* the right answer.
+
+---
+
+## 2. The formula
+
+Let $d$ be the embedding dimension (must be even). For position $\text{pos} \in \{0, 1, 2, \dots\}$ and dimension index $i \in \{0, 1, \dots, d/2 - 1\}$, define:
+
+$$
+\boxed{\ \begin{aligned}
+\text{PE}(\text{pos}, 2i) &= \sin\!\Big(\frac{\text{pos}}{10000^{2i/d}}\Big), \\
+\text{PE}(\text{pos}, 2i+1) &= \cos\!\Big(\frac{\text{pos}}{10000^{2i/d}}\Big).
+\end{aligned} \ }
+$$
+
+So $\text{PE}(\text{pos}) \in \mathbb{R}^d$ is a vector built from $d/2$ pairs $(\sin(\omega_i \text{pos}), \cos(\omega_i \text{pos}))$ at angular frequencies $\omega_i = 10000^{-2i/d}$.
+
+Two key properties:
+
+- **The frequencies span $d/2$ orders of magnitude.** For $i = 0$: $\omega_0 = 1$ (period $2\pi$, very fast — one full cycle every $\sim 6$ tokens). For $i = d/2 - 1$: $\omega \approx 10000^{-1+2/d}$ (period $\sim 2 \pi \cdot 10000$ tokens — extremely slow). The intuition: low-$i$ pairs encode *local* position, high-$i$ pairs encode *global* position.
+- **The base $10000$ is empirical.** It produces a smooth distribution of wavelengths from $\sim 1$ to $\sim 10000$ tokens. AIAYN doesn't motivate it further; it's a hyperparameter.
+
+This is *identical* in structure to RoPE's frequency schedule of [6.7 §4](/session/ch6-attention-transformer/6.7-rope) — same base $10000$, same geometric progression. The difference is in *how* the encoding is used: sinusoidal PE is *added* to the embedding; RoPE *rotates* the query and key inside attention.
+
+### 2.1 How it is used
+
+For an input sequence with token embeddings $\tilde X = [\tilde x_1; \tilde x_2; \dots; \tilde x_T] \in \mathbb{R}^{T \times d}$, the position-augmented input is
+
+$$
+X = \tilde X + [\text{PE}(1); \text{PE}(2); \dots; \text{PE}(T)] \in \mathbb{R}^{T \times d}.
+$$
+
+$X$ then enters the first block. Every subsequent layer sees position information *only* through this initial additive signal, transmitted along the residual stream.
+
+The PE is *not* a parameter: it is deterministically computed from $\text{pos}$ and never updated by gradient descent. (Contrast: learned PE — Appendix 6.B — *is* a parameter.)
+
+---
+
+## 3. The "linear in PE(pos)" property
+
+AIAYN motivates the sinusoidal choice with one statement (§3.5):
+
+> "We chose this function because we hypothesized it would allow the model to easily learn to attend by relative positions, since for any fixed offset $k$, $PE_{\text{pos}+k}$ can be represented as a linear function of $PE_\text{pos}$."
+
+Let's prove it. Fix $k$. We want to express $\text{PE}(\text{pos} + k)$ as a linear map of $\text{PE}(\text{pos})$.
+
+### 3.1 The 2D pair
+
+Consider the $i$-th pair: $\big(\sin(\omega_i \text{pos}), \cos(\omega_i \text{pos})\big)$. Using the angle-addition formulas:
+
+$$
+\begin{aligned}
+\sin(\omega_i (\text{pos} + k)) &= \sin(\omega_i \text{pos}) \cos(\omega_i k) + \cos(\omega_i \text{pos}) \sin(\omega_i k), \\
+\cos(\omega_i (\text{pos} + k)) &= \cos(\omega_i \text{pos}) \cos(\omega_i k) - \sin(\omega_i \text{pos}) \sin(\omega_i k).
+\end{aligned}
+$$
+
+In matrix form, with $\theta = \omega_i k$:
+
+$$
+\begin{pmatrix} \sin(\omega_i (\text{pos} + k)) \\ \cos(\omega_i (\text{pos} + k)) \end{pmatrix}
+=
+\begin{pmatrix} \cos\theta & \sin\theta \\ -\sin\theta & \cos\theta \end{pmatrix}
+\begin{pmatrix} \sin(\omega_i \text{pos}) \\ \cos(\omega_i \text{pos}) \end{pmatrix}.
+$$
+
+The 2D pair at position $\text{pos} + k$ is obtained from the pair at position $\text{pos}$ by a **2D rotation** through angle $\omega_i k$ — depending on $k$, not on $\text{pos}$.
+
+### 3.2 The full $d$-dimensional map
+
+Stacking the rotation for each of the $d/2$ pairs, define the block-diagonal matrix
+
+$$
+M_k = \text{block-diag}\!\big(R(\omega_0 k), R(\omega_1 k), \dots, R(\omega_{d/2-1} k)\big) \in \mathbb{R}^{d \times d}.
+$$
+
+(With the right reordering of the $(\sin, \cos)$ entries to match the dim-2$i$/dim-2$i$+1 layout above.) Then:
+
+$$
+\boxed{\ \text{PE}(\text{pos} + k) = M_k \cdot \text{PE}(\text{pos}). \ }
+$$
+
+For *any fixed* offset $k$, the position vector at $\text{pos} + k$ is a linear (specifically, *orthogonal*) function of the position vector at $\text{pos}$, with the linear map $M_k$ independent of $\text{pos}$.
+
+### 3.3 What this is good for
+
+The idea behind AIAYN's choice was: if the model wants to compute attention based on *relative* offsets $k$, it should be able to do so by learning a single linear projection $M_k$ — the *same* matrix at every absolute position. Without the linearity property, the model would have to learn a *position-dependent* relationship to encode offsets, which is harder.
+
+But — and this is the part that motivated RoPE — this linearity property of the **encoding** does not translate cleanly into a linearity property of the **attention dot product**. The PE is *added* to the embedding before $W_Q$ is applied, so
+
+$$
+q_m = (\tilde x_m + \text{PE}(m)) W_Q,
+$$
+
+and $q_m^\top k_n$ involves cross-terms $\tilde x_m W_Q W_K^\top \text{PE}(n)^\top$, $\text{PE}(m) W_Q W_K^\top \tilde x_n^\top$, etc., which mix content and position in ways that *do not* reduce cleanly to a function of $n - m$.
+
+RoPE ([6.7](/session/ch6-attention-transformer/6.7-rope)) fixes this by rotating $q_m$ and $k_n$ *directly* by position-dependent rotations *after* the $W_Q, W_K$ projections, ensuring $q_m^\top k_n$ depends only on $n - m$ exactly. The sinusoidal-PE-as-input is the "almost right" attempt that came first.
+
+---
+
+## 4. Why sinusoidal PE worked in practice (and where it failed)
+
+### 4.1 What worked
+
+The original AIAYN transformer used sinusoidal PE successfully for translation up to ~5000 token sequences. The design has three virtues:
+
+1. **Determinism.** No parameters; the encoding is the same at training and inference, at every length.
+2. **Length extrapolation, in principle.** Sinusoidal functions are defined at every real-valued position. If you train on length 1000 and infer at length 5000, $\text{PE}(\text{pos})$ is still computable.
+3. **Wide spectrum.** Frequencies span 4 orders of magnitude. The model has access to short-range *and* long-range positional information.
+
+### 4.2 What failed
+
+Empirically, sinusoidal PE **does not extrapolate as well as the math suggests**. Press et al. (2021, ALiBi paper) showed that sinusoidal-PE Transformers trained at length $T$ degrade sharply at lengths $> 2T$. The reason: although $\text{PE}(\text{pos})$ is well-defined at any $\text{pos}$, the *learned attention patterns* of the model are shaped during training by the position distribution it sees. Once $\text{pos} > T_\text{train}$, the model is in territory it has never trained on — even if the PE itself is well-defined.
+
+This empirical failure is what motivated:
+
+- **Learned PE** (Appendix 6.B), which dropped the math-driven design but matched empirical performance.
+- **Relative PE schemes** (Shaw et al., 2018; T5), which encode $n - m$ in the score matrix directly.
+- **RoPE** ([6.7](/session/ch6-attention-transformer/6.7-rope)), which encodes $n - m$ at the dot-product level *and* preserves the "all positions defined" property.
+- **ALiBi** ([6.13 §3](/session/ch6-attention-transformer/6.13-long-context)), which dropped the embedding altogether and used a fixed bias.
+
+---
+
+## 5. Sinusoidal PE versus RoPE: side by side
+
+The mathematical similarity between sinusoidal PE and RoPE deserves explicit comparison, since they share the same frequencies $\omega_i = 10000^{-2i/d}$:
+
+| | Sinusoidal PE (AIAYN) | RoPE (Su et al., 2021) |
+|---|---|---|
+| Where applied | Input embedding: $\tilde X \to \tilde X + \text{PE}$ | Inside attention, on $Q$ and $K$ after projection |
+| Operation | Addition | Rotation (orthogonal matrix multiplication) |
+| Effect on $q^\top k$ | Mixes position and content; not cleanly relative | $q_m^\top k_n$ depends only on $n - m$, exactly |
+| Inference length | Defined at all positions but extrapolation is empirically poor | Defined at all positions; can be scaled (NTK / YaRN, 6.13 §4) |
+| Used by | Original Transformer (2017); some encoder-decoder models | LLaMA, Mistral, Qwen, Gemini, most 2024-onwards LLMs |
+
+RoPE keeps the AIAYN spirit (sinusoidal frequencies; relative offsets are linear in position) and discards the part that didn't work (additive at input). The historical line is direct.
+
+---
+
+## 6. Summary
+
+Sinusoidal PE is the original — and almost the right — design:
+
+$$
+\text{PE}(\text{pos}, 2i) = \sin(\omega_i \text{pos}), \quad \text{PE}(\text{pos}, 2i+1) = \cos(\omega_i \text{pos}), \quad \omega_i = 10000^{-2i/d}.
+$$
+
+$\text{PE}(\text{pos} + k) = M_k \cdot \text{PE}(\text{pos})$ for a fixed orthogonal $M_k$ — the linearity property that motivated the design. In practice, the additive form mixed position and content in attention, and the empirical extrapolation behaviour was poor. RoPE inherits the frequencies and the relative-position promise but applies them as rotations inside attention, getting both properties exactly.
+
+Read AIAYN §3.5 with this appendix open; the two pages explain the design intent and you should now find the "linear function of PE(pos)" statement provable on inspection.
+
+<SelfTest>
+
+**(a)** For $d = 4$, write out the four-component vector $\text{PE}(\text{pos})$ for $\text{pos} = 0, 1, 2$ explicitly. Confirm that $\text{PE}(0)$ is $(0, 1, 0, 1)$.
+
+**(b)** Verify the linearity property §3.2 for $\text{PE}(\text{pos} + 1) = M_1 \text{PE}(\text{pos})$ at $d = 4$. Construct $M_1$ explicitly and apply it to $\text{PE}(0) = (0, 1, 0, 1)$. Compare to $\text{PE}(1)$.
+
+**(c)** Argue that AIAYN's claim "$\text{PE}(\text{pos} + k)$ is a linear function of $\text{PE}(\text{pos})$" does *not* immediately imply that $q_m^\top k_n$ depends only on $n - m$. (Hint: think about what $W_Q$ and $W_K$ do to the additive content + position mixture.)
+
+**(d)** Why is sinusoidal PE *deterministic* rather than learned? What is the parameter count of sinusoidal PE versus learned PE (Appendix 6.B)?
+
+**(e)** Read AIAYN §3.5 (one page). State, in your own words, why the authors chose sinusoidal over learned. Was their reasoning vindicated by later research?
+
+</SelfTest>

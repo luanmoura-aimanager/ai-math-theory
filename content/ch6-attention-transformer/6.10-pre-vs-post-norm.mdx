@@ -1,0 +1,219 @@
+---
+title: "6.10 — Pre-norm vs post-norm Transformer block"
+chapter: 6
+order: 10
+estimatedMinutes: 18
+goal: "Compare post-LN (original AIAYN) and pre-LN (GPT-2 onward) block diagrams; understand why pre-norm trains stably without warmup, what it changes in the residual stream, and why every modern LLM is pre-norm."
+prerequisites: ["ch6-attention-transformer/6.9-residual-connections", "ch3-optimization-regularization/3.8-layernorm-rmsnorm"]
+---
+
+## 1. Why this session exists
+
+[6.9](/session/ch6-attention-transformer/6.9-residual-connections) gave us residual connections; [3.8](/session/ch3-optimization-regularization/3.8-layernorm-rmsnorm) gave us LayerNorm and RMSNorm. A Transformer block uses both, but a small architectural choice — *where* the norm sits relative to the residual — has outsized consequences. The original AIAYN block puts the norm **after** the residual addition (post-LN); GPT-2 and every LLM since put the norm **before** the sub-layer (pre-LN).
+
+The two diagrams differ by the position of one box, but they train very differently:
+
+- **Post-LN.** Stable up to ~12 layers; needs a learning-rate warmup; gradient norms blow up near the input on deep stacks; sensitive to initialisation.
+- **Pre-LN.** Trains stably at 96+ layers; no warmup required; gradient norms are well-behaved across depth; tolerates a wider learning rate range.
+
+This session shows both block diagrams, derives why pre-norm preserves the identity path of [6.9](/session/ch6-attention-transformer/6.9-residual-connections) while post-norm breaks it, and surveys the evidence that every modern LLM (GPT-2/3/4, LLaMA, Mistral, Qwen, Gemini, Claude) uses pre-norm. We will be writing pre-norm blocks for the rest of the course.
+
+---
+
+## 2. The two block variants
+
+Let $\text{SubLayer}(x)$ stand for either the multi-head attention sub-layer (6.4) or the FFN sub-layer (6.8). Both map $\mathbb{R}^d \to \mathbb{R}^d$, and both are wrapped in a residual.
+
+### 2.1 Post-LN (original AIAYN)
+
+$$
+\boxed{\ y = \text{LN}\!\Big(x + \text{SubLayer}(x)\Big). \ }
+$$
+
+The norm acts *after* the residual addition. In a Transformer block this looks like
+
+$$
+\begin{aligned}
+x' &= \text{LN}\!\big(x + \text{MHA}(x)\big), \\
+y &= \text{LN}\!\big(x' + \text{FFN}(x')\big).
+\end{aligned}
+$$
+
+This is the diagram in *Attention Is All You Need* §3.1 ([Vaswani et al., 2017](https://arxiv.org/abs/1706.03762)) — the one usually drawn with "Add & Norm" boxes after each sub-layer.
+
+### 2.2 Pre-LN (GPT-2 and modern LLMs)
+
+$$
+\boxed{\ y = x + \text{SubLayer}\!\big(\text{LN}(x)\big). \ }
+$$
+
+The norm acts *before* the sub-layer, inside the residual branch. Per block:
+
+$$
+\begin{aligned}
+x' &= x + \text{MHA}\!\big(\text{LN}_1(x)\big), \\
+y &= x' + \text{FFN}\!\big(\text{LN}_2(x')\big).
+\end{aligned}
+$$
+
+Same residuals, same sub-layers; the norms have moved one box. A final $\text{LN}_\text{final}$ is usually applied to $x_L$ before the output projection — so that the last "raw" residual stream is rescaled exactly once at the end.
+
+<Figure src="/diagrams/6.10-pre-vs-post-norm.svg" caption="Post-LN (left) versus pre-LN (right) Transformer block. In post-LN the norm sits on the main path, after the residual addition; in pre-LN the norm sits inside the residual branch, before the sub-layer." alt="Side-by-side diagrams of post-norm and pre-norm Transformer blocks. Both show an input x flowing into a sub-layer with a residual addition. Post-norm has 'LayerNorm' on the trunk after the addition; pre-norm has 'LayerNorm' on the residual branch before the sub-layer, with the trunk untouched. A final LayerNorm appears at the top of the pre-norm stack." />
+
+---
+
+## 3. The residual stream argument
+
+The difference between post-LN and pre-LN is best read through the [residual stream](/session/ch6-attention-transformer/6.9-residual-connections) of 6.9 §5.
+
+### 3.1 Pre-norm preserves the identity path
+
+Stack $L$ pre-LN blocks. Write $f_\ell(\cdot) = \text{SubLayer}_\ell(\text{LN}_\ell(\cdot))$ for the $\ell$-th residual branch. Then
+
+$$
+x_L = x_0 + \sum_{\ell = 1}^{L} f_\ell(x_{\ell-1}).
+$$
+
+This is *literally* the residual-stream formula. The Jacobian $\partial x_L / \partial x_0$ contains the identity term from [6.9 §3.2](/session/ch6-attention-transformer/6.9-residual-connections):
+
+$$
+\frac{\partial x_L}{\partial x_0} = \prod_{\ell = L}^{1} \big(I + J_\ell^{(f)}\big) = I \,+\, \text{(corrections)}.
+$$
+
+The gradient flows un-attenuated along the skip path. The norms sit *inside* each residual branch — they affect $f_\ell$ but they do not touch the identity term. **Pre-norm is the same gradient story as plain residual.**
+
+### 3.2 Post-norm breaks the identity path
+
+Stack $L$ post-LN blocks. Define $g_\ell(x) = x + \text{SubLayer}_\ell(x)$, so $x_\ell = \text{LN}(g_\ell(x_{\ell-1}))$. The Jacobian is
+
+$$
+\frac{\partial x_\ell}{\partial x_{\ell-1}} = \underbrace{\frac{\partial \text{LN}}{\partial g_\ell}}_{\text{the norm's Jacobian}} \cdot \underbrace{\big(I + J_\ell^{(f)}\big)}_{\text{residual term}}.
+$$
+
+The norm's Jacobian is *not* identity. LayerNorm subtracts the mean and divides by the standard deviation, with a learnable scale $\gamma$ that at initialisation is $1$. As shown by Xiong et al. (2020) — see §5 — for $d \gg 1$,
+
+$$
+\frac{\partial \text{LN}}{\partial g} \approx \frac{1}{\|g\|/\sqrt{d}}\, \Big(I - \tfrac{1}{d}\mathbf{1}\mathbf{1}^\top - \tfrac{1}{d}\hat{g}\hat{g}^\top\Big),
+$$
+
+which has spectral norm typically less than $1$, **and which kills two specific directions of the input**: the all-ones direction (mean subtraction) and the input's own normalised direction. Stacking $L$ such factors brings back the multiplicative-collapse problem of [2.9](/session/ch2-mlps-backprop/2.9-vanishing-exploding-gradients) — the precise thing residual connections were meant to avoid.
+
+In short: post-LN puts a non-identity Jacobian on the *main path* of every block, so the multiplicative chain rule resumes its old behaviour.
+
+---
+
+## 4. Empirical consequence: warmup and depth
+
+### 4.1 The warmup problem of AIAYN
+
+The original AIAYN paper specifies a learning-rate warmup of $4000$ steps for $6$-layer encoder/decoder pairs. The reason is exactly the §3.2 gradient instability: at $t = 0$, with random initialisation, the gradient magnitudes near the input of a deep post-LN stack are very different from those near the output, and a small initial learning rate is needed to let the parameter scales equilibrate. Without warmup, post-LN models diverge on the first few hundred steps.
+
+This was tolerable at 6 layers. At 12 layers (BERT-base) it was already annoying. At 96 layers (GPT-3) it would have been a constant tuning burden — and that is *if* it converged at all.
+
+### 4.2 Pre-LN removes the warmup
+
+Empirically — and provably, via the analysis below — pre-LN models train stably from step 1 with any reasonable learning rate. Constant-LR training works, and a *cosine* schedule (3.7) or WSD (3.7) without warmup converges to within a couple of percent of the warmed-up baseline. The first paper to attribute GPT-2's stability to its pre-LN choice was Wang et al. (2019), *Improving deep Transformer with depth-scaled initialization and merged attention* ([arXiv:1908.11365](https://arxiv.org/abs/1908.11365)).
+
+<Aside type="note">
+**Pre-LN is also what allows the "scaling laws" cleanly.** When Kaplan et al. (2020) ([arXiv:2001.08361](https://arxiv.org/abs/2001.08361), Cap 7.11) characterised loss as a power law in compute, parameters, and data, they implicitly assumed an architecture that *trains stably across orders of magnitude of depth*. Post-LN would not have given them clean curves. Pre-LN became the lab default partly because it made experiments at varying scales actually comparable.
+</Aside>
+
+### 4.3 What about post-LN's quality at convergence?
+
+A subtle wrinkle: on small / shallow models (≤12 layers, BERT-base, vanilla translation), post-LN trained well *if you warmed up* and gave slightly better validation loss than pre-LN. This is because the inner norms in pre-LN partially constrain the residual stream's geometry (every sub-layer sees a unit-norm input), which is a mild regularisation. At scale (≥24 layers) this advantage is dwarfed by post-LN's training instability, and pre-LN dominates.
+
+The frontier-model story is unambiguous: **every LLM at $\geq 100$M parameters since GPT-2 is pre-LN**, including GPT-2/3/4, LLaMA, Mistral, Qwen, Gemini and Claude. BERT (post-LN) is the last meaningfully-used post-LN model in the wild, and successor encoder models (DeBERTa-v3, modern E5/BGE) use pre-LN too.
+
+---
+
+## 5. Sketch of Xiong et al.'s argument
+
+The standard reference is Xiong, Yang, He, Zheng, Xing, Zhang, Lan, Wang, Liu, *On layer normalization in the Transformer architecture* (2020, [arXiv:2002.04745](https://arxiv.org/abs/2002.04745)). They prove two claims under mild regularity assumptions:
+
+**Claim 1 (Post-LN gradient grows with depth at initialisation).** For a post-LN Transformer of depth $L$ with random Gaussian initialisation, the expected gradient norm at the *first* sub-layer scales as
+
+$$
+\mathbb{E}\Big[\big\|\partial \mathcal{L}/\partial W_1\big\|\Big] = \Theta(\sqrt{L}),
+$$
+
+i.e. it *grows* with depth. This means deep post-LN models have gradient signals near the input that overwhelm a constant-LR optimiser — the rationale for warmup.
+
+**Claim 2 (Pre-LN gradient is depth-independent).** Under the same assumptions, the pre-LN gradient norm at the first sub-layer scales as
+
+$$
+\mathbb{E}\Big[\big\|\partial \mathcal{L}/\partial W_1\big\|\Big] = \Theta(1)
+$$
+
+with no depth dependence. Constant-LR training is well-posed at any $L$.
+
+The proofs use the residual-stream expansion of [6.9 §3.2](/session/ch6-attention-transformer/6.9-residual-connections) and the fact that pre-LN's identity path commutes with the LayerNorm Jacobian on the residual branch only. We will not redo the calculation here — Xiong et al.'s presentation is clean and short (their §3).
+
+The lesson is the one we already saw informally: **putting the norm inside the residual leaves the identity path untouched; putting the norm outside the residual rescales it.** Depth-independent gradient norms follow.
+
+---
+
+## 6. The norm-placement rule, generalised
+
+The same lesson recurs throughout deep-learning architecture. Whenever a normalisation operation sits *on the main path* between two residual stages, the multiplicative-chain-rule problem returns; whenever the normalisation sits *inside a residual branch*, gradient flow remains depth-independent.
+
+This is one rule with multiple instances:
+
+- **ResNet-v1** (post-activation BN): the BN sits between two residuals on the main path → harder to train at extreme depth.
+- **ResNet-v2** (pre-activation BN, He et al., 2016, *Identity mappings in deep residual networks*, [arXiv:1603.05027](https://arxiv.org/abs/1603.05027)): the BN moves into the residual branch → trains to 1000+ layers with the same recipe.
+- **Pre-LN Transformer**: the LN moves into the residual branch → 96+ layers train stably.
+
+The pattern is structural, not specific to Transformers. The same proof template applies to any residual architecture.
+
+---
+
+## 7. The final layer norm
+
+A pre-LN stack ends with one extra normalisation:
+
+$$
+y_\text{out} = \text{LN}_\text{final}(x_L)\, W_\text{out}.
+$$
+
+Reason: each block's residual branch normalises *its input* but the trunk $x_\ell$ itself is *un-normalised* — the residual additions cumulate without bound. As $L$ grows, $\|x_L\|$ drifts upward; if we projected the un-normalised $x_L$ directly to vocabulary logits, the softmax (and the loss) would see an arbitrary scale. One LN at the very end fixes this without disturbing the gradient story.
+
+Equivalently: pre-LN's invariant is "every sub-layer sees a unit-norm input"; the trunk does not have to be unit-norm at intermediate layers — only the *inputs to sub-layers*. The final LN converts the trunk to the same standard.
+
+---
+
+## 8. Hybrid and exotic variants (for context)
+
+A few architectural offsprings worth knowing the names of, mostly outside the scope of this chapter:
+
+- **DeepNorm** (Wang et al., 2022, [arXiv:2203.00555](https://arxiv.org/abs/2203.00555)). A *post-norm* variant with carefully chosen residual scaling that trains at $1000$ layers. Used in some Microsoft/Tsinghua research papers; not in current frontier LLMs.
+- **Sandwich-norm** (Ding et al., 2021, GLM). Adds *both* pre-norm and post-norm. Stable but more parameters.
+- **NormFormer** (Shleifer et al., 2021, [arXiv:2110.09456](https://arxiv.org/abs/2110.09456)). Adds an extra LN after attention output. Reduces gradient norm in deeper layers.
+
+All build on the pre-LN baseline. None has displaced it in any frontier LLM. **For the rest of this course, "Transformer block" means pre-LN with one $\text{LN}_\text{final}$ at the top.**
+
+---
+
+## 9. What we keep going forward
+
+$$
+\text{One Transformer block (pre-LN)} \quad
+\begin{cases}
+x' = x + \text{MHA}\!\big(\text{LN}_1(x)\big), \\
+y = x' + \text{FFN}\!\big(\text{LN}_2(x')\big).
+\end{cases}
+$$
+
+Two residual additions, two LayerNorms placed inside the residual branches, no warmup needed, depth-independent gradient norms. [Next session](/session/ch6-attention-transformer/6.11-transformer-block-aiayn) assembles the full decoder-only stack ($L$ such blocks, embedding + LM head + final norm) and pairs it with a guided read of *Attention Is All You Need*.
+
+<SelfTest>
+
+**(a)** Write out the post-LN block $y = \text{LN}(x + \text{SubLayer}(x))$ in pseudocode (5 lines) and the pre-LN block $y = x + \text{SubLayer}(\text{LN}(x))$ in pseudocode (5 lines). Identify, in each, the gradient path that bypasses $\text{SubLayer}$.
+
+**(b)** For pre-LN, derive that the Jacobian of one block factorises as $I + J_\text{SubLayer} \cdot J_\text{LN}$. For post-LN, derive that the Jacobian factorises as $J_\text{LN} \cdot (I + J_\text{SubLayer})$. Which of these has an identity term that does *not* depend on $J_\text{LN}$?
+
+**(c)** Suppose $\|J_\text{LN}\| = 0.5$ uniformly (a rough average for a wide LN). Bound the spectral norm of the post-LN Jacobian over $L = 24$ stacked blocks. Compare to the pre-LN bound.
+
+**(d)** Read Xiong et al. (2020, [arXiv:2002.04745](https://arxiv.org/abs/2002.04745)) §3 and reproduce, in your notes, the two-line argument that the post-LN gradient grows as $\sqrt{L}$ and the pre-LN gradient is $O(1)$.
+
+**(e)** Argue why pre-LN requires a *final* $\text{LN}_\text{final}$ before the output projection but post-LN does not.
+
+</SelfTest>

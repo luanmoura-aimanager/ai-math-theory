@@ -1,0 +1,365 @@
+---
+title: "6.16 — Implementation day: walk through nanoGPT/model.py"
+chapter: 6
+order: 16
+estimatedMinutes: 35
+goal: "Read Karpathy's nanoGPT model.py line-by-line; map every line to the math of Chapter 6; identify the four key classes (CausalSelfAttention, MLP, Block, GPT); leave with the working PyTorch reference that pairs with the AIAYN derivation."
+prerequisites: ["ch6-attention-transformer/6.15-numpy-attention", "ch6-attention-transformer/6.11-transformer-block-aiayn"]
+---
+
+## 1. Why this session exists
+
+[6.15](/session/ch6-attention-transformer/6.15-numpy-attention) was 50 lines of single-head numpy attention. **nanoGPT** ([github.com/karpathy/nanoGPT](https://github.com/karpathy/nanoGPT)) is the full thing — multi-head, batched, with the LM head, ready to train on Shakespeare or OpenWebText — in ~300 lines of PyTorch. It is the *cleanest* full-Transformer reference implementation in existence, and reading it carefully ties off Chapter 6 by mapping every line of code to a piece of math we have derived.
+
+This session is a guided line-by-line walk through `model.py`. Have it open in another tab as you read. The exact line numbers below are from commit `7fe4a09` (the canonical historical version); the file changes occasionally but the structure is stable.
+
+The walkthrough has four sections matching the four classes in the file: `LayerNorm`, `CausalSelfAttention`, `MLP`, `Block`, plus the assembling `GPT`. After this you will be able to read any other Transformer implementation (HuggingFace, PyTorch native, TensorFlow) and recognise the same skeleton.
+
+---
+
+## 2. The `LayerNorm` class
+
+```python
+class LayerNorm(nn.Module):
+    """ LayerNorm but with an optional bias. PyTorch doesn't support simply bias=False """
+
+    def __init__(self, ndim, bias):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(ndim))
+        self.bias = nn.Parameter(torch.zeros(ndim)) if bias else None
+
+    def forward(self, input):
+        return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
+```
+
+Three lines of actual logic. This is exactly the [LayerNorm of 3.8 §2](/session/ch3-optimization-regularization/3.8-layernorm-rmsnorm):
+
+$$
+\text{LN}(x) = \frac{x - \mathbb{E}[x]}{\sqrt{\text{Var}[x] + \epsilon}} \odot \gamma + \beta,
+$$
+
+with $\gamma = \text{self.weight}, \beta = \text{self.bias}$, $\epsilon = 10^{-5}$. The `bias=False` option is exactly what LLaMA does — drop the affine bias, keep the scale. The `1e-5` is the variance-floor of 3.8 §2 — prevents division by zero on flat inputs.
+
+`F.layer_norm` is PyTorch's built-in. It calls a fused CUDA kernel — same math as our numpy version, just faster.
+
+---
+
+## 3. The `CausalSelfAttention` class
+
+This is the centrepiece. About 40 lines.
+
+### 3.1 The constructor
+
+```python
+class CausalSelfAttention(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        assert config.n_embd % config.n_head == 0
+        # key, query, value projections for all heads, in a batch
+        self.c_attn = nn.Linear(config.n_embd, 3 * config.n_embd, bias=config.bias)
+        # output projection
+        self.c_proj = nn.Linear(config.n_embd, config.n_embd, bias=config.bias)
+        # regularization
+        self.attn_dropout = nn.Dropout(config.dropout)
+        self.resid_dropout = nn.Dropout(config.dropout)
+        self.n_head = config.n_head
+        self.n_embd = config.n_embd
+        self.dropout = config.dropout
+        # flash attention available in PyTorch 2.0+
+        self.flash = hasattr(torch.nn.functional, 'scaled_dot_product_attention')
+        if not self.flash:
+            # causal mask for the fallback path
+            self.register_buffer("bias", torch.tril(torch.ones(config.block_size, config.block_size))
+                                          .view(1, 1, config.block_size, config.block_size))
+```
+
+Read carefully:
+
+- `c_attn` is a *single* linear projection of size $(d, 3d)$ — it computes $Q, K, V$ all at once for every head, then we slice. This is the standard packing trick: one matmul is faster than three separate ones.
+- `c_proj` is $W_O$ ([6.4 §2](/session/ch6-attention-transformer/6.4-multi-head-attention)), the output mixing projection.
+- `attn_dropout` and `resid_dropout` are training-time dropouts; at inference they're identity.
+- `self.flash` checks whether PyTorch 2.0+ is installed and we can use the fused FlashAttention kernel (Cap 10.5). If not, we fall back to manual matmul + mask + softmax (the slow path).
+- The `register_buffer("bias", ...)` is the causal mask: a $(1, 1, T, T)$ lower-triangular matrix of ones. We use it only in the fallback path; FlashAttention's API takes a boolean flag instead.
+
+### 3.2 The forward pass
+
+```python
+def forward(self, x):
+    B, T, C = x.size()    # batch, sequence length, embedding dim (n_embd)
+
+    # calculate query, key, values for all heads in batch and move head forward
+    q, k, v = self.c_attn(x).split(self.n_embd, dim=2)
+    k = k.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)   # (B, nh, T, hs)
+    q = q.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)   # (B, nh, T, hs)
+    v = v.view(B, T, self.n_head, C // self.n_head).transpose(1, 2)   # (B, nh, T, hs)
+```
+
+Line by line:
+
+- `c_attn(x)` is shape $(B, T, 3 d)$. `.split(self.n_embd, dim=2)` splits along the last axis into three tensors of shape $(B, T, d)$ each: `q`, `k`, `v`.
+- `.view(B, T, n_head, C//n_head)` reshapes from $(B, T, d)$ to $(B, T, h, d_h)$ — splitting the embedding dimension into heads.
+- `.transpose(1, 2)` swaps the `T` and `n_head` axes, giving $(B, h, T, d_h)$ — which is the shape numpy needs to do per-head attention via batched matmul.
+
+After these four lines, `q, k, v` have shape `(B, n_head, T, head_dim)`. We are ready to do attention.
+
+```python
+    if self.flash:
+        # efficient attention using Flash Attention CUDA kernels
+        y = torch.nn.functional.scaled_dot_product_attention(
+            q, k, v,
+            attn_mask=None,
+            dropout_p=self.dropout if self.training else 0,
+            is_causal=True
+        )
+    else:
+        # manual implementation of attention
+        att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+        att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))
+        att = F.softmax(att, dim=-1)
+        att = self.attn_dropout(att)
+        y = att @ v
+```
+
+The `flash` branch calls a fused kernel. The else branch is the manual fallback and matches our 6.15 numpy code **exactly**:
+
+- `q @ k.transpose(-2, -1)` is $Q K^\top$, shape $(B, h, T, T)$.
+- `* (1.0 / math.sqrt(k.size(-1)))` is the $1 / \sqrt{d_k}$ scaling.
+- `masked_fill(... == 0, float('-inf'))` is the causal mask: wherever the lower-triangular `bias` buffer is $0$ (upper triangle), fill with $-\infty$.
+- `F.softmax(..., dim=-1)` is the row-wise softmax. PyTorch handles the log-sum-exp trick internally.
+- `self.attn_dropout(att)` is dropout on the attention weights — training only.
+- `att @ v` is the value mixing.
+
+Both branches return `y` of shape `(B, h, T, head_dim)`.
+
+```python
+    y = y.transpose(1, 2).contiguous().view(B, T, C)   # re-assemble all head outputs side by side
+
+    # output projection
+    y = self.resid_dropout(self.c_proj(y))
+    return y
+```
+
+`.transpose(1, 2)` swaps back to $(B, T, h, d_h)$, `.view(B, T, C)` flattens the last two dims into $d$ — i.e., **concatenates the heads** into one $(B, T, d)$ tensor. This is the same "concat then project" of 6.4. Then `c_proj(y)` is the output projection $W_O$. Final shape: $(B, T, d)$ — the same as the input.
+
+That's it. Multi-head causal self-attention in 25 lines.
+
+---
+
+## 4. The `MLP` class
+
+```python
+class MLP(nn.Module):
+
+    def __init__(self, config):
+        super().__init__()
+        self.c_fc    = nn.Linear(config.n_embd, 4 * config.n_embd, bias=config.bias)
+        self.gelu    = nn.GELU()
+        self.c_proj  = nn.Linear(4 * config.n_embd, config.n_embd, bias=config.bias)
+        self.dropout = nn.Dropout(config.dropout)
+
+    def forward(self, x):
+        x = self.c_fc(x)
+        x = self.gelu(x)
+        x = self.c_proj(x)
+        x = self.dropout(x)
+        return x
+```
+
+This is the FFN of [6.8](/session/ch6-attention-transformer/6.8-ffn) in its standard pre-SwiGLU form:
+
+$$
+\text{FFN}(x) = W_2 \, \text{GELU}(W_1 x + b_1) + b_2,
+$$
+
+with `c_fc = W_1` (shape $(d, 4d)$), `c_proj = W_2` (shape $(4d, d)$), `gelu` the non-linearity, dropout for regularisation. nanoGPT uses GELU, the modern default since GPT-2. A SwiGLU upgrade (Cap 8.4) replaces `c_fc` with two parallel matrices.
+
+Eight lines.
+
+---
+
+## 5. The `Block` class
+
+```python
+class Block(nn.Module):
+
+    def __init__(self, config):
+        super().__init__()
+        self.ln_1 = LayerNorm(config.n_embd, bias=config.bias)
+        self.attn = CausalSelfAttention(config)
+        self.ln_2 = LayerNorm(config.n_embd, bias=config.bias)
+        self.mlp = MLP(config)
+
+    def forward(self, x):
+        x = x + self.attn(self.ln_1(x))
+        x = x + self.mlp(self.ln_2(x))
+        return x
+```
+
+This is the **pre-LN Transformer block** of [6.10 §2.2](/session/ch6-attention-transformer/6.10-pre-vs-post-norm). Two lines of forward:
+
+$$
+\begin{aligned}
+x &= x + \text{Attn}(\text{LN}_1(x)), \\
+x &= x + \text{MLP}(\text{LN}_2(x)).
+\end{aligned}
+$$
+
+LN inside the residual branch; identity skip on the trunk. This is *literally* the residual-stream view from 6.9 and 6.10.
+
+Five lines, two of them forward. The skeleton of a 175B-parameter LLM is *this short*.
+
+---
+
+## 6. The `GPT` class
+
+The top-level model. Here are the load-bearing parts; we skip the optimiser/init helpers.
+
+### 6.1 The constructor
+
+```python
+class GPT(nn.Module):
+
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+
+        self.transformer = nn.ModuleDict(dict(
+            wte = nn.Embedding(config.vocab_size, config.n_embd),
+            wpe = nn.Embedding(config.block_size, config.n_embd),
+            drop = nn.Dropout(config.dropout),
+            h = nn.ModuleList([Block(config) for _ in range(config.n_layer)]),
+            ln_f = LayerNorm(config.n_embd, bias=config.bias),
+        ))
+        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+
+        # weight tying
+        self.transformer.wte.weight = self.lm_head.weight
+```
+
+Decompose:
+
+- `wte`: word/token embedding. The matrix $E \in \mathbb{R}^{V \times d}$ of [5.2](/session/ch5-sequence-modeling/5.2-embeddings-word2vec).
+- `wpe`: **word position embedding** — the learned absolute PE of GPT-2 (our [Appendix 6.B](/session/ch6-attention-transformer/6.B-learned-pe)). A $(T_\text{max}, d)$ matrix; row $i$ is the vector for position $i$. nanoGPT uses learned PE, not RoPE — it follows GPT-2's recipe.
+- `h`: a `ModuleList` of $L$ `Block`s — the actual residual stack.
+- `ln_f`: the final LayerNorm of [6.10 §7](/session/ch6-attention-transformer/6.10-pre-vs-post-norm) — applies to the residual stream once at the top.
+- `lm_head`: the LM head $W_\text{out} \in \mathbb{R}^{V \times d}$ — projects $z \mapsto \boldsymbol{\ell}$ for next-token prediction.
+- `self.transformer.wte.weight = self.lm_head.weight`: **weight tying**. The embedding matrix and the LM head share weights. This is the standard parameter-saver: instead of $2 V d$ params for embedding + output, we use $V d$ total.
+
+### 6.2 The forward pass
+
+```python
+def forward(self, idx, targets=None):
+    device = idx.device
+    b, t = idx.size()
+    assert t <= self.config.block_size, f"Cannot forward sequence of length {t}, block size is only {self.config.block_size}"
+    pos = torch.arange(0, t, dtype=torch.long, device=device)    # shape (t)
+
+    # forward the GPT model itself
+    tok_emb = self.transformer.wte(idx)   # (b, t, n_embd)
+    pos_emb = self.transformer.wpe(pos)   # (t, n_embd)
+    x = self.transformer.drop(tok_emb + pos_emb)
+    for block in self.transformer.h:
+        x = block(x)
+    x = self.transformer.ln_f(x)
+
+    if targets is not None:
+        # if we are given some desired targets also calculate the loss
+        logits = self.lm_head(x)
+        loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+    else:
+        # inference-time mini-optimization: only forward the lm_head on the very last position
+        logits = self.lm_head(x[:, [-1], :]) # note: using list [-1] to preserve the time dim
+        loss = None
+
+    return logits, loss
+```
+
+The forward is essentially what we wrote in [6.11 §2.1](/session/ch6-attention-transformer/6.11-transformer-block-aiayn), with two notes:
+
+- `tok_emb + pos_emb` is the **additive** combination of token and position embeddings. Modern RoPE-based models skip this — they apply the position rotations inside attention instead — but GPT-2 / nanoGPT do additive learned PE.
+- At inference, only the last position is projected to logits (`x[:, [-1], :]`). The other positions are wasted compute we don't need to do; this is a standard inference-time micro-optimisation.
+
+The training-time path goes through every position and feeds them all to `F.cross_entropy`, the loss of [1.8](/session/ch1-linear-models-perceptron/1.8-multiclass-ce-gradient).
+
+### 6.3 The `generate` method
+
+```python
+@torch.no_grad()
+def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None):
+    for _ in range(max_new_tokens):
+        # if the sequence context is growing too long we must crop it at block_size
+        idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
+        # forward the model to get the logits for the index in the sequence
+        logits, _ = self(idx_cond)
+        # pluck the logits at the final step and scale by desired temperature
+        logits = logits[:, -1, :] / temperature
+        # optionally crop the logits to only the top k options
+        if top_k is not None:
+            v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+            logits[logits < v[:, [-1]]] = -float('Inf')
+        # apply softmax to convert logits to (normalized) probabilities
+        probs = F.softmax(logits, dim=-1)
+        # sample from the distribution
+        idx_next = torch.multinomial(probs, num_samples=1)
+        # append sampled index to the running sequence and continue
+        idx = torch.cat((idx, idx_next), dim=1)
+    return idx
+```
+
+This is the inference loop: forward the model, take the last position's logits, apply temperature, optionally restrict to top-$k$, softmax, sample, append. **Note:** this version *re-runs the forward pass over the full sequence at each step* — no KV cache. nanoGPT is explicit about being a teaching reference; production inference engines (vLLM, TensorRT-LLM) add the KV cache of [6.14](/session/ch6-attention-transformer/6.14-kv-cache).
+
+We will return to the various sampling strategies (`temperature`, `top_k`, `top_p`) in Cap 10.2 (Sampling).
+
+---
+
+## 7. The "I built a GPT" cross-check
+
+After reading the file, the punchline is: **the entire GPT-2-class model fits in ~150 lines of PyTorch** (the rest of `model.py` is config, init, optimiser plumbing). Every line maps to a piece of Chapter 6:
+
+| nanoGPT entity | Course session |
+|---|---|
+| `LayerNorm` | 3.8 |
+| `CausalSelfAttention.c_attn`, `c_proj` | 6.4 (MHA), 6.2 ($\sqrt{d_k}$), 6.5 (causal mask) |
+| `CausalSelfAttention` (forward) | 6.2, 6.4, 6.5, optional 10.5 (flash) |
+| `MLP` | 6.8 (FFN) |
+| `Block` | 6.9 (residuals), 6.10 (pre-LN) |
+| `GPT.wte` | 5.2 (embeddings) |
+| `GPT.wpe` | Appendix 6.B (learned PE) |
+| `GPT.h` (stack) | 6.11 |
+| `GPT.ln_f` | 6.10 §7 |
+| `GPT.lm_head` + tying | 5.3 (LM objective), 6.11 §3 |
+| `GPT.generate` | Cap 10.1–10.2 |
+
+Read the file once with this table open. Read it a second time without the table. By the third pass you should be able to write the four classes from memory.
+
+<Aside type="note">
+**Karpathy's "Let's build GPT" lecture.** The pair lecture to this code is [Karpathy's YouTube lecture](https://www.youtube.com/watch?v=kCc8FmEb1nY) "Let's build GPT: from scratch, in code, spelled out" (2023). It walks through building a similar model from a blank notebook. Watching it after this session is the strongest possible reinforcement — you'll see Karpathy derive the same equations we have, and arrive at the same code. ~2 hours, worth every minute.
+</Aside>
+
+---
+
+## 8. What we keep going forward
+
+Chapter 6 ends with nanoGPT as a working reference. To repeat the headline numbers from [6.11 §3](/session/ch6-attention-transformer/6.11-transformer-block-aiayn):
+
+- $\approx 12 L d^2$ parameters in the residual stack.
+- $\approx 24 T d^2 + 4 T^2 d$ FLOPs per forward pass per block.
+- KV-cache memory $\approx 4 L d T$ bytes per sample in fp16.
+
+These are *the* knobs of an LLM. Cap 7 starts the training story (data, distributed parallelism, scaling laws, long-context training); Cap 8 covers architectural variants (GQA, SwiGLU, MLA, MoE, hybrid SSM); Cap 10 covers inference engineering (KV-cache details, FlashAttention, speculative decoding, quantization, vLLM, test-time scaling for reasoning models). All of them are upgrades on the skeleton we just read.
+
+Appendices 6.A and 6.B cover the two **historical** positional encodings — sinusoidal (AIAYN) and learned (GPT-2). The main path uses RoPE; the appendices are for completeness and for reading older codebases.
+
+<SelfTest>
+
+**(a)** In `CausalSelfAttention.forward`, the line `q, k, v = self.c_attn(x).split(self.n_embd, dim=2)` produces three tensors of shape $(B, T, d)$. The next four lines reshape them to $(B, h, T, d_h)$. State each intermediate shape after `view` and after `transpose`.
+
+**(b)** The line `att = att.masked_fill(self.bias[:,:,:T,:T] == 0, float('-inf'))` applies the causal mask in the fallback (non-flash) branch. Why does `flash_sdp_attention` take `is_causal=True` as a flag instead of an explicit mask? (Hint: it's a numerical efficiency story.)
+
+**(c)** `Block.forward` is two lines: `x = x + attn(ln_1(x))` and `x = x + mlp(ln_2(x))`. Compare with the post-LN block $y = \text{LN}(x + \text{attn}(x))$. What is different about gradient flow? (Recap [6.10 §3](/session/ch6-attention-transformer/6.10-pre-vs-post-norm).)
+
+**(d)** `GPT.__init__` does `self.transformer.wte.weight = self.lm_head.weight`. What is this called and why is it done? (Recap [6.11 §2.1](/session/ch6-attention-transformer/6.11-transformer-block-aiayn).)
+
+**(e)** `GPT.generate` does *not* use a KV cache: it re-runs the full forward pass on every new token. Estimate the cost of generating 200 tokens after a 2k prompt (in FLOPs) versus the same generation with a KV cache. Use [6.12](/session/ch6-attention-transformer/6.12-compute-and-memory)'s per-token formula.
+
+</SelfTest>

@@ -1,0 +1,210 @@
+---
+title: "6.9 — Residual connections (skip connections)"
+chapter: 6
+order: 9
+estimatedMinutes: 20
+goal: "Define a residual block y = x + f(x); derive why it eliminates the multiplicative gradient erosion of deep stacks; understand identity initialisation; place residuals inside the Transformer as the glue that makes 96-layer stacks trainable."
+prerequisites: ["ch6-attention-transformer/6.8-ffn", "ch2-mlps-backprop/2.9-vanishing-exploding-gradients", "ch3-optimization-regularization/3.8-layernorm-rmsnorm"]
+---
+
+## 1. Why this session exists
+
+We have all the parts of one Transformer block — attention (6.2–6.7) and FFN (6.8) — but we cannot yet stack 32, 96, or 128 of them. A plain composition $f_L \circ \dots \circ f_1$ of $L$ non-linear sub-layers is, in practice, **untrainable for large $L$**. The reason is the multiplicative chain rule: the gradient at layer $\ell$ acquires a factor for *every* layer above it, and the product of $L$ such factors typically collapses to $0$ or explodes to $\infty$ as $L$ grows. We met this in [2.9](/session/ch2-mlps-backprop/2.9-vanishing-exploding-gradients).
+
+The fix is structural, not numerical. Replace each sub-layer's pure composition $y = f(x)$ with the **residual form**
+
+$$
+y = x + f(x),
+$$
+
+so that the layer adds a *correction* to its input rather than overwriting it. The identity term $x$ creates a direct path along which the gradient flows un-attenuated, no matter how deep the stack. Introduced by He, Zhang, Ren & Sun (2015) for ResNet — the architectural innovation that unlocked $\geq 100$-layer vision networks — residual connections are imported wholesale into the Transformer as the *only* reason 96-layer GPT-3 and 80-layer LLaMA-70B can be trained at all.
+
+This session derives the gradient-flow argument, defines identity initialisation, and shows where residuals live inside one Transformer block. We use them everywhere in the rest of the course.
+
+---
+
+## 2. The plain-stack problem
+
+Let $f_\ell: \mathbb{R}^d \to \mathbb{R}^d$ be the operation at layer $\ell$ (one Transformer sub-layer in our case). A plain stack computes
+
+$$
+x_\ell = f_\ell(x_{\ell-1}), \qquad \ell = 1, \dots, L,
+$$
+
+and the final loss is $\mathcal{L}(x_L)$. By the chain rule (in the numerator convention of [0.2](/session/ch0-math-foundations/0.2-matrix-calculus)),
+
+$$
+\frac{\partial \mathcal{L}}{\partial x_0} = \frac{\partial \mathcal{L}}{\partial x_L} \cdot \frac{\partial x_L}{\partial x_{L-1}} \cdot \frac{\partial x_{L-1}}{\partial x_{L-2}} \cdots \frac{\partial x_1}{\partial x_0} = \frac{\partial \mathcal{L}}{\partial x_L} \cdot \prod_{\ell = L}^{1} J_\ell,
+$$
+
+where $J_\ell = \partial f_\ell / \partial x_{\ell-1} \in \mathbb{R}^{d \times d}$ is the Jacobian of the $\ell$-th sub-layer. The product is taken in the *natural* order — outer first, then progressively deeper — which is what numerator-layout chain rule prescribes.
+
+### 2.1 The product-of-Jacobians collapse
+
+Let $\|\cdot\|$ denote the operator (spectral) norm. Then
+
+$$
+\Big\| \prod_{\ell = L}^{1} J_\ell \Big\| \;\leq\; \prod_{\ell = L}^{1} \|J_\ell\|,
+$$
+
+and the right-hand side is a product of $L$ non-negative scalars. If the *typical* spectral norm satisfies $\|J_\ell\| \approx c$, then $\|\prod J_\ell\| \lesssim c^L$, which
+
+- vanishes geometrically if $c < 1$ (every layer scales the gradient down a touch and after $L$ layers nothing survives), or
+- explodes geometrically if $c > 1$ (the gradient blows up and training diverges).
+
+The boundary $c = 1$ is unstable: any random initialisation puts $c$ either side. Concretely, with a ReLU/GELU sub-layer and standard Xavier/He initialisation, one finds $\|J_\ell\| < 1$ for most $\ell$ (the non-linearity zeros out roughly half its inputs, halving the effective rank), and the **gradient vanishes** as $L$ grows. This is the precise statement of "deep networks don't train".
+
+<Aside type="note">
+**This is not a relic of pre-2015 thinking.** Even in 2026, with modern initialisation (He), modern non-linearities (GELU, SwiGLU), and modern normalisation (LayerNorm, RMSNorm — see [3.8](/session/ch3-optimization-regularization/3.8-layernorm-rmsnorm)), a plain stack of 96 sub-layers does *not* train. Residual connections are the load-bearing structural ingredient. Norms, initialisations and clever non-linearities are second-order improvements on top of them.
+</Aside>
+
+---
+
+## 3. The residual fix
+
+A **residual block** with residual function $f_\ell$ computes
+
+$$
+\boxed{\ x_\ell = x_{\ell-1} + f_\ell(x_{\ell-1}). \ }
+$$
+
+The mapping $x \mapsto x + f(x)$ is a *correction*: $f_\ell$ does not need to reproduce $x_{\ell-1}$ in its output — the identity path delivers it for free. $f_\ell$ only learns the *deviation* from identity that the layer should add.
+
+Two consequences follow immediately.
+
+### 3.1 The Jacobian is an additive identity
+
+By linearity of differentiation,
+
+$$
+J_\ell = \frac{\partial x_\ell}{\partial x_{\ell-1}} = I + \frac{\partial f_\ell}{\partial x_{\ell-1}} = I + J_\ell^{(f)},
+$$
+
+where $J_\ell^{(f)}$ is the Jacobian of the residual function alone. The Jacobian of a residual block is an **identity plus a perturbation**.
+
+### 3.2 Gradient flow is unimpeded
+
+Compose $L$ residual blocks. The full Jacobian becomes
+
+$$
+\prod_{\ell = L}^{1} J_\ell = \prod_{\ell = L}^{1} \big(I + J_\ell^{(f)}\big).
+$$
+
+Expand this product. Each term in the expansion is an ordered subset $S \subseteq \{1, \dots, L\}$ of layers: pick $J_\ell^{(f)}$ for $\ell \in S$ and $I$ for $\ell \notin S$. The number of terms is $2^L$, and they collect by cardinality $|S| = k$:
+
+$$
+\prod_{\ell = L}^{1} \big(I + J_\ell^{(f)}\big) = I \;+\; \sum_{\ell = 1}^{L} J_\ell^{(f)} \;+\; \sum_{\ell_1 < \ell_2} J_{\ell_2}^{(f)} J_{\ell_1}^{(f)} \;+\; \cdots
+$$
+
+(ordered correctly; lower indices innermost). The leading $I$ is the **identity path**: gradients flow from output to input completely un-attenuated through the chain of skip connections. The first-order sum is a "linear combination of single-layer contributions" — also un-attenuated. Higher-order terms add products of *increasing* length, but they no longer dominate because the identity term is always present.
+
+The numerical upshot: even if every $\|J_\ell^{(f)}\| < 1$ (so that pure compositions would collapse), the gradient $\partial \mathcal{L} / \partial x_0$ stays $\Theta(1)$ because the leading $I$ keeps a direct line from $x_L$ to $x_0$.
+
+$$
+\boxed{\ \frac{\partial \mathcal{L}}{\partial x_0} = \frac{\partial \mathcal{L}}{\partial x_L} \cdot \Big( I + \text{(corrections)} \Big). \ }
+$$
+
+This is the entire reason ResNet-152 and GPT-3-175B exist. Identity paths break the multiplicative chain rule.
+
+---
+
+## 4. Identity initialisation
+
+There is a *second* benefit, complementary to gradient flow. If we initialise each residual function so that $f_\ell \approx 0$ at training start (small weights), then
+
+$$
+x_\ell = x_{\ell-1} + f_\ell(x_{\ell-1}) \approx x_{\ell-1},
+$$
+
+i.e. the network at initialisation behaves like a chain of **identity maps**: $x_L \approx x_0$. The model starts as a shallow effective network and the optimiser is free to introduce non-trivial $f_\ell$ one layer at a time, in whichever order helps the loss. This is sometimes called **identity initialisation** or "the residual network at $t = 0$ is a shallow network".
+
+The practical implementation differs by author but is uniformly cheap:
+
+- **ResNet-original (He, 2015).** Initialise the last BatchNorm $\gamma$ in each block to $0$ — so the block output is exactly $x$ at $t = 0$. (Goyal et al., 2017; "Bag of Tricks" Tweaks.)
+- **Fixup (Zhang et al., 2019).** Initialise the *last* convolutional layer of each block to zero; scale the others by a factor depending on depth. Trains 100-layer ResNets without any normalisation.
+- **GPT / Pre-LN Transformer.** Standard initialisation (small Gaussian) combined with pre-norm (6.10) already produces near-identity behaviour at start; no special trick is needed.
+
+The lesson is general: **let the deep network start as a shallow one and grow into a deep one**. Residual connections + small initialisation get this for free.
+
+<Aside type="history">
+**He et al., 2015, *Deep Residual Learning for Image Recognition* ([arXiv:1512.03385](https://arxiv.org/abs/1512.03385)).** The original ResNet paper. Two observations: (1) plain 56-layer CNNs trained *worse* than 20-layer ones on ImageNet — a "degradation" problem orthogonal to overfitting, since training error also got worse; (2) inserting identity skip connections every two convolutions completely eliminated the degradation, and 152-layer networks beat the 20-layer ones by a wide margin. ResNet won ILSVRC 2015 and ICCV best paper 2015; the Transformer paper [(Vaswani et al., 2017)](https://arxiv.org/abs/1706.03762) cites it specifically when introducing skip connections in §3.1. Subsequent analyses (Veit, Wilber & Belongie, 2016, *Residual networks behave like ensembles of relatively shallow networks*, [arXiv:1605.06431](https://arxiv.org/abs/1605.06431)) showed that, at inference, a residual network acts as an *implicit ensemble* of paths of varying length — another reason it is so robust.
+</Aside>
+
+---
+
+## 5. Residuals inside a Transformer block
+
+A Transformer block has *two* sub-layers — attention and FFN — and both are wrapped in residual connections. The standard "post-LN" original AIAYN block (we will revisit pre-LN in 6.10) computes
+
+$$
+\begin{aligned}
+x' &= \text{LayerNorm}\!\big(x + \text{MHA}(x)\big), \\
+y &= \text{LayerNorm}\!\big(x' + \text{FFN}(x')\big).
+\end{aligned}
+$$
+
+Two residual connections per block. Across $L = 96$ blocks (GPT-3 scale), $192$ skip connections. The output is $x_L = x_0 + \sum_\ell \big(\text{MHA-correction}_\ell + \text{FFN-correction}_\ell\big)$ to first order — the **residual stream** view.
+
+### 5.1 The residual stream as a shared bus
+
+Reading the same equation from a different angle: every sub-layer reads the current state $x_{\ell-1}$, computes a correction $f_\ell(x_{\ell-1})$, and *adds* it back into the stream. There is a single $d$-dimensional vector flowing from input embedding to output projection, and every layer is a read-modify-write on that vector.
+
+This perspective — coined the **residual stream** by the Anthropic interpretability team — is the cornerstone of modern mechanistic interpretability (Chapter 11). It only makes sense *because of* the residual structure: the additive identity path is what gives the stream a single, persistent identity across layers.
+
+$$
+\text{stream:} \quad x_0 \;\longrightarrow\; x_0 + f_1 \;\longrightarrow\; x_0 + f_1 + f_2 \;\longrightarrow\; \cdots \;\longrightarrow\; x_0 + \sum_\ell f_\ell.
+$$
+
+This is also why Transformer interpretability has been able to make so much progress: a layer that *replaced* the stream (a plain $y = f(x)$ composition) would erase the linear addressability that lets us decompose model behaviour by layer and by head.
+
+---
+
+## 6. What residuals do not fix
+
+Two cautions, common to all skip-connection arguments:
+
+**(a) Residuals do not prevent exploding activations.** The forward pass $x_\ell = x_{\ell-1} + f_\ell(x_{\ell-1})$ accumulates the magnitudes of $f_\ell$ across $\ell$. Without normalisation, $\|x_L\|$ grows roughly as $\sqrt{L} \cdot \|f\|$ (random walk) or even linearly. This is why every Transformer pairs residuals with **LayerNorm/RMSNorm** ([3.8](/session/ch3-optimization-regularization/3.8-layernorm-rmsnorm)): the norm rescales the stream back to unit-scale every block.
+
+**(b) Residuals require shape compatibility.** $y = x + f(x)$ needs $f(x)$ to live in the same vector space as $x$. In a Transformer this is automatic — every sub-layer maps $\mathbb{R}^d \to \mathbb{R}^d$. In ResNet, a strided convolution that *changes* the spatial resolution must be paired with a $1 \times 1$ projection on the skip path (the "projection shortcut"). We won't worry about this in language models; $d$ is held constant across all attention/FFN sub-layers.
+
+---
+
+## 7. The arithmetic of "identity + correction"
+
+A small numerical illustration ties the gradient-flow argument to a concrete picture. Let $d = 1$ for simplicity, set $f_\ell(x) = \alpha x$ with $\alpha = -0.1$ at every layer, and stack $L = 50$ layers.
+
+**Plain stack:** $x_L = \alpha^L \cdot x_0 = (-0.1)^{50} \approx 10^{-50}$. The forward signal has vanished. Symmetrically, $\partial x_L / \partial x_0 = \alpha^L \approx 10^{-50}$. **Untrainable.**
+
+**Residual stack:** $x_\ell = x_{\ell-1} + \alpha x_{\ell-1} = (1 + \alpha) x_{\ell-1}$, so $x_L = (1 + \alpha)^L x_0 = (0.9)^{50} \approx 5 \times 10^{-3}$. The signal is small but not catastrophic, and the Jacobian is $(1 + \alpha)^L \approx 5 \times 10^{-3}$, *eighteen orders of magnitude larger* than the plain stack. With $\alpha$ near zero (small initialisation, §4) the residual stack is essentially the identity at $t = 0$ and the optimiser can lift each $\alpha_\ell$ off zero gradually.
+
+This is the same story with $d \gg 1$: the spectral spread of $(I + J_\ell^{(f)})$ around 1 is much more forgiving than the spectral spread of $J_\ell^{(f)}$ alone around 0 or 1.
+
+---
+
+## 8. Where this lands
+
+Residual connections are the single architectural component without which deep stacks of any kind — ResNet, Transformer, U-Net, modern diffusion models — would not train. Three things to keep:
+
+$$
+y = x + f(x) \quad\Longrightarrow\quad \frac{\partial y}{\partial x} = I + \frac{\partial f}{\partial x}.
+$$
+
+1. The identity term gives the gradient a direct path from output to input — multiplicative collapse is broken.
+2. Initialising $f \approx 0$ makes the deep network start as a shallow one; layers grow non-trivial as training proceeds.
+3. Combined with norms (3.8), residuals turn a Transformer into a *residual stream* — a shared $d$-vector bus along which every block reads, transforms, and writes.
+
+[Next session](/session/ch6-attention-transformer/6.10-pre-vs-post-norm) examines *where* the LayerNorm sits relative to the residual — pre-norm vs post-norm — and why every modern Transformer puts the norm inside the residual rather than outside.
+
+<SelfTest>
+
+**(a)** Write the Jacobian of one residual block $y = x + f(x)$ in numerator layout. Then expand the Jacobian of two stacked residual blocks $z = y + g(y)$ in terms of $\partial f/\partial x$ and $\partial g/\partial y$. Identify the "identity path" term.
+
+**(b)** Suppose every residual sub-layer has $\|J_\ell^{(f)}\| \leq 0.2$. Bound the spectral norm of the full $L$-layer Jacobian $\prod_\ell (I + J_\ell^{(f)})$ above and below. Compare with the plain stack $\prod_\ell J_\ell^{(f)}$ for $L = 50$.
+
+**(c)** Argue that "identity initialisation" makes a $96$-layer Transformer behave like a *shallow* network at $t = 0$. What does this imply about the rank of $x_L - x_0$ when training starts?
+
+**(d)** A Transformer block applies *two* residual additions per layer (one around attention, one around FFN). For a stack of $L$ blocks, how many identity paths run from input to output? Compare to a ResNet with $L$ residual blocks.
+
+**(e)** Veit, Wilber & Belongie (2016) argue that a residual network behaves like an "ensemble of shallow networks". Translate this into the $2^L$ expansion of §3.2: how does each subset $S \subseteq \{1, \dots, L\}$ correspond to one ensemble member?
+
+</SelfTest>
