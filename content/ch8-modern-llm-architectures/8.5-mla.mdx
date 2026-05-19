@@ -1,0 +1,232 @@
+---
+title: "8.5 — Multi-head Latent Attention (MLA)"
+chapter: 8
+order: 5
+estimatedMinutes: 28
+goal: "Derive multi-head latent attention (DeepSeek-V2/V3/R1): factor each token's K and V through a small shared latent c^KV so the KV cache stores only the latent. Understand the decoupled-RoPE trick that lets the construction coexist with rotary positional encoding. Quantify the cache shrink at iso-quality vs MHA and GQA-8."
+prerequisites: ["ch6-attention-transformer/6.7-rope", "ch6-attention-transformer/6.14-kv-cache", "ch8-modern-llm-architectures/8.3-gqa-mqa"]
+---
+
+## 1. Why this session exists
+
+GQA (§8.3) shrinks the KV cache by reducing the number of distinct K, V heads from $h$ to $g$. The shrink is linear in $h/g$, capped at $h$ (which would be MQA, with measurable quality cost). To go further, the cache has to be shrunk along a *different* axis — not the head count, but the per-head dimension.
+
+DeepSeek-AI introduced **Multi-head Latent Attention (MLA)** in DeepSeek-V2 (2024, [arXiv:2405.04434](https://arxiv.org/abs/2405.04434)) and kept it in V3 and R1. The structural device: per token, compute a single low-rank **latent vector** $c^{KV} \in \mathbb{R}^{r}$ with $r \ll h d_h$, store only this latent in the KV cache, and reconstruct the per-head $K$ and $V$ at attention time by multiplying with two fixed up-projection matrices. The cache shrink is $h d_h / r$ — typically $\sim 10\times$ smaller than MHA at *iso-quality*.
+
+The construction also requires a small surgical fix because the latent factorisation does not commute with RoPE. The fix — *decoupled RoPE* — uses a small auxiliary set of position-aware K heads that bypass the latent. The result is the most aggressive 2024-era KV-cache compression in any frontier LLM, and the dominant choice for DeepSeek's V2/V3/R1 line; it is plausibly the direction every long-context model will adopt within the next two years.
+
+This session derives MLA from scratch, including the decoupled-RoPE trick, and compares the cache footprint against MHA and GQA-$8$.
+
+---
+
+## 2. The latent factorisation
+
+Fix hidden size $d$, query heads $h$, per-head dimension $d_h$, KV latent dimension $r$ (with $r \ll h d_h$). The standard MHA projections are $W_K, W_V \in \mathbb{R}^{d \times h d_h}$; the input token's hidden $x \in \mathbb{R}^d$ produces $K_i = x W_K \in \mathbb{R}^{h d_h}$ stored in cache.
+
+MLA factors each of $W_K$ and $W_V$ as a product of a *down-projection* (input to latent) and an *up-projection* (latent to per-head K or V). Crucially, the *same* latent is used for both K and V:
+
+$$
+\boxed{\
+\begin{aligned}
+c_i^{KV} &= x_i\, W^{DKV} \in \mathbb{R}^{r} &\text{(down-projection, stored in cache)} \\
+K_i &= c_i^{KV}\, W^{UK} \in \mathbb{R}^{h d_h} &\text{(up-projection, applied at attention time)} \\
+V_i &= c_i^{KV}\, W^{UV} \in \mathbb{R}^{h d_h} &\text{(up-projection, applied at attention time)}
+\end{aligned}
+\ }
+$$
+
+with $W^{DKV} \in \mathbb{R}^{d \times r}, W^{UK}, W^{UV} \in \mathbb{R}^{r \times h d_h}$. The composition $W^{DKV} W^{UK}$ has rank at most $r$, so MLA-K is a low-rank approximation to MHA-K (and similarly for V). The choice of $r$ controls the rank-and-cache tradeoff.
+
+The query side is *not* factored; queries are computed standardly per head (or, for parameter savings, with a separate latent on Q — see §5):
+
+$$
+Q_i = x_i\, W^Q \in \mathbb{R}^{h d_h}.
+$$
+
+### 2.1 The cache, exactly
+
+At decode, the KV cache stores per token only the latent $c_i^{KV} \in \mathbb{R}^{r}$ — *not* $K_i, V_i$. So the per-token cache footprint per layer is $r$ scalars (vs $2 h d_h$ for MHA and $2 g d_h$ for GQA-$g$). Per layer over the full sequence:
+
+$$
+\#\text{bytes}_\text{KV}^\text{MLA} = \text{bpe} \cdot L \cdot r \cdot T \cdot \text{batch}.
+$$
+
+(There is no factor of $2$ here because the latent is *shared* between K and V; see §3 below for what happens to the missing decoupled-RoPE K-head.) Compare:
+
+| Variant | Per-token bytes (one layer, fp16) | $h = 64, d_h = 128, g = 8, r = 512$ |
+|---|---|---:|
+| MHA | $4 \cdot h \cdot d_h$ | $32{,}768$ |
+| GQA-$8$ | $4 \cdot g \cdot d_h$ | $4{,}096$ |
+| MLA | $2 \cdot r$ | $1{,}024$ |
+
+With $r = 512$ as in DeepSeek-V2, the MLA cache per token is $\sim 32\times$ smaller than MHA and $\sim 4\times$ smaller than GQA-$8$. The DeepSeek-V2 paper reports a KV-cache reduction of $\sim 93\%$ vs the equivalent dense MHA baseline at the same total parameter count, and the V3 / R1 papers replicate this number.
+
+### 2.2 At attention time
+
+When a query at position $t$ needs to attend to past positions, we read the latents $c_{1:t}^{KV} \in \mathbb{R}^{t \times r}$ from cache, expand to K and V via $W^{UK}, W^{UV}$, then run scaled dot-product attention exactly as in MHA. Per-step expansion cost: $2 t r h d_h$ FLOPs for $K$ and the same for $V$, total $4 t r h d_h$.
+
+This *adds* compute relative to MHA — we are doing an extra matmul to reconstruct K, V. But the *bandwidth* cost shrinks: we read $r$ scalars per token instead of $2 h d_h$. Since decode is bandwidth-bound ([8.1 §3](/session/ch8-modern-llm-architectures/8.1-decoder-only)), the wall-clock latency at decode improves substantially. At long contexts the bandwidth savings dominate; at very short contexts (single-token decode with $T \approx 1$) the extra matmul is the larger cost. The DeepSeek-V2 paper reports inference speedups of $5.76\times$ over their equivalent dense MHA baseline on long-context generation.
+
+---
+
+## 3. The RoPE problem
+
+RoPE ([6.7](/session/ch6-attention-transformer/6.7-rope)) modifies $Q$ and $K$ by a position-dependent rotation $R_\theta(t)$ before the dot product:
+
+$$
+\text{Attn}_\text{score}(i, j) = \langle R_\theta(i)\, q_i,\ R_\theta(j)\, k_j \rangle / \sqrt{d_h}.
+$$
+
+The rotation acts on the per-head $K$ vectors. But in MLA, the cache stores the *latent* $c^{KV}_j$, not $k_j$ — and the per-head $k_j = c^{KV}_j W^{UK}$ is recovered only at attention time. So at what point do we apply RoPE?
+
+Two options, both broken:
+
+- **Apply RoPE to $k_j$ after the up-projection.** Then $k_j$'s rotated form depends on position $j$. But we cached $c^{KV}_j$, not $k_j$, and the rotation $R_\theta(j)$ does *not* commute with $W^{UK}$ (it is a per-head block-diagonal rotation in the head dimension, not a global rotation), so we cannot push it through. Reapplying the rotation at decode time costs an extra $h d_h \times d_h$ per-head rotation per token per layer — non-trivial.
+- **Apply RoPE to $c^{KV}_j$ before caching.** This puts the rotation on the wrong dimension: the latent has dimension $r$, not $h d_h$, and there is no factorisation of $W^{UK}$ that makes the rotation commute with the up-projection.
+
+Neither path is clean. DeepSeek-V2's fix, **decoupled RoPE**, is to *not* put the position information through the latent at all. Instead, augment each head with a small auxiliary positional component that bypasses the compression.
+
+### 3.1 The decoupled-RoPE construction
+
+Add two more projections:
+
+$$
+q_i^R = x_i\, W^{QR} \in \mathbb{R}^{h d_h^R}, \qquad k_i^R = x_i\, W^{KR} \in \mathbb{R}^{d_h^R},
+$$
+
+with $d_h^R \ll d_h$ (DeepSeek-V2 uses $d_h^R = 64$ and $d_h = 128$). The $q^R$ projection is *per head* (size $h d_h^R$); the $k^R$ projection is *shared across heads* (size $d_h^R$). RoPE is applied **only** to these auxiliary projections:
+
+$$
+\hat q_i^R = R_\theta(i)\, q_i^R, \qquad \hat k_j^R = R_\theta(j)\, k_j^R.
+$$
+
+The final per-head Q and K at position $i$ and head $\ell$ are *concatenations* of the latent-derived part (position-agnostic) and the decoupled-RoPE part (position-aware):
+
+$$
+\boxed{\
+q_{i, \ell} = \begin{bmatrix} (c_i^Q W^{UQ})_\ell \\ \hat q_{i, \ell}^R \end{bmatrix} \in \mathbb{R}^{d_h + d_h^R}, \qquad
+k_{j, \ell} = \begin{bmatrix} (c_j^{KV} W^{UK})_\ell \\ \hat k_j^R \end{bmatrix} \in \mathbb{R}^{d_h + d_h^R}.
+\ }
+$$
+
+The score is $\langle q_{i, \ell}, k_{j, \ell} \rangle / \sqrt{d_h + d_h^R}$ as standard. The dot product splits into a latent-derived term (no RoPE) and a decoupled-RoPE term (no latent):
+
+$$
+\langle q_{i, \ell}, k_{j, \ell} \rangle = \langle (c_i^Q W^{UQ})_\ell, (c_j^{KV} W^{UK})_\ell \rangle + \langle \hat q_{i, \ell}^R, \hat k_j^R \rangle.
+$$
+
+The first term captures content-based attention through the low-rank latent; the second term encodes relative position through RoPE on the small auxiliary heads. This is the *decoupling*: position and content live in separate sub-channels of the K vector.
+
+(The $c_i^Q$ in the formula is the analogous query-side latent, defined in §4 below; if you skip Q-side compression, replace $(c_i^Q W^{UQ})_\ell$ with $(x_i W^Q)_\ell$.)
+
+### 3.2 What goes into the cache
+
+The KV cache stores **two** things per token per layer:
+
+- $c_j^{KV} \in \mathbb{R}^{r}$ (the shared latent)
+- $\hat k_j^R \in \mathbb{R}^{d_h^R}$ (the decoupled RoPE K — *one* per token, not per head, because $W^{KR}$ is shared across heads)
+
+Total per token per layer: $r + d_h^R$ scalars. For DeepSeek-V2 ($r = 512, d_h^R = 64$), that is $576$ scalars per token per layer — still a $\sim 30\times$ shrink relative to MHA's $2 h d_h = 16{,}384$.
+
+The DeepSeek-V2 paper reports the cache as "$d_c + d_h^R$" scalars per token per layer, using $d_c$ for the latent dimension; the symbol $r$ in this session matches Bishop-style notation for "rank" and is more transparent.
+
+---
+
+## 4. The Q-side latent
+
+The construction can be applied to the query side too, for *parameter* savings rather than cache savings:
+
+$$
+c_i^Q = x_i\, W^{DQ} \in \mathbb{R}^{r_Q}, \qquad Q_i = c_i^Q\, W^{UQ} \in \mathbb{R}^{h d_h}.
+$$
+
+This is *not* about KV cache (queries are recomputed every step, not cached); it is about reducing the parameter count of $W^Q$. DeepSeek-V2 uses $r_Q = 1536$ for $d = 5120$, saving $\sim 60\%$ of the Q-projection parameters at a slight quality cost.
+
+This is a smaller win and is sometimes omitted. The cache-side latent on K and V (and the decoupled RoPE for positions) is the *structural* MLA idea; the Q-side latent is an orthogonal parameter-shrinking trick.
+
+---
+
+## 5. Iso-quality comparison vs MHA and GQA
+
+The DeepSeek-V2 paper reports head-to-head iso-FLOP comparisons against an equivalent-parameter MHA baseline:
+
+| Attention | Per-token KV (bytes, fp16) | Validation perplexity (DeepSeek-V2 64B-active) |
+|---|---:|---:|
+| MHA, $h = 128, d_h = 128$ | $65{,}536$ | $4.05$ |
+| GQA-$8$, $h = 128, d_h = 128, g = 8$ | $4{,}096$ | $4.09$ |
+| MQA, $h = 128, d_h = 128$ | $512$ | $4.20$ |
+| MLA, $r = 512, d_h^R = 64$ | $1{,}152$ | $4.04$ |
+
+The headline result: MLA achieves *better* perplexity than MHA at $\sim 56\times$ smaller cache. It outperforms GQA-$8$ at $\sim 4\times$ smaller cache. The MLA construction lets you cache substantially less than MQA *and* recover MHA-level quality, because the low-rank latent is a more expressive compression than "fewer heads."
+
+The expressivity argument: GQA-$g$ collapses $h/g$ query heads into sharing one K, V. The mapping from input to K is rank-$d_h$ per group ($W_K \in \mathbb{R}^{d \times d_h}$). MLA's latent $c^{KV}$ has rank-$r$ per *all* heads, and the up-projection $W^{UK}$ adds back the per-head structure. If $r$ is set to about $g d_h$ (so the per-token cache footprint is comparable), MLA spreads the rank across heads more flexibly than GQA does. The latent is, structurally, a richer compression than head sharing.
+
+<Aside type="note">
+**Is MLA strictly better than GQA?** Empirically, at iso-cache: yes, MLA achieves lower perplexity than GQA. So why doesn't every dense LLM use it? Three reasons. (1) MLA was published in mid-2024; the LLaMA-3 and Mistral-Large training runs preceded it. The Western frontier dense models will plausibly adopt MLA in the next training generation. (2) MLA training requires the decoupled-RoPE trick, which is one more piece of code to get right. GQA is conceptually simpler. (3) MLA's compute cost at decode is slightly higher per token (the up-projection adds FLOPs), but the bandwidth saving dominates at long contexts. For models that primarily serve short-context workloads, GQA is "good enough" with simpler code.
+</Aside>
+
+---
+
+## 6. The full MLA forward pass
+
+For concreteness, here is the MLA forward pass at a single layer, with both Q-side and KV-side latents and decoupled RoPE:
+
+```
+x : (T, d)
+
+# Q-side
+c_Q  = x @ W_DQ          # (T, r_Q)
+Q    = c_Q @ W_UQ        # (T, h * d_h), reshape (T, h, d_h)
+Q_R  = x @ W_QR          # (T, h * d_h^R), reshape (T, h, d_h^R)
+Q_R  = rope(Q_R)         # apply per-head RoPE rotation
+
+# KV-side (only c_KV and K_R are cached)
+c_KV = x @ W_DKV         # (T, r)               <-- CACHE
+K_R  = x @ W_KR          # (T, d_h^R)           <-- CACHE, shared across heads
+K_R  = rope(K_R)
+
+# Reconstruct per-head K and V from latent (at attention time)
+K    = c_KV @ W_UK       # (T, h, d_h)
+V    = c_KV @ W_UV       # (T, h, d_h)
+
+# Concatenate latent-derived and decoupled-RoPE per-head K
+K_full = concat(K, broadcast(K_R, h))   # (T, h, d_h + d_h^R)
+Q_full = concat(Q, Q_R)                 # (T, h, d_h + d_h^R)
+
+# Standard scaled dot-product attention
+scores = Q_full @ K_full.transpose / sqrt(d_h + d_h^R)
+scores = causal_mask(scores)
+attn   = softmax(scores)
+out    = attn @ V        # (T, h, d_h)
+out    = reshape(out, T, d) @ W_O
+```
+
+The cache footprint per token per layer is the storage of `c_KV` and `K_R` — $r + d_h^R$ scalars total. The rest is recomputed each step.
+
+---
+
+## 7. What we keep going forward
+
+1. **MLA factors $K$ and $V$ through a shared low-rank latent $c^{KV}$.** Only the latent is cached; per-head $K, V$ are reconstructed at attention time. Cache shrinks by $\sim h d_h / r$ per token per layer.
+
+2. **Decoupled RoPE handles the position-encoding obstruction.** A small auxiliary per-head $q^R$ and a shared $k^R$ carry the RoPE rotation in a parallel sub-channel; the position-aware sub-channel and the content-aware latent sub-channel are concatenated to form the full Q and K.
+
+3. **At iso-quality, MLA cache is $\sim 4$–$30\times$ smaller than GQA-$8$.** This is the most aggressive 2024-era KV-cache compression; it is the dominant attention variant in the DeepSeek V2/V3/R1 lineage and is plausibly where the field is heading.
+
+We have now covered both attention-side KV-cache shrinkers in Chapter 8: GQA (§8.3) and MLA (§8.5). The next session, MoE (§8.6), shifts to the FFN side and trades a different kind of cost — replacing the dense FFN with a sparse router-and-experts ensemble.
+
+<SelfTest>
+
+**(a)** Write the MLA factorisation of $K$ and $V$ via the shared latent $c^{KV}$. Identify the three matrices $W^{DKV}, W^{UK}, W^{UV}$ and their shapes. What is stored in the KV cache?
+
+**(b)** Compute the per-token cache footprint per layer in fp16 for MHA, GQA-$8$, and MLA at $h = 128, d_h = 128, g = 8, r = 512, d_h^R = 64$. Verify the numbers in §2.1 and §5.
+
+**(c)** State the RoPE obstruction of §3 in your own words. Why does the rotation not commute with the up-projection $W^{UK}$?
+
+**(d)** Write the decoupled-RoPE concatenation for $q_{i, \ell}$ and $k_{j, \ell}$. Show that the attention score decomposes into a latent-content term and a RoPE-position term that add.
+
+**(e)** Argue why MLA's decode-time *FLOPs* are slightly higher than MHA's but its decode-time *wall-clock latency* is dramatically lower. Cite the bandwidth analysis of [8.1 §3](/session/ch8-modern-llm-architectures/8.1-decoder-only).
+
+**(f)** Why does the field not consider GQA "obsolete" in 2026 despite MLA's better iso-quality numbers? List the three reasons of §5.
+
+</SelfTest>

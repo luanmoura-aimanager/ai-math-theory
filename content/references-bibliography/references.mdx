@@ -347,9 +347,66 @@ prerequisites: []
 
 ---
 
-## Chapters 8–12
+## Chapter 8 — Modern LLM architectures
 
-*To be populated as those chapters are written. The convention is to list, for each chapter, the textbooks used, primary papers cited, lecture series referenced, and any online resources that the chapter draws from.*
+**Primary papers — encoder-only.**
+
+- **Devlin, J., Chang, M.-W., Lee, K., & Toutanova, K.** (2018). "BERT: Pre-training of deep bidirectional transformers for language understanding". *NAACL*. [arXiv:1810.04805](https://arxiv.org/abs/1810.04805) — BERT, masked language modeling (8.2).
+- **Liu, Y., Ott, M., Goyal, N., et al.** (2019). "RoBERTa: A robustly optimized BERT pretraining approach". [arXiv:1907.11692](https://arxiv.org/abs/1907.11692) — Drops NSP, longer training (8.2).
+- **Clark, K., Luong, M.-T., Le, Q. V., & Manning, C. D.** (2020). "ELECTRA: Pre-training text encoders as discriminators rather than generators". [arXiv:2003.10555](https://arxiv.org/abs/2003.10555) — Replaced-token-detection objective; denser signal than MLM (8.2 §5).
+- **Wang, L., Yang, N., Huang, X., et al.** (2022). "Text embeddings by weakly-supervised contrastive pre-training" (E5). [arXiv:2212.03533](https://arxiv.org/abs/2212.03533) — Bidirectional-encoder embedder pretraining (8.2 §4).
+- **Wang, T., Roberts, A., Hesslow, D., et al.** (2022). "What language model architecture and pretraining objective work best for zero-shot generalization?". [arXiv:2204.05832](https://arxiv.org/abs/2204.05832) — Decoder-only-causal vs encoder-only-MLM vs encoder-decoder-span comparison (8.1 §4, 8.2 §3).
+
+**Primary papers — KV-cache attention variants.**
+
+- **Shazeer, N.** (2019). "Fast transformer decoding: One write-head is all you need" (MQA). [arXiv:1911.02150](https://arxiv.org/abs/1911.02150) — Multi-query attention (8.3).
+- **Ainslie, J., Lee-Thorp, J., de Jong, M., et al.** (2023). "GQA: Training generalized multi-query transformer models from multi-head checkpoints". [arXiv:2305.13245](https://arxiv.org/abs/2305.13245) — Grouped-query attention and the mean-pool uptraining recipe (8.3).
+- **DeepSeek-AI** (2024). "DeepSeek-V2: A strong, economical, and efficient mixture-of-experts language model". [arXiv:2405.04434](https://arxiv.org/abs/2405.04434) — Multi-head Latent Attention (MLA) with decoupled RoPE (8.5); also primary source for fine-grained MoE (8.6).
+- **DeepSeek-AI** (2024). "DeepSeek-V3 technical report". [arXiv:2412.19437](https://arxiv.org/abs/2412.19437) — V3 architecture: MLA + 256-expert fine-grained MoE + auxiliary-loss-free balancing (8.5, 8.6 §6).
+- **DeepSeek-AI** (2025). "DeepSeek-R1: Incentivizing reasoning capability in LLMs via reinforcement learning". [arXiv:2501.12948](https://arxiv.org/abs/2501.12948) — R1 architecture inherits V3's MLA + MoE (referenced in 8.5; primary citation in Cap 9.7).
+
+**Primary papers — FFN variants.**
+
+- **Dauphin, Y. N., Fan, A., Auli, M., & Grangier, D.** (2017). "Language modeling with gated convolutional networks". [arXiv:1612.08083](https://arxiv.org/abs/1612.08083) — Gated linear units (GLU); ancestor of SwiGLU (8.4 §2).
+- **Shazeer, N.** (2020). "GLU variants improve Transformer". [arXiv:2002.05202](https://arxiv.org/abs/2002.05202) — SwiGLU, GeGLU empirical sweep (8.4); also already cited in 2.3 and 6.8.
+- **Chowdhery, A., Narang, S., Devlin, J., et al.** (2022). "PaLM: Scaling language modeling with pathways". [arXiv:2204.02311](https://arxiv.org/abs/2204.02311) — Adopted GeGLU and dropped FFN biases; reference for the "no biases" convention (8.4 §5 Aside).
+- **Touvron, H., Lavril, T., Izacard, G., et al.** (2023). "LLaMA: Open and efficient foundation language models". [arXiv:2302.13971](https://arxiv.org/abs/2302.13971) — Architectural bundle: RMSNorm + RoPE + SwiGLU; defaults for $d_\text{ff} = (8/3)d$ (8.4 §3, 8.4 §5).
+
+**Primary papers — Mixture of Experts.**
+
+- **Shazeer, N., Mirhoseini, A., Maziarz, K., et al.** (2017). "Outrageously large neural networks: The sparsely-gated mixture-of-experts layer". [arXiv:1701.06538](https://arxiv.org/abs/1701.06538) — Original deep MoE with top-$k$ gating (8.6 §2).
+- **Lepikhin, D., Lee, H., Xu, Y., et al.** (2020). "GShard: Scaling giant models with conditional computation and automatic sharding". [arXiv:2006.16668](https://arxiv.org/abs/2006.16668) — Capacity factor, auxiliary load-balance loss, expert parallelism (8.6 §3, §6).
+- **Fedus, W., Zoph, B., & Shazeer, N.** (2021). "Switch Transformer: Scaling to trillion parameter models with simple and efficient sparsity". [arXiv:2101.03961](https://arxiv.org/abs/2101.03961) — Top-1 routing; standard auxiliary loss formulation (8.6 §3.1).
+- **Dai, D., Deng, C., Zhao, C., et al.** (2024). "DeepSeek-MoE: Towards ultimate expert specialization in mixture-of-experts language models". [arXiv:2401.06066](https://arxiv.org/abs/2401.06066) — Fine-grained experts + shared experts (8.6 §4).
+- **Jiang, A. Q., Sablayrolles, A., Roux, A., et al.** (2024). "Mixtral of experts". [arXiv:2401.04088](https://arxiv.org/abs/2401.04088) — Mixtral-8x7B; production MoE LLM (8.6 §5).
+- **Wang, L., Gao, H., Zhao, C., Sun, X., & Dai, D.** (2024). "Auxiliary-loss-free load balancing strategy for mixture-of-experts" (DeepSeek-V3 routing). [arXiv:2408.15664](https://arxiv.org/abs/2408.15664) — Control-loop-based balance without auxiliary loss (8.6 §6 Aside).
+
+**Primary papers — State Space Models.**
+
+- **Kalman, R. E.** (1960). "A new approach to linear filtering and prediction problems". *Trans. ASME—J. Basic Eng.*, 82, 35–45. — Canonical state-space formulation of linear filtering, ancestor of all SSM architectures (8.7 §2).
+- **Gu, A., Goel, K., & Ré, C.** (2022). "Efficiently modeling long sequences with structured state spaces" (S4). [arXiv:2111.00396](https://arxiv.org/abs/2111.00396) — Structured (diagonal-plus-low-rank) $A$ for efficient long-sequence SSM (8.7 §3.1).
+- **Gu, A., & Dao, T.** (2023). "Mamba: Linear-time sequence modeling with selective state spaces". [arXiv:2312.00752](https://arxiv.org/abs/2312.00752) — Selective SSM with input-dependent $\Delta, B, C$; hardware-aware parallel scan (8.7 §4).
+- **Dao, T., & Gu, A.** (2024). "Transformers are SSMs: Generalized models and efficient algorithms through structured state space duality" (Mamba-2). [arXiv:2405.21060](https://arxiv.org/abs/2405.21060) — SSM-attention duality; Mamba-2 architecture (8.7 §5.1).
+
+**Primary papers — Hybrid architectures.**
+
+- **Lieber, O., Lenz, B., Bata, H., et al.** (2024). "Jamba: A hybrid Transformer-Mamba language model". [arXiv:2403.19887](https://arxiv.org/abs/2403.19887) — 1 attention layer per 8; MoE in alternating layers (8.8 §2).
+- **Ren, L., Liu, Y., Lu, Y., et al.** (2024). "Samba: Simple hybrid state space models for efficient unlimited context language modeling". [arXiv:2406.07522](https://arxiv.org/abs/2406.07522) — Mamba + sliding-window attention; constant-cache long-context (8.8 §3).
+- **Pióro, M., Ciebiera, K., Krol, K., et al.** (2024). "MoE-Mamba: Efficient selective state space models with mixture of experts". [arXiv:2401.04081](https://arxiv.org/abs/2401.04081) — MoE FFN in Mamba blocks (8.8 §4).
+- **Dong, X., Fu, Y., Diao, S., et al.** (2024). "Hymba: A hybrid-head architecture for small language models" (NVIDIA). [arXiv:2411.13676](https://arxiv.org/abs/2411.13676) — Parallel attention + SSM in the same block (8.8 §4).
+- **Glorioso, P., Anthony, Q., Tokpanov, Y., et al.** (2024). "Zamba: A compact 7B SSM hybrid model" (Zyphra). [arXiv:2405.16712](https://arxiv.org/abs/2405.16712) — Shared attention block across Mamba layers (8.8 §4).
+- **De, S., Smith, S. L., Fernando, A., et al.** (2024). "Griffin: Mixing gated linear recurrences with local attention for efficient language models" (DeepMind). [arXiv:2402.19427](https://arxiv.org/abs/2402.19427) — Recurrent linear attention + local attention hybrid (8.8 §4).
+
+**Primary papers — Encoder-decoder (Appendix 8.A).**
+
+- **Raffel, C., Shazeer, N., Roberts, A., et al.** (2020). "Exploring the limits of transfer learning with a unified text-to-text transformer" (T5). *JMLR*. [arXiv:1910.10683](https://arxiv.org/abs/1910.10683) — Encoder-decoder with span corruption (Appendix 8.A); also cited in Ch 6 (T5 relative bias) and Ch 7 (C4 corpus).
+- **Tay, Y., Dehghani, M., Tran, V. Q., et al.** (2022). "UL2: Unifying language learning paradigms". [arXiv:2205.05131](https://arxiv.org/abs/2205.05131) — Mixture of denoisers; T5 successor (Appendix 8.A §5 Aside).
+
+---
+
+## Chapters 9–12
+
+*To be populated as those chapters are written.*
 
 ---
 

@@ -1,0 +1,146 @@
+---
+title: "8.A — Encoder-decoder (T5) [appendix]"
+chapter: 8
+order: 100
+estimatedMinutes: 18
+goal: "Define the encoder-decoder Transformer of T5: bidirectional encoder, causal decoder, cross-attention layer in the decoder. State the span-corruption denoising objective and the 'everything is text-to-text' framing. Place T5's role in 2026 (translation, structured generation) and its absence from the frontier."
+prerequisites: ["ch8-modern-llm-architectures/8.1-decoder-only", "ch8-modern-llm-architectures/8.2-encoder-only-bert", "ch6-attention-transformer/6.3-self-vs-cross-attention"]
+---
+
+## 1. Why this appendix exists
+
+The original AIAYN Transformer (Vaswani et al., 2017) was an **encoder-decoder** — exactly the architecture used in this appendix. The encoder reads a source sequence with bidirectional attention; the decoder generates a target sequence autoregressively, attending to its own past via causal self-attention *and* to the encoder's output via **cross-attention**. This is the natural shape for sequence-to-sequence problems: translation, summarisation, generic text-to-text rewrites.
+
+T5 (Raffel et al., 2020, "Exploring the limits of transfer learning with a unified text-to-text transformer", [arXiv:1910.10683](https://arxiv.org/abs/1910.10683)) is the canonical large-scale encoder-decoder LLM. It introduced the "everything is text-to-text" framing: every task — translation, classification, QA, summarisation — is cast as "given source text, produce target text". The architecture supports this with a clean separation of input encoding (encoder) and output generation (decoder).
+
+Encoder-decoder lost the frontier race to decoder-only (§8.1) for the reasons given there: the architecture costs roughly $2\times$ the parameters of an equivalent decoder-only model, and the empirical wins on generative benchmarks are absent. But it persists in 2026 for use cases that are *genuinely* seq2seq with structurally different input and output distributions: machine translation, code-to-natural-language, structured generation (e.g., schema-constrained outputs).
+
+This appendix defines the encoder-decoder architecture, the span-corruption objective, and the operational use cases where T5-style models still beat decoder-only.
+
+---
+
+## 2. The encoder-decoder architecture
+
+Two separate stacks share parameters with each other only via cross-attention.
+
+**Encoder.** $L_E$ blocks, identical to the encoder-only Transformer of §8.2: bidirectional self-attention + FFN, pre-norm. Input: a source sequence $X^\text{src} \in \mathbb{R}^{T_\text{src} \times d}$. Output: $Z^\text{enc} \in \mathbb{R}^{T_\text{src} \times d}$.
+
+**Decoder.** $L_D$ blocks, each containing **three** sub-layers (not the two of a decoder-only block):
+
+1. **Causal self-attention.** Decoder attends to its own past target positions. Same as the MHA of [6.4](/session/ch6-attention-transformer/6.4-multi-head-attention) with the causal mask of [6.5](/session/ch6-attention-transformer/6.5-causal-masking).
+2. **Cross-attention.** Decoder queries; encoder keys and values. Per decoder position $i$, attend to all encoder positions $j \in \{1, \dots, T_\text{src}\}$. No mask.
+3. **FFN.** Standard per-position FFN.
+
+In block notation:
+
+$$
+\boxed{\
+\begin{aligned}
+x' &= x + \text{Causal-SA}(\text{Norm}(x)) \\
+x'' &= x' + \text{Cross-Attn}(\text{Norm}(x'),\ K^\text{enc},\ V^\text{enc}) \\
+x_\text{out} &= x'' + \text{FFN}(\text{Norm}(x''))
+\end{aligned}
+\ }
+$$
+
+where $K^\text{enc} = Z^\text{enc} W_K^\text{cross}, V^\text{enc} = Z^\text{enc} W_V^\text{cross}$ are computed *once* per inference (after the encoder has run) and reused for every decoder step.
+
+### 2.1 Parameter and compute count
+
+The total parameter count of an encoder-decoder LLM is roughly $L_E + L_D$ Transformer-block-equivalents, with the decoder block having $\sim 50\%$ more parameters than the encoder block (the extra cross-attention sub-layer has $4 d^2$ in MHA-style projections). For T5-base with $L_E = L_D = 12, d = 768$: $\sim 220$M parameters, vs $\sim 110$M for an encoder-only or decoder-only model with the same per-block parameters and the same $L = 12$. **Encoder-decoder is roughly $2\times$ the parameters of decoder-only at the same depth and width.**
+
+At training time, both stacks run in parallel: the encoder processes the source, the decoder processes the target. Per training step the compute is roughly the sum of the two stacks: $\sim 6 (N_E + N_D) D$ where $N_E, N_D$ are the encoder and decoder parameter counts.
+
+At inference (encoder-decoder generation): the encoder runs once on the source (one prefill); the decoder runs autoregressively step by step, with the encoder's $K^\text{enc}, V^\text{enc}$ pre-cached and reused at every decoder step. The encoder's KV cache is *not* growing with decoder steps; only the decoder's self-attention KV cache grows.
+
+---
+
+## 3. Span corruption: the pretraining objective
+
+T5 pretrains on **span corruption** (sometimes called "denoising") rather than MLM or next-token-prediction.
+
+The recipe:
+
+1. Take a passage of length $T$.
+2. Choose a fraction $\rho \approx 0.15$ of tokens to corrupt. Group them into contiguous spans of mean length $\approx 3$.
+3. Replace each span with a sentinel token: $\langle X_0 \rangle, \langle X_1 \rangle, \dots$. Call the resulting string the **source**.
+4. The **target** is the concatenation of the original spans, separated by the corresponding sentinels: $\langle X_0 \rangle \text{ span}_0 \langle X_1 \rangle \text{ span}_1 \dots$.
+
+Example:
+
+- Original: "Thank you for inviting me to your party last week."
+- Source: "Thank you $\langle X_0 \rangle$ to your party $\langle X_1 \rangle$."
+- Target: "$\langle X_0 \rangle$ for inviting me $\langle X_1 \rangle$ last week."
+
+The encoder reads the source (with sentinels); the decoder generates the target. The loss is standard next-token cross-entropy on the target.
+
+The advantages over BERT's MLM:
+
+- **Variable-length spans.** Span corruption generates variable-length predictions per position; MLM is exactly one token per masked position. Variable length is empirically a richer signal.
+- **Decoder is autoregressive.** The decoder generates a sequence with its full machinery (cross-attention + causal self-attention + FFN) — every span is generated with full context, not in parallel. This is closer to the generative behaviour the model will be asked to perform at inference.
+- **Per-position supervision density.** Both encoder and decoder positions contribute to the loss path: the encoder via cross-attention into the decoder, the decoder via direct cross-entropy at each target position. The density is comparable to MLM but the *quality* of the supervision is higher.
+
+The T5 paper sweeps many denoising recipes (deshuffling, drop-token, swap-token, etc.); span corruption was the empirical winner and has remained the standard encoder-decoder objective.
+
+---
+
+## 4. "Everything is text-to-text"
+
+T5's headline framing: cast every NLP task as text-to-text, with a task-name prefix indicating the task. Examples:
+
+| Task | Input | Target |
+|---|---|---|
+| Translation EN→DE | "translate English to German: That is good." | "Das ist gut." |
+| Summarisation | "summarize: $\langle$ article body $\rangle$" | "$\langle$ summary $\rangle$" |
+| GLUE classification | "stsb sentence1: The cat sat. sentence2: A cat is sitting." | "4.2" |
+| QA | "question: who is the king of Sweden? context: $\langle$ passage $\rangle$" | "Carl Gustav" |
+
+This framing is the conceptual ancestor of modern prompt engineering: "describe the task in natural language, expect the model to produce the answer in natural language." GPT-3 inherited this view but dropped the encoder-decoder architecture; T5's framing survives the architectural change.
+
+---
+
+## 5. Where T5-style models are still used in 2026
+
+Decoder-only LLMs win on most generative benchmarks ([8.1 §4](/session/ch8-modern-llm-architectures/8.1-decoder-only)), but encoder-decoder retains specific niches:
+
+**(a) Machine translation.** Production NMT systems often still use encoder-decoder Transformers (M2M-100, NLLB-200, Madlad-400 are encoder-decoder). The reason: translation has a clean source/target separation and benefits from the bidirectional encoder reading the full source before any target generation. Decoder-only LLMs do translation well in 2026, but the dedicated encoder-decoder lineage still produces strong specialised models.
+
+**(b) Code-to-natural-language (and reverse).** When the input and output distributions are *very* different — say, code as input, natural-language explanation as output — separating the encoder and decoder lets each stack specialise. CodeT5, CodeT5+, and several proprietary code-doc models are encoder-decoder.
+
+**(c) Structured generation.** When the output has constrained syntax (JSON schema, SQL, regex, structured forms), encoder-decoder's clean separation between "understand input" and "produce structured output" is empirically robust. T5 variants are used in form-filling and slot-filling pipelines.
+
+**(d) Constrained-input embedding / retrieval.** Some retrieval pipelines use a T5 encoder as the embedder; the decoder is discarded after pretraining. This is an encoder-only use of an encoder-decoder pretrained model.
+
+These are non-trivial use cases but they are a small fraction of the LLM market by 2026. The frontier — chatbots, code copilots, RAG, agents — is decoder-only.
+
+<Aside type="history">
+**T5's unrealised potential.** Through 2020–2021, T5 was widely seen as a credible alternative to GPT-3. T5-11B was a strong model at the time of its release; UL2 (a T5 successor) and PaLM (which had a T5-like "prefix-LM" option) explored continuations. But by 2022, the GPT-3 lineage had taken the headlines, and the encoder-decoder line slowly faded from frontier work. The structural reasons (§8.1 §4) — denser causal LM signal per FLOP, lower parameter count per quality unit — eventually outweighed the encoder-decoder's per-task elegance. T5 was the *correct* architecture for the supervised-finetuning era it grew up in; decoder-only is the correct architecture for the prompt-and-in-context-learning era that succeeded it.
+</Aside>
+
+---
+
+## 6. What we keep going forward
+
+1. **Encoder-decoder = bidirectional encoder + causal decoder + decoder cross-attention to encoder output.** Parameter count roughly $2\times$ a decoder-only model at the same depth and width.
+
+2. **T5 pretrains with span corruption** — random spans replaced by sentinels in the source; decoder generates them in the target. Variable-length spans plus full autoregressive decoding distinguish this from BERT's MLM.
+
+3. **Encoder-decoder lost the frontier** for the reasons in [8.1 §4](/session/ch8-modern-llm-architectures/8.1-decoder-only): denser causal LM signal and lower parameter overhead. It persists in 2026 for translation, code-doc, and structured generation — workloads with clean source/target separation.
+
+This closes Chapter 8 in full. Chapter 9 turns to alignment: SFT, RLHF, DPO, GRPO — the recipes that turn a pretrained next-token predictor into an instruction-following assistant.
+
+<SelfTest>
+
+**(a)** Write the three-sub-layer encoder-decoder *decoder* block of §2. Identify which Q, K, V come from where in each sub-layer. Why is there no causal mask in cross-attention?
+
+**(b)** Encoder-decoder roughly doubles the parameter count of a decoder-only model at the same depth and width. Trace the doubling: which parts of the model are duplicated?
+
+**(c)** Span corruption: write the example transformation of §3. Why is "variable-length spans" claimed to be a richer signal than BERT's "one masked token per position"?
+
+**(d)** Translate (no pun intended) one GLUE classification example into T5's text-to-text framing. What conceptual move does this make available that BERT's classification head does not?
+
+**(e)** Name three task families in 2026 where encoder-decoder still beats decoder-only LLMs. Argue why each has structural reasons that favour the separated stack.
+
+**(f)** The text-to-text framing of §4 is the ancestor of modern prompt engineering. Identify the *structural* difference between T5's "translate English to German:" prefix and a 2026 LLaMA-3-Instruct prompt like "User: Translate this English to German: ... Assistant:".
+
+</SelfTest>

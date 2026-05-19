@@ -1,0 +1,144 @@
+---
+title: "8.2 — Encoder-only (BERT) — brief"
+chapter: 8
+order: 2
+estimatedMinutes: 18
+goal: "State BERT's masked-language-modeling objective and bidirectional attention; understand why encoder-only models lost the generative race but still dominate retrieval and embedding. Pin down the structural difference from decoder-only and the implication for training-signal density."
+prerequisites: ["ch8-modern-llm-architectures/8.1-decoder-only", "ch5-sequence-modeling/5.2-embeddings-word2vec"]
+---
+
+## 1. Why this session exists
+
+Encoder-only Transformers — BERT (Devlin et al., 2018, [arXiv:1810.04805](https://arxiv.org/abs/1810.04805)) and its descendants — were the dominant pretraining architecture from 2018 until GPT-3 (2020) re-centered the field on decoder-only generation. The post-GPT-3 view that encoder-only was a wrong turn is *partially* right: for *generation*, decoder-only is empirically the winner ([8.1 §4](/session/ch8-modern-llm-architectures/8.1-decoder-only)). For *embeddings, retrieval, and classification*, encoder-only remains the default in 2026: every state-of-the-art text embedder (E5, BGE, GTE, Mistral-Embed variants based on causal LMs notwithstanding) starts from a BERT-style bidirectional encoder.
+
+This session is brief on purpose. We pin down (a) the masked-language-modeling (MLM) objective, (b) bidirectional attention, (c) why the architecture is genuinely better than decoder-only for *encoding* tasks, and (d) why it lost for generation. The architectural details of the Transformer block are unchanged from Chapter 6; only the attention mask, the head, and the objective differ from §8.1.
+
+---
+
+## 2. The architectural difference: one mask, one objective
+
+An encoder-only Transformer has the same forward-pass skeleton as the decoder-only of [8.1 §2](/session/ch8-modern-llm-architectures/8.1-decoder-only):
+
+$$
+\text{tokens} \xrightarrow{\text{embed}} X^{(0)} \xrightarrow{L \text{ blocks}} X^{(L)} \xrightarrow{\text{head}} \text{output},
+$$
+
+with two changes.
+
+**(a) No causal mask.** Inside MHA, the attention pattern is
+
+$$
+A = \text{softmax}(Q K^\top / \sqrt{d_h})
+$$
+
+with *no* mask. Position $i$ attends to every position $j \in \{1, \dots, T\}$, including $j > i$. The encoder is **bidirectional**.
+
+**(b) Masked-language-modeling head and loss.** A fraction $p_\text{mask} \approx 0.15$ of tokens in the input are replaced (typically with $[\text{MASK}]$) before the forward pass. Let $\mathcal{M} \subset \{1, \dots, T\}$ be the masked positions. The output at each masked position is projected to the vocabulary, and the loss is
+
+$$
+\boxed{\ \mathcal{L}_\text{MLM}(\theta) = -\frac{1}{|\mathcal{M}|} \sum_{i \in \mathcal{M}} \log p_\theta(\hat t_i \mid t_{1:T \setminus \mathcal{M}}), \ }
+$$
+
+where $\hat t_i$ is the original (pre-masking) token at position $i$. The conditioning is on the *entire unmasked context* — left *and* right of position $i$.
+
+That is it. Same Transformer block, no causal mask, MLM loss instead of next-token CE. BERT's original paper added a second loss (Next Sentence Prediction, NSP), which was shown by RoBERTa (Liu et al., 2019, [arXiv:1907.11692](https://arxiv.org/abs/1907.11692)) to be unnecessary; modern encoder-only models drop it.
+
+### 2.1 The masking recipe, exactly
+
+The "$[\text{MASK}]$" substitution is more subtle than just "replace with $[\text{MASK}]$". BERT's recipe, kept in most descendants:
+
+- Sample $15\%$ of token positions uniformly.
+- Of those, $80\%$ are replaced with $[\text{MASK}]$.
+- $10\%$ are replaced with a random vocabulary token.
+- $10\%$ are left unchanged.
+
+The latter two cases force the model to (i) treat *every* token as potentially needing prediction (so it can't just learn "produce identity except at $[\text{MASK}]$") and (ii) be robust to the train/inference mismatch that $[\text{MASK}]$ does not appear at inference time. These details are minor at the level of the architecture but important when you compare MLM to other denoising objectives like span corruption (Appendix 8.A).
+
+---
+
+## 3. The signal-density problem
+
+The structural cost of MLM is the one we already named in [8.1 §4(a)](/session/ch8-modern-llm-architectures/8.1-decoder-only): only the $15\%$ of positions in $\mathcal{M}$ contribute to the loss. A causal LM contributes to the loss from *every* position.
+
+In concrete terms: training one BERT step on a length-$T$ sequence produces $\sim 0.15 T$ scalar loss contributions; the same FLOPs in a decoder-only LM produce $T$ loss contributions. The per-FLOP "supervision density" is about $1/0.15 \approx 6.7\times$ higher for causal LM.
+
+But MLM has a compensating advantage: each predicted position is conditioned on a *richer* context (both left and right) than a causal LM, which sees only the left. Per-position information density is higher; per-step position count is lower. Net: empirically, MLM is competitive with causal LM at small-to-medium scales (BERT-Large outperformed contemporary causal LMs on GLUE in 2018) but is dominated at large scales (GPT-3, 2020 onward, on generative benchmarks). Wang et al. (2022, [arXiv:2204.05832](https://arxiv.org/abs/2204.05832)) made this precise: at fixed compute, decoder-only causal LM beats encoder-only MLM on zero-shot generative tasks, but encoder-only MLM beats decoder-only on representation-quality benchmarks after the same pretraining budget.
+
+---
+
+## 4. Where encoder-only still wins in 2026
+
+The encoder-only line did not die after GPT-3; it specialised. Two domains where it is the default:
+
+**(a) Text embeddings and retrieval.** The job is: given a text, produce a $d_\text{emb}$-dimensional vector such that semantically similar texts have nearby vectors (in cosine or dot product). This is encoder-only's home turf: a bidirectional read produces a representation of the *whole* input, whereas a causal LM only ever encodes "the left context up to here." Pooling (mean-pool, $[\text{CLS}]$-pool) the final hidden states gives a single embedding per text.
+
+State of the art in 2026 mixes encoder-only foundations with contrastive fine-tuning:
+
+- **E5** (Wang et al., 2022, [arXiv:2212.03533](https://arxiv.org/abs/2212.03533)) and **E5-Mistral** (2024) — bidirectional encoder pretrained with web-scraped query-passage pairs.
+- **BGE** (BAAI General Embedding, 2023) — RoBERTa-style bidirectional encoder fine-tuned with hard-negative mining; dominant on the MTEB benchmark.
+- **GTE** (Alibaba, 2023) — similar recipe at scale.
+- **Cohere Embed v3**, **OpenAI text-embedding-3**, **Voyage** — closed-source descendants of the BERT lineage.
+
+Causal-LM-based embedders (e.g. NV-Embed using LLaMA-2 as a backbone) exist and are competitive, but require post-hoc tricks (bidirectional unmasking after the fact, or specialised pooling) to match bidirectional encoders.
+
+**(b) Classification and sequence labelling.** Named-entity recognition, span extraction, parse tagging, document classification. The pattern is "encoder + small classification head", trained or finetuned on labelled data. Encoder-only fits this naturally because per-token labels need per-token bidirectional context.
+
+**(c) Cross-encoder reranking.** Given a query and a passage, predict a relevance score by concatenating them and reading them with a bidirectional encoder. Higher quality than dual-encoder dot-product retrieval, but $O(N)$ per query instead of $O(1)$ after indexing.
+
+In 2026, retrieval-augmented generation (RAG) pipelines almost always use a *dual* architecture: a bidirectional encoder for the retrieval/embedding step, a decoder-only LM for the generation step. The two lineages now coexist by specialising.
+
+<Aside type="history">
+**BERT's brief reign.** From October 2018 (BERT release) through mid-2020 (GPT-3), encoder-only pretraining defined the NLP zeitgeist. Every NLP paper had to compare against BERT-base or BERT-large. GLUE and SuperGLUE benchmarks were saturated by BERT descendants (RoBERTa, ELECTRA, DeBERTa). Then GPT-3 demonstrated that scaling decoder-only causal LM produced *generation* and *in-context learning* in ways that no encoder-only model did, and the centre of gravity shifted. The encoder-only line retreated to embeddings and classification, where it remains the right tool, but lost the headline narrative.
+</Aside>
+
+---
+
+## 5. ELECTRA: a denser MLM signal
+
+One descendant of BERT worth naming because it fixes the signal-density problem of §3. ELECTRA (Clark et al., 2020, [arXiv:2003.10555](https://arxiv.org/abs/2003.10555)) replaces MLM with **replaced-token detection**:
+
+1. A small *generator* network (a tiny MLM) proposes replacement tokens for masked positions.
+2. The *discriminator* (the model we keep) reads the full sequence and predicts, *for every position*, whether the token there is original or replaced.
+
+The discriminator's loss has $T$ contributions per sequence, not $0.15 T$ — a binary classification at every position. ELECTRA matched BERT-Large quality with $\sim 1/4$ the compute and ran as the SOTA encoder pretraining recipe for a few years. It remains the conceptual demonstration that encoder-only can *also* have dense supervisory signal if the objective is reformulated.
+
+ELECTRA is not the dominant encoder pretraining recipe in 2026 (most modern embedders still use MLM-pretrained backbones like RoBERTa or DeBERTa, then contrastive fine-tune), but the existence of denser-than-MLM objectives is worth keeping in mind if you ever need to pretrain a new encoder.
+
+---
+
+## 6. What we do not get from encoder-only
+
+The two structural properties we lose, relative to decoder-only:
+
+**(a) Generation.** A bidirectional encoder has no built-in notion of "next token." To use it for generation, you have to either retrofit a causal mask at inference time (which retrains the distribution it was trained on) or stack a separate decoder with cross-attention (which is encoder-decoder, Appendix 8.A). Neither is competitive with native decoder-only generation at scale.
+
+**(b) In-context learning.** The GPT-3 phenomenon — few-shot prompting producing zero-shot-strong behaviour on new tasks — is, empirically, a decoder-only phenomenon. The leading hypothesis is that in-context learning emerges from the autoregressive training objective itself (induction heads, [6.4 §4](/session/ch6-attention-transformer/6.4-multi-head-attention); see Olsson et al., 2022). Bidirectional encoders trained with MLM do not show comparable in-context learning at any scale tested.
+
+These two are non-negotiable for the use cases that decoder-only LLMs target. They are the reason that "encoder-only" is, in 2026, mostly a synonym for "an embedder built from a small bidirectional Transformer."
+
+---
+
+## 7. What we keep going forward
+
+For Chapter 8, the takeaways are short.
+
+1. **Architecturally,** the encoder-only Transformer differs from decoder-only by exactly two things: no causal mask, and an MLM head with $\sim 15\%$ position supervision per step.
+2. **It lost the generative race** because next-token-prediction with causal attention has higher supervisory density per FLOP and is a structural match to autoregressive sampling.
+3. **It won the embedding race** because bidirectional reads produce stronger whole-input representations.
+4. **A retrieval-augmented LLM pipeline in 2026 uses both** — an encoder-only embedder for retrieval, a decoder-only LM for generation.
+
+The rest of Chapter 8 covers decoder-only refinements; we will not return to encoder-only.
+
+<SelfTest>
+
+**(a)** Write down BERT's MLM loss. Identify the set $\mathcal{M}$ and the conditioning set. Why is the masked-out token's identity used as the prediction target rather than $[\text{MASK}]$ itself?
+
+**(b)** Compute the per-step supervision density (loss contributions per token) for (i) causal LM, (ii) BERT MLM at $p_\text{mask} = 0.15$, (iii) ELECTRA replaced-token detection. Which gives the densest signal?
+
+**(c)** Explain, in two sentences each, why encoder-only is the right choice for (i) producing a sentence embedding for semantic search and (ii) running an NER tagger over a paragraph. In both, point to bidirectionality as the structural reason.
+
+**(d)** Modern retrieval-augmented generation uses an encoder-only embedder *and* a decoder-only generator. Sketch the data flow. Why does it not unify into a single architecture?
+
+**(e)** Mark one statement as true or false and justify: *"At very large scale, encoder-only MLM eventually overtakes decoder-only causal LM on zero-shot generative benchmarks."* Cite Wang et al. (2022).
+
+</SelfTest>

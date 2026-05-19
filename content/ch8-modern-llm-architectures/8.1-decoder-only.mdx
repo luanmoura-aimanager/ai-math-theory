@@ -1,0 +1,223 @@
+---
+title: "8.1 — Decoder-only (GPT family)"
+chapter: 8
+order: 1
+estimatedMinutes: 22
+goal: "Write down the decoder-only Transformer in one diagram: token embedding, L causal pre-norm blocks, final norm, tied LM head. Justify why this single-stack architecture became the default for generative LLMs, contrast it with encoder-only and encoder-decoder, and connect prefill / decode to the KV-cache picture of 6.14."
+prerequisites: ["ch7-training-language-models/7.14-gpt3-paper-read", "ch6-attention-transformer/6.11-transformer-block-aiayn", "ch6-attention-transformer/6.14-kv-cache"]
+---
+
+## 1. Why this session exists
+
+Chapters 6 and 7 built the Transformer block and the modern pretraining recipe; the closing read of [7.14](/session/ch7-training-language-models/7.14-gpt3-paper-read) made the historical case that GPT-3 settled the architecture. This session names the resulting object — the **decoder-only Transformer** — and pins down, in one diagram, what it actually is: a single stack of $L$ causal pre-norm blocks between a token embedding and a tied linear head that emits next-token logits.
+
+That seems like a small thing to dedicate a session to. But "decoder-only" is the load-bearing assumption behind every refinement in the rest of Chapter 8 (GQA, SwiGLU, MLA, MoE). Every later session perturbs *one* sub-module of the decoder-only stack without disturbing the skeleton. So we want the skeleton crisp before we start cutting into it.
+
+We also need to be explicit about *why* this beat its alternatives — encoder-only (BERT, §8.2) and encoder-decoder (T5, Appendix 8.A) — for generative use. The answer is partly an empirical accident of scaling, partly a structural property of causal attention plus next-token-prediction, and the structural part is worth stating cleanly.
+
+---
+
+## 2. The decoder-only stack, end to end
+
+Fix vocabulary size $V$, hidden size $d$, number of heads $h$, head dimension $d_h = d/h$, FFN width $d_\text{ff}$, depth $L$, and context length $T_\text{ctx}$.
+
+A decoder-only Transformer is a function $f_\theta : \{1, \dots, V\}^T \to \mathbb{R}^{T \times V}$ that maps a sequence of $T \leq T_\text{ctx}$ token IDs to a $T \times V$ matrix of next-token logits. Its body is:
+
+$$
+\boxed{\
+\begin{aligned}
+& \text{tokens } (t_1, \dots, t_T) \xrightarrow{\text{embed}} X^{(0)} \in \mathbb{R}^{T \times d} \\
+& \text{for } \ell = 1, \dots, L: \quad X^{(\ell)} = \text{Block}_\ell(X^{(\ell-1)}) \\
+& Z = \text{Norm}_\text{final}(X^{(L)}) \in \mathbb{R}^{T \times d} \\
+& \text{logits} = Z \, W_U \in \mathbb{R}^{T \times V}
+\end{aligned}
+\ }
+$$
+
+with each block
+
+$$
+\text{Block}_\ell(X) = X + \text{FFN}_\ell(\text{Norm}(X + \text{MHA}_\ell^\text{causal}(\text{Norm}(X)))),
+$$
+
+i.e. the **pre-norm** layout of [6.10 §3](/session/ch6-attention-transformer/6.10-pre-vs-post-norm) with a causal mask inside MHA ([6.5](/session/ch6-attention-transformer/6.5-causal-masking)). The trainable parameters $\theta$ are: the token embedding $W_E \in \mathbb{R}^{V \times d}$, the per-layer $\{W_Q, W_K, W_V, W_O, W_\text{ff}^{1,2}, \gamma_\text{attn}, \gamma_\text{ffn}\}_\ell$, the final norm $\gamma_\text{final}$, and the LM head $W_U \in \mathbb{R}^{d \times V}$. Positional information is injected *inside* MHA via RoPE ([6.7](/session/ch6-attention-transformer/6.7-rope)) and therefore does *not* appear as a separate embedding term in the stack equation.
+
+Every adjective in "decoder-only Transformer" is there to distinguish it from a near neighbour:
+
+- **Decoder** because the attention is causal: $\text{softmax}(Q K^\top / \sqrt{d_h})$ has a $-\infty$ mask on positions $j > i$, so position $i$ sees only positions $\leq i$. Equivalently, $f_\theta$ is an autoregressive joint $p_\theta(t_{1:T}) = \prod_t p_\theta(t_t \mid t_{<t})$.
+- **Only** because there is exactly one stack — no separate encoder, no cross-attention sub-layer. Contrast with encoder-decoder T5 (Appendix 8.A).
+
+The whole architecture fits in the seven lines above; the rest of Chapter 8 is local edits to it.
+
+### 2.1 Tied embedding
+
+For all GPT-family models since GPT-2, the LM head $W_U$ is *tied* to the embedding $W_E^\top$:
+
+$$
+W_U = W_E^\top \in \mathbb{R}^{d \times V},
+$$
+
+so the same $V \cdot d$ parameters serve both as the input projection (token ID $\to$ hidden) and as the output projection (hidden $\to$ vocab logit). Press & Wolf (2017) showed this both saves parameters ($V \cdot d$ is non-trivial — for GPT-3, $V = 50{,}257, d = 12{,}288$, so $W_E$ alone is $\sim 617$M parameters) and slightly improves perplexity, because the two roles are deeply related: a token's embedding *is* the direction in residual-stream space that, dotted against the final hidden state, should produce a large logit when that token is next.
+
+We will assume tied embeddings throughout this chapter; the only architectural variant that breaks the tie at scale is when $V$ is itself partitioned across devices (vocabulary parallelism), where engineering convenience sometimes wins.
+
+---
+
+## 3. Parameter count and the skeleton's compute
+
+The per-layer parameter count — derived in [6.4 §3](/session/ch6-attention-transformer/6.4-multi-head-attention) and [6.8 §4](/session/ch6-attention-transformer/6.8-ffn) — is
+
+$$
+\#\theta_\text{layer} = \underbrace{4 d^2}_\text{MHA: } _{W_Q, W_K, W_V, W_O} + \underbrace{2 d \cdot d_\text{ff}}_\text{FFN} + \underbrace{2 d}_\text{two LN } \gamma.
+$$
+
+With the standard $d_\text{ff} = 4d$, this is $4 d^2 + 8 d^2 + 2 d = 12 d^2 + 2 d$, dominated by $12 d^2$. The total parameter count is
+
+$$
+\boxed{\ N \approx \underbrace{V \cdot d}_\text{embedding (tied)} + L \cdot (12 d^2 + 2 d) + \underbrace{d}_\text{final } \gamma. \ }
+$$
+
+For GPT-3-175B ($L = 96, d = 12{,}288, V = 50{,}257, d_\text{ff} = 4d$): $12 d^2 \approx 1.81 \cdot 10^9$ per layer, times 96 layers $\approx 1.74 \cdot 10^{11}$, plus $V \cdot d \approx 6.17 \cdot 10^8$ for the (tied) embedding, total $\approx 1.75 \cdot 10^{11}$. The skeleton equation predicts the paper figure to within 1%.
+
+The compute per training step is the **$6 N D$** rule ([6.12](/session/ch6-attention-transformer/6.12-compute-and-memory), [7.11 §3](/session/ch7-training-language-models/7.11-scaling-laws-kaplan)). For inference, two regimes:
+
+- **Prefill** (process a length-$T_p$ prompt in one forward pass): $\approx 2 N T_p$ FLOPs total, $O(T_p)$ wall-clock per layer.
+- **Decode** (generate one token, exploiting the KV cache of [6.14](/session/ch6-attention-transformer/6.14-kv-cache)): $\approx 2 N$ FLOPs per token, dominated by *parameter movement* from HBM to SRAM rather than by FLOPs — i.e., decode is **memory-bandwidth-bound**, not compute-bound.
+
+The decoder-only architecture *creates* the prefill / decode asymmetry. The whole story of GQA / MQA (§8.3) and MLA (§8.5) is: decode is bandwidth-bound, the bandwidth is dominated by reading the KV cache, so shrinking the KV cache directly improves decode latency. Every refinement in this chapter that touches K and V is, at root, a decode-bandwidth optimisation.
+
+---
+
+## 4. Why decoder-only won for generation
+
+Three reasons, in increasing order of structural depth.
+
+**(a) The training signal is dense.** A causal decoder predicts $t_t$ from $t_{<t}$ for *every* position $t = 1, \dots, T$. One forward pass on a length-$T$ sequence produces $T$ next-token predictions and $T$ contributions to the loss — every token in the batch gets supervised. Compare to BERT's MLM (§8.2), which masks $\sim 15\%$ of tokens, so only $\sim 0.15 T$ positions per sequence carry training signal. Per-FLOP, decoder-only LM pretraining has roughly $1/0.15 \approx 7\times$ the supervisory density of MLM.
+
+**(b) Causal attention is exactly the inductive bias of generation.** A generative model defines $p_\theta(t_{1:T}) = \prod_t p_\theta(t_t \mid t_{<t})$ — strictly causal. A bidirectional encoder, by construction, lets every position attend to every other; using such a model to *generate* requires either (i) running it as a *prefix-LM* with a triangular mask at decode time (which is exactly equivalent to using a decoder), or (ii) using a separate decoder stack with cross-attention (encoder-decoder). The first reduces to decoder-only with extra training mismatch; the second doubles the parameter count.
+
+**(c) Scaling-law observation.** Wang et al. (2022, "What language model architecture and pretraining objective work best for zero-shot generalization?", arXiv:2204.05832) ran the systematic study: at fixed compute, decoder-only with causal LM beats encoder-only with MLM and beats encoder-decoder with span corruption on zero-shot generative tasks. Encoder-decoder closes the gap with *multitask finetuning*, but decoder-only is the winner under the GPT-3 recipe of "pretrain on next-token prediction, then prompt." Empirically: every frontier generative LLM since 2020 is decoder-only.
+
+<Aside type="history">
+**The post-BERT generation gap.** From late 2018 (BERT release) through early 2020 (GPT-3 release), the consensus was that encoder-only models were "better than" decoder-only models for *understanding* and that decoders were a separate, less-studied lineage. GPT-2 (2019) was widely seen as a curiosity. The GPT-3 paper inverted the consensus by showing that *enough* decoder-only LM pretraining produces in-context learning, and the encoder-only line was relegated to embeddings and retrieval (where it still dominates — see §8.2). The lesson, in retrospect, is that the choice of pretraining objective dominates the choice of architecture: next-token prediction at scale is what produces generative capability, and the architecture is the one that supports it cleanly.
+</Aside>
+
+---
+
+## 5. Variants we will *not* call "decoder-only"
+
+Two near neighbours, both still in active use, are worth naming so we can be precise about what we exclude.
+
+**Prefix-LM.** A single Transformer stack with attention that is *bidirectional* over a designated prefix and *causal* over the suffix. UL2 (Tay et al., 2022) and PaLM-2's pretraining mix this with standard causal LM. It is a hybrid: bidirectional reads on the conditioning prompt, autoregressive writes on the completion. We do not treat this as decoder-only because the mask structure differs.
+
+**Encoder-only with autoregressive head.** Some retrieval and embedding pipelines re-purpose a BERT-style encoder as a generator by sticking a small autoregressive head on top. This is rare for generation but common for structured prediction (BERT for NER, etc.). It is encoder-only in our taxonomy.
+
+These are interesting variants; for the rest of Chapter 8 we restrict to pure decoder-only because that is what every frontier model is.
+
+---
+
+## 6. The block, with all 2026-era refinements named
+
+The decoder-only skeleton has not changed since GPT-2. The *block contents* have. Here is the canonical 2026 frontier-LLM block, with every component labelled and a pointer to its own session:
+
+```
+x ── RMSNorm ── MHA(causal, RoPE, GQA / MLA) ── + ──┐
+│                                                    │
+└────────────────────────────────────────────────────┤
+                                                     │
+        ┌──────────── + ◀── FFN(SwiGLU) ── RMSNorm ──┘
+        │
+        x_out
+```
+
+Component-by-component, what is new since 2020:
+
+| Sub-module | 2020 (GPT-3) | 2026 (frontier) | Session |
+|---|---|---|---|
+| Normalisation | LayerNorm | **RMSNorm** | [3.8](/session/ch3-optimization-regularization/3.8-layernorm-rmsnorm) |
+| Block placement | Pre-LN | Pre-RMSNorm | [6.10](/session/ch6-attention-transformer/6.10-pre-vs-post-norm) |
+| Positional encoding | Learned absolute | **RoPE** | [6.7](/session/ch6-attention-transformer/6.7-rope) |
+| Attention pattern | Dense or alternating-sparse | Dense + FlashAttention | [6.12](/session/ch6-attention-transformer/6.12-compute-and-memory) |
+| K / V head sharing | Multi-Head (no sharing) | **GQA** or **MLA** | [8.3](/session/ch8-modern-llm-architectures/8.3-gqa-mqa), [8.5](/session/ch8-modern-llm-architectures/8.5-mla) |
+| FFN activation | GELU (2-matrix) | **SwiGLU** (3-matrix) | [8.4](/session/ch8-modern-llm-architectures/8.4-swiglu-geglu) |
+| Layer sparsity | Dense FFN | Dense or **MoE** | [8.6](/session/ch8-modern-llm-architectures/8.6-mixture-of-experts) |
+| Tied embedding | Tied | Tied (or untied if vocab-parallel) | §2.1 |
+
+Every row in the "2026" column is a one-session edit to the block. None of them changes the *skeleton* — the loop `for ℓ in 1..L: x = block(x)` and the head `logits = Norm(x) W_E^⊤`. That stability is itself a striking fact: six years after GPT-3, the architectural skeleton has not moved; only the contents of each block have been refined.
+
+---
+
+## 7. Why we are *not* changing the skeleton in Chapter 8
+
+A reasonable question, before we dive into local refinements: are there any decoder-only-skeleton-level changes happening at the frontier? Two candidates and the honest answer for each.
+
+- **State Space Models (Mamba).** §8.7 covers them. They are *not* decoder-only Transformers — they have no attention at all. But every leading SSM-based model in 2026 is a *hybrid* (§8.8) that interleaves Mamba blocks with Transformer blocks, i.e. it keeps decoder-only-with-attention as the dominant skeleton and inserts SSM blocks as alternatives in some layers. The skeleton survives.
+- **Mixture of Experts (MoE).** §8.6 covers them. MoE replaces the FFN sub-layer with $E$ parallel FFNs and a router. The block diagram in §6 above is unchanged; the FFN box just contains a top-$k$ router and several experts. The skeleton survives.
+
+So Chapter 8 is, structurally, "decoder-only Transformer + a list of FFN, attention, and norm refinements." We will name the refinements one at a time.
+
+<Aside type="note">
+**What about the head?** The "LM head" $W_U$ is the unembedding projection from $d$ to $V$. In 2026 frontier models it is almost always tied to the embedding (§2.1). One refinement that occasionally appears: an additional normalisation just before the head (some implementations call this "logit normalisation" or "z-loss"; Gemini-1 used it, T5 used it, and it stabilises softmax saturation in very large vocabularies). It is a small detail and we treat it in implementation, not as architectural.
+</Aside>
+
+---
+
+## 8. From skeleton to forward pass: one explicit example
+
+To make the skeleton concrete, let us run a length-$3$ sequence through a 2-layer decoder-only with $d = 4, h = 2, d_h = 2, d_\text{ff} = 16$ (toy sizes; one block is fully written out — the other is identical).
+
+Input tokens $(t_1, t_2, t_3)$. Embedding lookup:
+
+$$
+X^{(0)} = \begin{bmatrix} W_E[t_1] \\ W_E[t_2] \\ W_E[t_3] \end{bmatrix} \in \mathbb{R}^{3 \times 4}.
+$$
+
+Pre-norm: $\tilde X = \text{RMSNorm}(X^{(0)}) \in \mathbb{R}^{3 \times 4}$.
+
+MHA: per head, $Q^{(\ell)} = \tilde X W_Q^{(\ell)}, K^{(\ell)} = \tilde X W_K^{(\ell)}, V^{(\ell)} = \tilde X W_V^{(\ell)}$. Apply RoPE to $Q, K$ ([6.7](/session/ch6-attention-transformer/6.7-rope)). Compute causal attention:
+
+$$
+S = Q K^\top / \sqrt{d_h} \in \mathbb{R}^{3 \times 3}, \quad \tilde S_{ij} = \begin{cases} S_{ij}, & j \leq i, \\ -\infty, & j > i. \end{cases}
+$$
+
+Row-wise softmax $A = \text{softmax}(\tilde S)$ is lower-triangular: $A_{ij} = 0$ for $j > i$. Then $O^{(\ell)} = A V^{(\ell)} \in \mathbb{R}^{3 \times 2}$. Concatenate heads: $O = [O^{(1)}; O^{(2)}] \in \mathbb{R}^{3 \times 4}$. Output projection: $A_\text{out} = O W_O$. Add to residual: $X' = X^{(0)} + A_\text{out}$.
+
+FFN: $\tilde X' = \text{RMSNorm}(X')$, then $\text{FFN}(\tilde X')$ per position. Add to residual: $X^{(1)} = X' + \text{FFN}(\tilde X')$.
+
+Repeat for layer 2 (identical structure, different weights). Final norm: $Z = \text{RMSNorm}(X^{(2)})$. Logits: $\text{logits} = Z W_E^\top \in \mathbb{R}^{3 \times V}$.
+
+The loss is row-wise causal cross-entropy:
+
+$$
+\mathcal{L}(\theta) = -\frac{1}{T} \sum_{t = 1}^{T} \log \text{softmax}(\text{logits}_t)_{t_{t+1}},
+$$
+
+i.e. the cross-entropy of "predict the next token at each position." This is what GPT-1, GPT-2, GPT-3, LLaMA-1/2/3, Mistral, DeepSeek, Qwen, and every frontier generative LLM is trained on. Different in number of layers, hidden dim, vocabulary, data — same loss.
+
+---
+
+## 9. What we will keep going forward
+
+Two things matter from this session for the rest of Chapter 8:
+
+1. **The skeleton diagram of §6.** Every later session edits one box. When we get to MLA in §8.5, the only change is what is inside the "MHA" box. When we get to SwiGLU in §8.4, the only change is what is inside the "FFN" box. When we get to MoE in §8.6, the FFN box becomes a router-plus-experts. The skeleton is the invariant.
+
+2. **Decode is bandwidth-bound, prefill is compute-bound.** The reason GQA, MLA, MoE, and Mamba all *exist* is that decode latency is dominated by HBM-to-SRAM bandwidth, not by FLOPs. Every refinement that touches K and V (§8.3, §8.5) shrinks the per-step memory read. Every refinement that touches the FFN (§8.4, §8.6) shrinks per-step parameter movement (SwiGLU) or activates a small fraction of parameters per token (MoE). Mamba (§8.7) eliminates the KV cache entirely. Hybrids (§8.8) trade off between attention's recall and SSM's per-token efficiency.
+
+The next two sessions name the two alternatives the field considered and dropped (encoder-only, §8.2) and that the field considered and kept for a small slice of use cases (encoder-decoder, Appendix 8.A). Then we begin the refinements.
+
+<SelfTest>
+
+**(a)** Write down, from memory, the seven-line decoder-only forward pass of §2. Identify which line(s) hold the position information. Where does causality come from?
+
+**(b)** A frontier model has $L = 80, d = 8192, d_\text{ff} = 4d, V = 128k$, tied embedding. Estimate $N$ using $\#\theta_\text{layer} = 12 d^2 + 2 d$. State which terms dominate.
+
+**(c)** GPT-3-175B has $V = 50{,}257, d = 12{,}288$. How many parameters are in the (tied) embedding $W_E$? What fraction of the total $1.75 \cdot 10^{11}$ is that? Why is this fraction *larger* for smaller models?
+
+**(d)** Argue, citing §4(a), why an MLM-trained encoder of the same parameter count and same data has a lower training-signal-per-FLOP than a causal LM. Why doesn't this immediately make decoder-only LMs strictly better at every downstream task?
+
+**(e)** Inference of a decoder-only model is split into prefill and decode. Which is compute-bound, which is bandwidth-bound, and *why*? Trace your answer to the KV-cache equation of [6.14 §3](/session/ch6-attention-transformer/6.14-kv-cache).
+
+**(f)** Sketch the 2026 block diagram of §6 in your own notation. For each sub-module listed in the table, name the session in Chapter 6, 7, or 8 where that choice is justified.
+
+</SelfTest>

@@ -31,6 +31,10 @@
     "title": "Chapter 7 — Training language models",
     "order": 7
   },
+  "ch8-modern-llm-architectures": {
+    "title": "Chapter 8 — Modern LLM architectures",
+    "order": 8
+  },
   "references-bibliography": {
     "title": "References & bibliography",
     "order": 99

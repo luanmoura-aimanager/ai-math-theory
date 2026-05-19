@@ -1,0 +1,224 @@
+---
+title: "8.6 — Mixture of Experts (MoE)"
+chapter: 8
+order: 6
+estimatedMinutes: 28
+goal: "Replace the dense FFN with a router-plus-experts sparse layer. Derive the top-k gate, the load-balancing auxiliary loss, and the activated-vs-total parameter distinction. Place Switch Transformer, GShard, and the fine-grained DeepSeek-MoE design within one framework, and connect to expert parallelism."
+prerequisites: ["ch6-attention-transformer/6.8-ffn", "ch8-modern-llm-architectures/8.4-swiglu-geglu"]
+---
+
+## 1. Why this session exists
+
+The dense FFN of [6.8](/session/ch6-attention-transformer/6.8-ffn) and the SwiGLU FFN of [§8.4](/session/ch8-modern-llm-architectures/8.4-swiglu-geglu) have one structural property in common: *every token* visits *every FFN parameter*. The compute per token is $\sim 16 d^2$ per layer, the parameter access per token is $\sim 8 d^2$ — the whole FFN block is read from memory and applied densely.
+
+**Mixture of Experts (MoE)** breaks this coupling. Replace the single FFN with $E$ parallel FFNs ("experts") plus a small *router* that, per token, selects the top-$k$ most relevant experts. Each token visits only $k$ of $E$ experts. Compute per token: $\sim 16 d^2 \cdot (k / E')$, where $E'$ is an effective expert count discussed below. Total parameter count: $\sim 16 d^2 \cdot E$ (with a constant set by how wide each expert is). The decoupling: **parameters scale with $E$; compute scales with $k$**.
+
+Frontier models in 2024–2026 routinely have $E \in [8, 256]$ experts with $k \in [1, 8]$ activated per token. Mixtral-8x7B uses $E = 8, k = 2$ — $47$B total parameters, $\sim 13$B activated per token. DeepSeek-V3 uses $E = 256$ fine-grained experts + 1 shared expert with $k = 8$ activated — $671$B total, $37$B activated. The model has GPT-4-scale capacity at $\sim 1/20$ of GPT-4's inference cost per token.
+
+This session derives the construction (router, top-$k$, output mix), the load-balancing auxiliary loss that prevents expert collapse, and the operational tradeoffs (expert parallelism, capacity factor, fine-grained design). MoE is the largest architectural perturbation in Chapter 8.
+
+---
+
+## 2. The basic MoE layer
+
+Replace one FFN sub-layer with $E$ identical-shape **experts** $\{f_e\}_{e=1}^{E}$, each being a standard SwiGLU FFN with its own parameters:
+
+$$
+f_e(x) = \bigl( (x W_1^{(e)}) \odot \text{Swish}(x W_2^{(e)}) \bigr) W_3^{(e)} \in \mathbb{R}^{d}.
+$$
+
+A small **router** matrix $W_g \in \mathbb{R}^{d \times E}$ produces per-token gate logits:
+
+$$
+\text{router}(x) = x\, W_g \in \mathbb{R}^{E}.
+$$
+
+The router selects the top-$k$ experts per token by largest gate logit. Let $\mathcal{T}_k(x) \subset \{1, \dots, E\}$ be the set of top-$k$ indices for token $x$, and define normalised soft weights over those:
+
+$$
+g_e(x) = \begin{cases} \dfrac{\exp(\text{router}(x)_e)}{\sum_{e' \in \mathcal{T}_k(x)} \exp(\text{router}(x)_{e'})}, & e \in \mathcal{T}_k(x), \\ 0, & \text{otherwise}. \end{cases}
+$$
+
+The MoE layer output is the convex combination of the $k$ activated experts' outputs:
+
+$$
+\boxed{\ \text{MoE}(x) = \sum_{e \in \mathcal{T}_k(x)} g_e(x)\, f_e(x). \ }
+$$
+
+This replaces the single FFN in a Transformer block. Everything outside the FFN — attention, residuals, normalisation — is unchanged.
+
+### 2.1 Compute and parameter counts
+
+Per token per layer:
+
+- **Router**: $E$ logits via $x W_g$, then a top-$k$ selection (sorting cost $O(E \log k)$, negligible). Compute: $2 d E$ FLOPs.
+- **$k$ expert evaluations**: $16 d^2$ per expert (using $d_\text{ff} = (8/3) d$ as in [§8.4 §3](/session/ch8-modern-llm-architectures/8.4-swiglu-geglu)), times $k$ activated experts. Compute: $16 d^2 k$ FLOPs.
+- **Combine**: $k$ scalar multiplications and additions on $d$-vectors, $O(k d)$, negligible.
+
+Total: $\approx 16 d^2 k$ FLOPs per token per layer, plus $2 d E$ for the router. For $E \gg k$, the FFN compute *per token* is the same as a dense FFN of width $d_\text{ff} = (8/3) k d$. We say the model has **$k$ active experts**.
+
+Parameter count for the MoE FFN sub-layer:
+
+$$
+\#\theta_\text{MoE-FFN} = E \cdot (3 d \cdot d_\text{ff}) + d E = E \cdot 8 d^2 + d E,
+$$
+
+where the first term is the experts and the second term is the router. For $E = 64$, $d = 4096$: experts use $E \cdot 8 d^2 \approx 8.6 \cdot 10^9$ parameters per MoE layer, vs $8 d^2 \approx 1.3 \cdot 10^8$ for a dense FFN. **Total parameters scale linearly with $E$.**
+
+So the decoupling: $N_\text{total} \propto E$, $N_\text{active per token} \propto k$. At $E = 64, k = 2$, the model has $32\times$ more parameters than a dense baseline but spends only $2\times$ the FFN compute per token. The arithmetic of "more parameters per token for less than proportional compute" is the entire economic argument for MoE.
+
+---
+
+## 3. The load-balancing problem
+
+The router learns to assign tokens to experts. There is no a priori constraint that says "every expert should be assigned roughly the same number of tokens." Without intervention, the router has a strong incentive to **collapse**: a few experts become "popular" and absorb most tokens, the rest become unused. This is bad for two reasons:
+
+1. **Capacity is wasted.** The unused experts' parameters contribute nothing; effective parameter count drops from $E$ to the number of frequently-used experts.
+2. **Expert-parallel hardware utilisation drops.** Experts are typically sharded one-per-device (§6 below). If $80\%$ of tokens go to $20\%$ of experts, $80\%$ of the devices are idle for $80\%$ of the time.
+
+The fix, introduced in the GShard paper (Lepikhin et al., 2020, [arXiv:2006.16668](https://arxiv.org/abs/2006.16668)) and refined in Switch Transformer (Fedus et al., 2021, [arXiv:2101.03961](https://arxiv.org/abs/2101.03961)), is an **auxiliary load-balancing loss** added to the training objective.
+
+### 3.1 The Switch Transformer auxiliary loss
+
+For each MoE layer, let $f_e$ be the fraction of tokens (within a training batch) that route to expert $e$ and let $P_e$ be the *router probability* mass assigned to expert $e$, averaged over the batch:
+
+$$
+f_e = \frac{1}{T_\text{batch}} \sum_{i=1}^{T_\text{batch}} \mathbb{1}[e \in \mathcal{T}_k(x_i)], \qquad P_e = \frac{1}{T_\text{batch}} \sum_{i=1}^{T_\text{batch}} \text{softmax}(x_i W_g)_e.
+$$
+
+The auxiliary loss:
+
+$$
+\boxed{\ \mathcal{L}_\text{aux} = \alpha \cdot E \cdot \sum_{e=1}^{E} f_e \cdot P_e. \ }
+$$
+
+It is added to the LM cross-entropy with weight $\alpha \in [10^{-3}, 10^{-2}]$. The product $f_e \cdot P_e$ is the empirical "activity" of expert $e$; the sum is minimised when both $f_e$ and $P_e$ are uniform $= 1/E$, in which case $\sum_e f_e P_e = 1/E$ and $\mathcal{L}_\text{aux} = \alpha$. Any deviation from uniform routing makes $\mathcal{L}_\text{aux}$ larger.
+
+The loss is *differentiable in $P_e$* (the router's softmax output) but *not* in $f_e$ (which is the hard top-$k$ assignment). The trick: $\mathcal{L}_\text{aux}$ drives the router's continuous probabilities $P_e$ towards uniform, which empirically dragsthe hard top-$k$ assignments $f_e$ in the same direction.
+
+### 3.2 Capacity factor and dropping
+
+A second balancing tool: cap the number of tokens any single expert can process per batch at
+
+$$
+\text{capacity} = \frac{T_\text{batch} \cdot k}{E} \cdot c,
+$$
+
+where $c \geq 1$ is the **capacity factor**. Tokens beyond the cap are *dropped* (the residual stream still propagates them, but they skip the MoE layer entirely — equivalent to the expert output being zero). Capacity factor $c = 1.0$ means strict balance; $c = 1.25$–$2.0$ leaves slack. Larger $c$ means fewer drops but more wasted compute on padding.
+
+Capacity-factor dropping was central to early Switch Transformer training; modern MoE designs (DeepSeek-MoE, Mixtral) use auxiliary-loss-only or "auxiliary-loss-free" variants that adjust the router's logits to enforce balance without dropping.
+
+---
+
+## 4. Fine-grained experts: DeepSeek-MoE
+
+Switch Transformer used $E = 64$, $k = 1$ (a single expert per token), with each expert being a *full-width* SwiGLU FFN. Mixtral-8x7B used $E = 8$, $k = 2$, again with full-width experts.
+
+DeepSeek-MoE (Dai et al., 2024, [arXiv:2401.06066](https://arxiv.org/abs/2401.06066)) introduced the **fine-grained expert** design: make each expert *smaller* (lower $d_\text{ff}$) but have many more of them, with $k$ correspondingly larger. The activated parameter count is the same; what changes is the *combinatorial capacity* of the gating.
+
+Concretely: a baseline of $E = 8, k = 2$ has $\binom{8}{2} = 28$ possible 2-expert combinations per token. Splitting each expert into $4$ pieces gives $E = 32, k = 8$ — same activated compute, but now $\binom{32}{8} = 10{,}518{,}300$ possible 8-expert combinations. Each combination is a distinct "skill" the layer can specialise to.
+
+DeepSeek-MoE's empirical finding: at iso-activated-parameters and iso-total-parameters, fine-grained MoE outperforms coarse MoE. DeepSeek-V2 uses $E = 160 + 2$ shared experts with $k = 6 + 2$; DeepSeek-V3 uses $E = 256 + 1$ shared with $k = 8 + 1$. The "+ shared" experts are *always* activated for every token — they capture the cross-expert common knowledge that would otherwise have to be redundantly replicated.
+
+### 4.1 Shared experts
+
+A **shared expert** is an FFN that runs for every token, in addition to the top-$k$ routed experts. The MoE output becomes
+
+$$
+\text{MoE}(x) = f_\text{shared}(x) + \sum_{e \in \mathcal{T}_k(x)} g_e(x)\, f_e(x).
+$$
+
+The shared expert is the "common knowledge" path; the routed experts specialise in their respective niches. Empirically, having $1$–$2$ shared experts prevents the routed experts from each having to relearn basic syntactic and lexical patterns, and improves quality at iso-parameters.
+
+---
+
+## 5. The activated-vs-total parameter convention
+
+MoE models are *always* reported with both an "activated" and a "total" parameter count. The convention:
+
+- **Total parameters**: the count you would get by summing all $\theta$ in the model, including all experts.
+- **Activated parameters**: the count of parameters touched per token per forward pass — including attention, normalisation, embedding, *all of $k$ activated experts*, and the router.
+
+For Mixtral-8x7B: $47$B total, $\sim 13$B activated. For DeepSeek-V3: $671$B total, $37$B activated. For DBRX (Mosaic, 2024): $132$B total, $36$B activated.
+
+The activated count is the relevant number for *compute* (and therefore for both training and inference cost). The total count is the relevant number for *capacity* and (importantly) for *memory* — the full model still has to fit in GPU memory across the cluster, even if only a fraction is used per token.
+
+Two consequences:
+
+1. **MoE shifts the parameter-to-compute ratio.** A dense $13$B model and a MoE model with $13$B activated parameters spend the same compute per token, but the MoE model has substantially more capacity. At iso-compute, MoE typically outperforms dense on knowledge-heavy benchmarks (MMLU, GSM8K) and is roughly tied on reasoning (HumanEval, MATH) — the latter being the workloads where attention compute matters more than FFN capacity.
+
+2. **MoE requires more memory.** The full $E$ experts must be resident across the inference cluster. This is the dominant reason MoE serving uses many GPUs even at modest batch sizes — the parameters are large.
+
+---
+
+## 6. Expert parallelism
+
+A practical question: at $E = 256$ experts, how do you train and serve the model? You cannot keep all $256$ experts in one GPU's memory.
+
+The standard solution is **expert parallelism**: shard the experts across devices, one (or a few) per device. Each GPU holds only its assigned experts' parameters. At each MoE layer:
+
+1. Every device computes the router's top-$k$ for its local tokens.
+2. An **all-to-all** collective communication redistributes each token to the device(s) hosting its top-$k$ experts.
+3. Each device runs its experts on the tokens it received.
+4. A second all-to-all sends the expert outputs back to each token's origin device.
+5. Each device combines its tokens' expert outputs as $\sum_e g_e f_e$.
+
+The two all-to-alls per MoE layer add communication cost — typically $\sim 10$–$20\%$ of total step time at the cluster scales used for MoE training. The load-balancing loss is critical here: if tokens are unbalanced across experts, some devices receive far more tokens than others and become the bottleneck.
+
+Expert parallelism is orthogonal to (and composes with) the data/tensor/pipeline parallelism axes of [7.9](/session/ch7-training-language-models/7.9-tensor-pipeline-parallelism). A modern MoE training run uses **DP $\times$ TP $\times$ PP $\times$ EP**, with EP typically $= E / (\text{experts per device})$.
+
+<Aside type="note">
+**Auxiliary-loss-free balancing.** DeepSeek-V3 (2024) introduced an "auxiliary-loss-free" load balancing scheme: instead of adding $\mathcal{L}_\text{aux}$ to the loss, dynamically maintain a per-expert *bias* $b_e$ added to the router logits, increased for under-used experts and decreased for over-used experts (a control loop, not a gradient). The empirical claim is that this preserves balance without the gradient interference from the auxiliary loss. Subsequent MoE work has split between auxiliary-loss-only, auxiliary-loss-free, and hybrid schemes; the field has not converged.
+</Aside>
+
+---
+
+## 7. When does MoE help, and when does it not?
+
+MoE is not a free win — it is a specific tradeoff with operational costs (memory, communication) that pay off for *some* workloads.
+
+**MoE helps most:**
+
+- **Knowledge-heavy tasks.** FFN parameters store factual knowledge ([6.8 §6 Aside](/session/ch6-attention-transformer/6.8-ffn) on "FFN as key-value memory"). More total FFN parameters = more capacity to store facts = better closed-book QA, MMLU, etc.
+- **Multi-domain / multi-skill workloads.** Different experts specialise to different domains (one for code, one for poetry, one for math, etc.); a dense model would have to compress all domains into the same FFN.
+- **Inference-cost-sensitive deployment at sufficient scale.** If you have the GPU memory to host the full model, the per-token serving cost is dictated by activated parameters — MoE serves cheaper than a dense model of equivalent capability.
+
+**MoE does not help (or hurts):**
+
+- **Pure reasoning / chain-of-thought tasks.** Long-context reasoning is attention-compute-dominated, not FFN-capacity-dominated. MoE's wins are smaller here.
+- **Small models.** At sub-$10$B total parameters, the FFN capacity gain is small relative to the routing overhead and load-balancing constraints.
+- **Memory-constrained single-GPU inference.** All $E$ experts must be resident; this rules out MoE for many edge / on-device deployments.
+
+The frontier in 2026 is mixed: GPT-4, Claude-3+, Gemini-1.5+ are believed to be MoE; LLaMA-3 was dense; DeepSeek-V3 is aggressively MoE; Mistral-Large is dense; Mixtral is MoE. The choice depends on the deployment target and the organisation's tolerance for the operational complexity.
+
+---
+
+## 8. What we keep going forward
+
+1. **MoE replaces the FFN with $E$ experts and a top-$k$ router.** Activated parameters $\propto k$, total parameters $\propto E$ — the two are decoupled.
+
+2. **Load-balancing is required.** Without an auxiliary loss (or an auxiliary-loss-free control loop), the router collapses to a few popular experts. The standard auxiliary loss is $\mathcal{L}_\text{aux} = \alpha E \sum_e f_e P_e$.
+
+3. **Fine-grained experts ($E = 64$–$256$, $k = 6$–$8$) outperform coarse experts ($E = 8, k = 2$) at iso-activated-compute.** Adding a small number of always-on **shared experts** further improves quality by carrying common knowledge.
+
+4. **Expert parallelism shards experts across devices.** Two all-to-all collectives per MoE layer; expensive but standard. MoE training composes with DP × TP × PP as a fourth parallelism axis.
+
+5. **MoE is a knowledge-capacity tool**, not a compute-saver. It pays off most for knowledge-heavy tasks at sufficient scale, and pays cost in memory and communication.
+
+The next two sessions (§8.7 and §8.8) leave the Transformer block entirely: state space models replace attention with a different sequence operator, and hybrid architectures interleave attention and SSM layers. Then we close the chapter with the encoder-decoder T5 appendix.
+
+<SelfTest>
+
+**(a)** Write the MoE forward equation $\text{MoE}(x) = \sum_{e \in \mathcal{T}_k} g_e(x) f_e(x)$ in full. Identify the router, the top-$k$ selection, and the soft weights. Why are $g_e$ normalised over only $\mathcal{T}_k$, not all $E$?
+
+**(b)** For Mixtral-8x7B ($E = 8, k = 2$, dense expert with $d = 4096$, $d_\text{ff} = (8/3) d$), compute the per-MoE-layer (i) total parameters in experts, (ii) activated parameters per token, (iii) router parameters. Confirm the reported $47$B / $13$B total / activated.
+
+**(c)** State the load-balancing auxiliary loss of §3.1. Show that it is minimised when $f_e = P_e = 1/E$ for all $e$, giving $\mathcal{L}_\text{aux} = \alpha$.
+
+**(d)** Fine-grained MoE: a baseline $E = 8, k = 2$ has $\binom{8}{2} = 28$ expert combinations. Compute the number of combinations for DeepSeek-V3 ($E = 256, k = 8$). Argue why this combinatorial capacity is the empirical reason fine-grained MoE outperforms coarse MoE.
+
+**(e)** Trace the data flow through a single MoE layer under expert parallelism: the two all-to-alls, the per-device computation, the load-balance dependence. Where does throughput collapse if balance is poor?
+
+**(f)** Argue why MoE helps knowledge-heavy benchmarks (MMLU) more than reasoning benchmarks (MATH). Cite the FFN-as-knowledge view of [6.8 §6](/session/ch6-attention-transformer/6.8-ffn).
+
+</SelfTest>

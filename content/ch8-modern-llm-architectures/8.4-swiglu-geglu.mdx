@@ -1,0 +1,197 @@
+---
+title: "8.4 — SwiGLU and GeGLU: the modern FFN"
+chapter: 8
+order: 4
+estimatedMinutes: 22
+goal: "Define gated linear units (GLU), specialise to SwiGLU and GeGLU, and derive why modern LLMs use them in place of the two-matrix GELU FFN of AIAYN. Count parameters and FLOPs, fix the d_ff = 8d/3 rule that preserves the per-layer parameter budget, and connect to the RMSNorm partner pre-norm."
+prerequisites: ["ch6-attention-transformer/6.8-ffn", "ch3-optimization-regularization/3.8-layernorm-rmsnorm", "ch2-mlps-backprop/2.3-activations"]
+---
+
+## 1. Why this session exists
+
+The original Transformer FFN of [6.8](/session/ch6-attention-transformer/6.8-ffn) is a two-matrix MLP: expand from $d$ to $d_\text{ff} = 4d$, apply ReLU (in AIAYN) or GELU (in GPT-3), contract back to $d$. Two matrices, one elementwise non-linearity. Total parameters $8 d^2$, no biases in modern LLMs.
+
+Every frontier LLM since LLaMA-1 (2023) has replaced this with a **gated linear unit (GLU)** variant — three matrices, two of which feed an elementwise *gating* product. SwiGLU (used by LLaMA, Mistral, Qwen, Gemma) and GeGLU (used by PaLM, T5-v1.1) are the two dominant choices. The change is small in code (one extra matmul plus a Hadamard product) and consistent in empirical effect ($0.1$–$0.3$ perplexity improvement at fixed parameter count, free with no hyperparameter tuning).
+
+The reason to do a full session on what looks like a syntactic detail is twofold. First: the move from two matrices to three matrices changes the per-layer parameter count by $50\%$ if $d_\text{ff}$ is kept fixed, so the standard adjustment is $d_\text{ff} = (8/3) d$ to preserve the parameter budget — a number that surprises every reader who first sees it in a code base and is worth deriving. Second: SwiGLU is now the *only* surviving non-trivial 2026 modification of the AIAYN block, so understanding it is part of understanding what current LLMs are.
+
+---
+
+## 2. Gated linear units, from first principles
+
+A **GLU** in its general form (Dauphin et al., 2017, "Language modeling with gated convolutional networks", [arXiv:1612.08083](https://arxiv.org/abs/1612.08083)) is the elementwise product of a linear transformation and a *gate* — another linear transformation passed through a sigmoid:
+
+$$
+\text{GLU}(x) = (x W) \odot \sigma(x V), \qquad W, V \in \mathbb{R}^{d \times d_\text{ff}}.
+$$
+
+The gate $\sigma(xV)$ is a smooth elementwise mask in $[0, 1]^{d_\text{ff}}$ that multiplicatively gates each unit of the un-gated linear projection $xW$. Conceptually: the model can "open" or "close" individual hidden units conditional on the input, in contrast to a fixed pointwise non-linearity like ReLU or GELU which applies the same shape at every unit.
+
+Shazeer (2020, "GLU variants improve Transformer", [arXiv:2002.05202](https://arxiv.org/abs/2002.05202)) swept replacements for the sigmoid in the GLU formula and showed empirically that two variants outperformed the others *and* outperformed the AIAYN ReLU FFN:
+
+- **GeGLU**: replace $\sigma$ with GELU. $\text{GeGLU}(x) = (x W) \odot \text{GELU}(x V)$.
+- **SwiGLU**: replace $\sigma$ with Swish (Ramachandran, Zoph & Le 2017, equal to SiLU, $\text{Swish}(z) = z \cdot \sigma(z)$). $\text{SwiGLU}(x) = (x W) \odot \text{Swish}(x V)$.
+
+The full FFN sub-layer with a GLU gate uses a *third* matrix to project back to $d$:
+
+$$
+\boxed{\
+\text{FFN}_\text{SwiGLU}(x) = \bigl( (x W_1) \odot \text{Swish}(x W_2) \bigr)\, W_3,
+\ }
+$$
+
+with $W_1, W_2 \in \mathbb{R}^{d \times d_\text{ff}}$ and $W_3 \in \mathbb{R}^{d_\text{ff} \times d}$. (Many code bases use the symbol naming $W_\text{up}, W_\text{gate}, W_\text{down}$ for $W_1, W_2, W_3$; we will use the numbered convention because it matches AIAYN's $W_1, W_2$ and reduces the chance of confusion.)
+
+For comparison, the AIAYN FFN with GELU is
+
+$$
+\text{FFN}_\text{GELU}(x) = \text{GELU}(x W_1)\, W_2,
+$$
+
+two matrices, no Hadamard product. The structural new thing in SwiGLU is the elementwise multiplication of two parallel projections of $x$.
+
+### 2.1 Why a Hadamard product helps
+
+Mechanistically, the gate $\text{Swish}(xW_2)$ supplies a multiplicative interaction term that the original two-matrix FFN cannot produce: a single matmul-plus-nonlinearity cannot express products of two input components, while a gated unit can. Whether the model exploits this in any specific interpretable way is debated, but the empirical observation is that gating helps. The Shazeer paper concluded only "we offer no explanation as to why these architectures seem to work; we attribute their success, as all else, to divine benevolence" — a famously honest sentence that has been quoted in every subsequent FFN paper.
+
+A useful intuition: a SwiGLU unit at index $k$ outputs $\langle x, W_1^{(k)} \rangle \cdot s_k$ where $s_k = \text{Swish}(\langle x, W_2^{(k)} \rangle) \in (-0.28, \infty)$ is a learned, input-dependent scale. The model can pick a *direction* $W_1^{(k)}$ to project $x$ onto and *separately* pick a *predicate* $W_2^{(k)}$ that decides whether that projection contributes at all (Swish $\approx 0$ when $\langle x, W_2^{(k)} \rangle \ll 0$) or with what magnitude. This is a richer per-unit computation than ReLU's "fire or don't fire" on a single linear combination.
+
+---
+
+## 3. Parameter count, and the $d_\text{ff} = 8d/3$ rule
+
+The standard AIAYN FFN has
+
+$$
+\#\theta_\text{FFN}^\text{AIAYN} = 2 d \cdot d_\text{ff} = 2 d \cdot 4 d = 8 d^2
+$$
+
+at $d_\text{ff} = 4d$. The SwiGLU FFN with the same $d_\text{ff}$ has
+
+$$
+\#\theta_\text{FFN}^\text{SwiGLU} = 3 d \cdot d_\text{ff} = 3 d \cdot 4 d = 12 d^2,
+$$
+
+a $50\%$ increase. If we want SwiGLU to be a *drop-in* replacement that keeps the per-layer parameter budget fixed, we must shrink $d_\text{ff}$ to compensate. The condition is
+
+$$
+3 d \cdot d_\text{ff}^\text{SwiGLU} \stackrel{!}{=} 2 d \cdot d_\text{ff}^\text{GELU} = 8 d^2 \implies d_\text{ff}^\text{SwiGLU} = \frac{8}{3} d.
+$$
+
+So the rule that surprises every reader of the LLaMA source code:
+
+$$
+\boxed{\ d_\text{ff}^\text{SwiGLU} = \frac{8}{3} d, \ }
+$$
+
+with the convention that $d_\text{ff}$ is then *rounded* to a multiple of $256$ (or $128$, or the local TP-friendly granularity) for hardware efficiency. LLaMA-1-7B: $d = 4096, \lfloor 8 d / 3 \rfloor = 10922 \to 11008$ (multiple of $256$). LLaMA-2-70B: $d = 8192, \lfloor 8 d / 3 \rfloor = 21845 \to 28672$ (much larger, because in larger models the SwiGLU FFN was given extra width). The "$8/3$" rule sets the lower bound; many models exceed it for the larger sizes.
+
+### 3.1 Why "exactly $8/3$" is not actually sacred
+
+The point of the $8/3$ rule is parameter parity at the *block* level — so that an MLM, LLaMA-1, or GPT-3 of the same advertised $N$ uses the same compute. There is no theorem that says "wider is worse" or "narrower is worse." Empirically, frontier LLMs use $d_\text{ff} / d \in [2.5, 3.5]$ for SwiGLU (so around $8/3$) and $d_\text{ff} / d = 4$ for the GELU FFN of GPT-3 / OPT. Either choice is sensible; what is required is consistency about what " $N$ " means.
+
+### 3.2 FLOPs count
+
+Per-position per-layer compute in the SwiGLU FFN ($d_\text{ff} = (8/3) d$):
+
+- $x W_1$: $2 d \cdot (8/3) d = (16/3) d^2$ FLOPs.
+- $x W_2$: $(16/3) d^2$ FLOPs.
+- Swish + Hadamard: $O(d_\text{ff}) = O(d)$, negligible.
+- $(\cdot) W_3$: $2 (8/3) d \cdot d = (16/3) d^2$ FLOPs.
+
+Total: $16 d^2$ FLOPs per position per layer (vs $16 d^2$ for the AIAYN FFN at $d_\text{ff} = 4 d$ — same, by construction). So SwiGLU is compute-equivalent to the GELU FFN at the parameter-matched width.
+
+(Note: $16 d^2$ in FLOPs is the multiply-add count times 2; the per-position FFN FLOPs in the [6.12](/session/ch6-attention-transformer/6.12-compute-and-memory) accounting was also $16 d^2$, so $6 N D$ is unchanged.)
+
+---
+
+## 4. SwiGLU vs GeGLU vs GELU vs ReLU: the empirical picture
+
+Shazeer (2020) Table 1, on T5 pretraining (small-scale, but cleanly controlled):
+
+| Variant | Activation | Pretraining log-perplexity |
+|---|---|---:|
+| ReLU FFN (AIAYN) | $\max(0, z)$ | $1.838$ |
+| GELU FFN (GPT-3) | $z \cdot \Phi(z)$ | $1.829$ |
+| Swish FFN | $z \cdot \sigma(z)$ | $1.830$ |
+| GLU (sigmoid) | $\sigma$ | $1.819$ |
+| **GeGLU** | GELU as gate | $1.808$ |
+| **SwiGLU** | Swish as gate | $1.808$ |
+
+The takeaways:
+
+1. Replacing ReLU with GELU or Swish in the standard two-matrix FFN gives a tiny ($\sim 0.01$ log-perplexity) improvement.
+2. Switching from a single non-linearity to a *gated* form gives a larger ($\sim 0.02$ log-perplexity) improvement at fixed parameter count.
+3. The choice of activation inside the gate (sigmoid vs Swish vs GELU) is a smaller effect than the gating itself; SwiGLU and GeGLU are essentially tied.
+
+The numbers look small in absolute terms but at scale (and at fixed compute) they translate to a noticeable downstream-benchmark improvement. By 2023 every Western LLM had switched to SwiGLU, and GeGLU is the same idea with a different activation (PaLM picked it; LLaMA picked Swish; the field is non-religious about the choice).
+
+---
+
+## 5. The RMSNorm partner
+
+The 2026 frontier block of [8.1 §6](/session/ch8-modern-llm-architectures/8.1-decoder-only) uses SwiGLU paired with **RMSNorm pre-normalisation** ([3.8 §6](/session/ch3-optimization-regularization/3.8-layernorm-rmsnorm)). The pairing is not a coincidence:
+
+- The SwiGLU input is normalised by RMSNorm: $\text{FFN}_\text{SwiGLU}(\text{RMSNorm}(x))$. This is the same pre-norm placement as in pre-LN Transformer ([6.10 §3](/session/ch6-attention-transformer/6.10-pre-vs-post-norm)); the only change is the swap LayerNorm $\to$ RMSNorm.
+- The choice $d_\text{ff} = (8/3) d$ depends on the parameter-counting convention; it does not depend on which normalisation is upstream.
+
+The pairing is a coincidence of historical timing: SwiGLU (Shazeer 2020), RMSNorm (Zhang & Sennrich 2019), and RoPE (Su et al. 2021) were all on the table by mid-2021, and LLaMA-1 (Touvron et al. 2023) combined all three plus AdamW into a single architectural reset. Subsequent LLMs inherited the bundle.
+
+<Aside type="note">
+**What about biases?** The original FFN ([6.8 §2](/session/ch6-attention-transformer/6.8-ffn)) had biases $b_1, b_2$. SwiGLU FFNs in LLaMA / Mistral / Qwen omit *all* biases — in attention projections, in the FFN matrices, and in RMSNorm (RMSNorm has only $\gamma$, no $\beta$, by construction). The removal of biases was originally a PaLM choice (Chowdhery et al., 2022) and was adopted by LLaMA-1; the empirical evidence is that biases hurt training stability at large scale by adding low-magnitude noise to every linear sub-layer's output. The 2026 frontier convention is bias-free linear layers throughout, with normalisation providing the only learnable additive offsets.
+</Aside>
+
+---
+
+## 6. Reference implementation, the entire block
+
+For concreteness, here is the LLaMA-style block, with SwiGLU + RMSNorm + RoPE-aware MHA:
+
+```python
+def block(x, params):
+    # x: (T, d)
+    # Pre-norm attention
+    h = rms_norm(x, params.attn_gamma)              # (T, d)
+    h = mha_with_rope_and_gqa(h, params.attn)        # (T, d)
+    x = x + h                                         # residual
+
+    # Pre-norm FFN: SwiGLU
+    h = rms_norm(x, params.ffn_gamma)               # (T, d)
+    gate = h @ params.W2                              # (T, d_ff)
+    up   = h @ params.W1                              # (T, d_ff)
+    h = (silu(gate) * up) @ params.W3                # (T, d)
+    x = x + h                                         # residual
+    return x
+```
+
+Where `silu(z) = z * sigmoid(z)` is Swish. The three FFN matmuls — `W1`, `W2`, `W3` — are the only thing in this block that changed from the GPT-3-era code (where you would see two matmuls with `gelu` between them and no Hadamard product). Everything else is identical to a vanilla pre-LN Transformer with RMSNorm instead of LayerNorm and RoPE-modified Q, K.
+
+In production code, `W1` and `W2` are often *concatenated* into a single $d \times 2 d_\text{ff}$ matrix `W_up_gate` and computed in one matmul, then split — this saves one kernel launch and improves GPU utilisation. The mathematical content is unchanged.
+
+---
+
+## 7. What we keep going forward
+
+1. **SwiGLU is a 3-matrix gated FFN** with a Hadamard product between an "up" projection and a Swish-gated "gate" projection, then a "down" projection. GeGLU is the same with GELU as the gate non-linearity. SwiGLU and GeGLU are empirically tied; the choice is cosmetic.
+
+2. **The $d_\text{ff} = (8/3) d$ rule preserves the AIAYN per-layer parameter count** of $8 d^2$ — divide by 2 (because 3 matrices instead of 2) and multiply by the ratio $4 / (8/3) = 3/2$ to get $\times 3/2 \times 1/(3/2) = 1$. Frontier models round up to a hardware-friendly multiple.
+
+3. **It pairs with RMSNorm + RoPE** in the 2026 frontier block. The bundle "RMSNorm + RoPE + SwiGLU + GQA" is the LLaMA-1 recipe and remains the default for dense decoder-only models.
+
+The next session, MLA (§8.5), returns to the attention side with the most aggressive KV-cache compression in 2026 frontier models.
+
+<SelfTest>
+
+**(a)** Write the SwiGLU FFN with matrices $W_1, W_2, W_3$ explicit. Identify which is the "gate" projection. Now write GeGLU and the (non-gated) GELU FFN of AIAYN for comparison. How many matrices does each have?
+
+**(b)** Derive the $d_\text{ff} = (8/3) d$ rule from "preserve $8 d^2$ FFN parameters." Check it for LLaMA-1-7B ($d = 4096$); compare with the actual reported $d_\text{ff} = 11008$. Why the rounding?
+
+**(c)** A SwiGLU unit at hidden index $k$ outputs $\langle x, W_1^{(k)} \rangle \cdot \text{Swish}(\langle x, W_2^{(k)} \rangle)$. Write the analogous formula for a GELU FFN unit. Identify the *one* extra capacity SwiGLU has that GELU does not. (Hint: how does the output depend on a *product* of two linear combinations of $x$?)
+
+**(d)** Count the FLOPs per position per layer of a SwiGLU FFN with $d_\text{ff} = (8/3) d$. Show that it equals the FLOPs of a GELU FFN with $d_\text{ff} = 4 d$. Conclude that $6 N D$ is unchanged.
+
+**(e)** State which of the following are true in a 2026 frontier LLaMA-family block: (i) bias terms are absent in linear projections, (ii) bias term is present in RMSNorm, (iii) RMSNorm is pre-, not post-, FFN. Justify each.
+
+**(f)** Read Shazeer (2020) Table 1 (in your head, from §4 above). Which row has the lowest perplexity? Was the same paper able to *explain* why?
+
+</SelfTest>
