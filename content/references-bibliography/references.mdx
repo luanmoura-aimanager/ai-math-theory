@@ -404,7 +404,63 @@ prerequisites: []
 
 ---
 
-## Chapters 9–12
+## Chapter 9 — Alignment: SFT, RLHF, DPO, GRPO
+
+**Primary papers — instruction tuning and RLHF.**
+
+- **Ouyang, L., Wu, J., Jiang, X., et al.** (2022). "Training language models to follow instructions with human feedback" (InstructGPT). [arXiv:2203.02155](https://arxiv.org/abs/2203.02155) — Canonical SFT + RM + PPO pipeline (9.1, 9.2, 9.8); per-token KL implementation (9.9); PPO-ptx mixing (9.8 §5.3).
+- **Christiano, P., Leike, J., Brown, T., et al.** (2017). "Deep reinforcement learning from human preferences". [arXiv:1706.03741](https://arxiv.org/abs/1706.03741) — Original RLHF in deep RL; the algorithm InstructGPT inherits (9.3).
+- **Stiennon, N., Ouyang, L., Wu, J., et al.** (2020). "Learning to summarize from human feedback". [arXiv:2009.01325](https://arxiv.org/abs/2009.01325) — RLHF applied to summarisation; bridges Christiano 2017 to InstructGPT (9.3).
+
+**Primary papers — preference modelling.**
+
+- **Bradley, R. A., & Terry, M. E.** (1952). "Rank analysis of incomplete block designs: I. The method of paired comparisons". *Biometrika*, 39, 324–345. — Bradley-Terry pairwise-preference model (9.4).
+- **Luce, R. D.** (1959). *Individual Choice Behavior: A Theoretical Analysis.* Wiley. — Plackett-Luce; generalisation to multi-way comparisons (9.4 §6).
+
+**Primary papers — policy gradient and PPO.**
+
+- **Williams, R. J.** (1992). "Simple statistical gradient-following algorithms for connectionist reinforcement learning". *Machine Learning*, 8, 229–256. — Original REINFORCE (9.5).
+- **Sutton, R. S., & Barto, A. G.** (2018). *Reinforcement Learning: An Introduction* (2nd ed.). MIT Press. Chapter 13. — Policy-gradient methods, baselines (9.5).
+- **Schulman, J., Levine, S., Abbeel, P., Jordan, M., & Moritz, P.** (2015). "Trust region policy optimization" (TRPO). [arXiv:1502.05477](https://arxiv.org/abs/1502.05477) — Constrained policy update; the precursor PPO simplifies (9.6, 9.9 §4.3).
+- **Schulman, J., Wolski, F., Dhariwal, P., Radford, A., & Klimov, O.** (2017). "Proximal policy optimization algorithms" (PPO). [arXiv:1707.06347](https://arxiv.org/abs/1707.06347) — Clipped surrogate objective; the workhorse of RLHF (9.6).
+- **Schulman, J., Moritz, P., Levine, S., Jordan, M., & Abbeel, P.** (2015). "High-dimensional continuous control using generalized advantage estimation" (GAE). [arXiv:1506.02438](https://arxiv.org/abs/1506.02438) — GAE; used by PPO inside RLHF (9.6 §5).
+
+**Primary papers — GRPO and group-based methods.**
+
+- **Shao, Z., Wang, P., Zhu, Q., et al.** (2024). "DeepSeekMath: Pushing the limits of mathematical reasoning in open language models". [arXiv:2402.03300](https://arxiv.org/abs/2402.03300) — Group Relative Policy Optimization (GRPO) (9.7).
+- **DeepSeek-AI** (2025). "DeepSeek-R1: Incentivizing reasoning capability in LLMs via reinforcement learning". [arXiv:2501.12948](https://arxiv.org/abs/2501.12948) — GRPO at frontier reasoning scale; R1-Zero pure-RL training (9.7, 9.12).
+- **Kool, W., van Hoof, H., & Welling, M.** (2019). "Buy 4 REINFORCE samples, get a baseline for free!". *ICLR Workshop*. — Leave-one-out baseline (RLOO precursor) (9.11 §7.2).
+
+**Primary papers — Direct Preference Optimization.**
+
+- **Rafailov, R., Sharma, A., Mitchell, E., et al.** (2023). "Direct preference optimization: Your language model is secretly a reward model" (DPO). [arXiv:2305.18290](https://arxiv.org/abs/2305.18290) — DPO derivation (9.10).
+- **Pang, R. Y., Yuan, W., Cho, K., et al.** (2024). "Iterative reasoning preference optimization". [arXiv:2404.19733](https://arxiv.org/abs/2404.19733) — Iterative DPO recipe (9.11).
+- **Chen, Z., Deng, Y., Yuan, H., et al.** (2024). "Self-play fine-tuning converts weak language models to strong language models" (SPIN). [arXiv:2401.01335](https://arxiv.org/abs/2401.01335) — Iterative DPO with SFT data as $y_c$ (9.11 §7.3).
+- **Lambert, N., Morrison, J., Pyatkin, V., et al.** (2024). "Tülu 3: Pushing frontiers in open language model post-training". [arXiv:2411.15124](https://arxiv.org/abs/2411.15124) — Iterative DPO with mixed labellers; open recipe (9.11 §6).
+
+**Primary papers — Process Reward Models.**
+
+- **Lightman, H., Kosaraju, V., Burda, Y., et al.** (2023). "Let's verify step by step". [arXiv:2305.20050](https://arxiv.org/abs/2305.20050) — PRM800K dataset; foundational PRM paper (9.12).
+- **Wang, P., Li, L., Shao, Z., et al.** (2024). "Math-Shepherd: Verify and reinforce LLMs step-by-step without human annotations". [arXiv:2312.08935](https://arxiv.org/abs/2312.08935) — Outcome-conditioned synthetic PRM labels (9.12 §6.2).
+
+**Primary papers — RLAIF and Constitutional AI.**
+
+- **Bai, Y., Kadavath, S., Kundu, S., et al.** (2022). "Constitutional AI: Harmlessness from AI feedback" (CAI). [arXiv:2212.08073](https://arxiv.org/abs/2212.08073) — Anthropic's CAI recipe; critique-and-revise + AI-judged preferences (9.13).
+- **Lee, H., Phatale, S., Mansoor, H., et al.** (2023). "RLAIF: Scaling reinforcement learning from human feedback with AI feedback". [arXiv:2309.00267](https://arxiv.org/abs/2309.00267) — Empirical comparison RLHF vs RLAIF (9.13 §2.2).
+
+**Primary papers — Reward hacking and over-optimization.**
+
+- **Gao, L., Schulman, J., & Hilton, J.** (2022). "Scaling laws for reward model overoptimization". [arXiv:2210.10760](https://arxiv.org/abs/2210.10760) — Scaling laws of over-optimisation; the $\alpha_1 \sqrt{\mathrm{KL}} - \alpha_2 \mathrm{KL}$ curve (9.14).
+- **Coste, T., Anwar, U., Kirk, R., & Krueger, D.** (2024). "Reward model ensembles help mitigate overoptimization". [arXiv:2310.02743](https://arxiv.org/abs/2310.02743) — RM ensembles to reduce hacking (9.14 §4.4).
+
+**Primary papers — Inference-time alignment.**
+
+- **Cobbe, K., Kosaraju, V., Bavarian, M., et al.** (2021). "Training verifiers to solve math word problems" (GSM8K + verifiers). [arXiv:2110.14168](https://arxiv.org/abs/2110.14168) — Verifier-based Best-of-N (9.15 §2.3).
+- **Snell, C., Lee, J., Xu, K., & Choquette-Choo, C.** (2024). "Scaling LLM test-time compute optimally can be more effective than scaling model parameters". [arXiv:2408.03314](https://arxiv.org/abs/2408.03314) — Inference-time scaling laws (9.15 §6.2).
+
+---
+
+## Chapters 10–12
 
 *To be populated as those chapters are written.*
 

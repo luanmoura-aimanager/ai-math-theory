@@ -35,6 +35,10 @@
     "title": "Chapter 8 — Modern LLM architectures",
     "order": 8
   },
+  "ch9-alignment": {
+    "title": "Chapter 9 — Alignment: SFT, RLHF, DPO, GRPO",
+    "order": 9
+  },
   "references-bibliography": {
     "title": "References & bibliography",
     "order": 99

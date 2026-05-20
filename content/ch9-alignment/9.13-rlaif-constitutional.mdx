@@ -1,0 +1,223 @@
+---
+title: "9.13 — RLAIF and Constitutional AI"
+chapter: 9
+order: 13
+estimatedMinutes: 20
+goal: "Define RLAIF (RL from AI Feedback) — AI-generated preferences replacing human ones at scale. Then derive Constitutional AI: an LLM critiques and revises its own outputs against a constitution (a set of principles), generating both SFT and preference data without humans in the inner loop."
+prerequisites: ["ch9-alignment/9.11-iterative-dpo", "ch9-alignment/9.8-rlhf-end-to-end"]
+---
+
+## 1. Why this session exists
+
+RLHF scales linearly with **preference labels**. To improve a 70B model meaningfully, you need ~100K–1M preference comparisons; to track frontier capabilities, you re-collect them as the model evolves; iterative DPO ([9.11](/session/ch9-alignment/9.11-iterative-dpo)) multiplies the requirement by the iteration count. At per-comparison costs of $\sim \$0.50$–$\$2.00$ for trained annotators, an alignment run can run into hundreds of thousands of dollars *just for preference labels*.
+
+Two related ideas reduce this cost dramatically by **replacing human labellers with AI labellers**:
+
+- **RLAIF (RL from AI Feedback).** Use an LLM to label preferences instead of a human. Same RLHF pipeline; the labeller changes.
+- **Constitutional AI (CAI).** Go further: have an LLM critique and revise *its own* outputs against a set of written principles ("a constitution"). The model becomes its own labeller, teacher, and editor.
+
+This session derives both. RLAIF is the operational shortcut; CAI is the conceptual framework that makes RLAIF principled (and that powers Anthropic's Claude). After 9.13 you understand the alignment recipe that, as of 2026, generates most of the training signal in frontier models.
+
+---
+
+## 2. RLAIF: AI feedback in place of human feedback
+
+The RLHF pipeline of [9.8](/session/ch9-alignment/9.8-rlhf-end-to-end) is unchanged; only the labelling step is replaced.
+
+### 2.1 The substitution
+
+In standard RLHF, you collect preference pairs $(x, y_c, y_r)$ by:
+
+1. Sampling two completions from a current model.
+2. Showing them to a human, who selects the preferred one.
+
+In RLAIF, step 2 is replaced:
+
+2'. Showing them to an LLM ("the judge"), with a prompt like "Which of these two responses is more helpful, accurate, and aligned with the user's needs?" — the judge LLM picks one as $y_c$.
+
+That's the entire change. The downstream pipeline (reward model training, PPO or DPO, KL penalty) is identical. The only difference is the labels' provenance.
+
+### 2.2 What judges do well
+
+Empirically (Lee et al., 2023, [arXiv:2309.00267](https://arxiv.org/abs/2309.00267)), LLM judges agree with human judges:
+
+- ~80–90% on broad preference dimensions ("which response is more helpful?")
+- ~70–80% on subtle judgements ("which is more nuanced?")
+- ~60–70% on highly subjective judgements ("which tone is better?")
+
+A judge LLM that's *stronger* than the model being labelled (e.g., GPT-4 judging Claude-3-Haiku outputs) reaches the top of this range; *weaker* judges (e.g., Llama-7B judging GPT-4) are uselessly noisy.
+
+The headline: **AI judges produce useful preference signal at ~$0.01 per comparison vs $1 for humans** — a 100× cost reduction at ~85% of the quality. For most production alignment work in 2024+, this is the right trade.
+
+### 2.3 The bias question
+
+AI judges have systematic biases. Three well-documented examples:
+
+- **Verbosity bias.** Judges tend to prefer longer responses, even when length isn't informative. Mitigated by length-normalised judging or length-aware evaluation.
+- **Position bias.** Judges tend to prefer the *first* candidate they see. Mitigated by randomising order and averaging.
+- **Self-preference.** Judges prefer outputs from models similar to themselves (e.g., GPT-4 prefers GPT-4-style writing). Mitigated by using diverse judges.
+
+A production RLAIF pipeline accounts for these — randomising positions, using length-controlled prompts, sometimes averaging across multiple judge models. The biases never disappear; they're managed.
+
+---
+
+## 3. Constitutional AI: the principled extension
+
+**Bai, Kadavath, Kundu, et al., 2022, *Constitutional AI: Harmlessness from AI Feedback*** ([arXiv:2212.08073](https://arxiv.org/abs/2212.08073)). Anthropic's framework that makes RLAIF principled by *explicitly writing down the principles* the AI labeller should apply.
+
+### 3.1 The constitution
+
+A **constitution** is a list of natural-language principles. From the original CAI paper, sample principles:
+
+- "Please choose the response that is the most helpful, honest, and harmless."
+- "Choose the response that least implies that it has any desires or emotions."
+- "Choose the response that avoids any criticism of users."
+- "Choose the response that is least likely to be considered discriminatory."
+
+There are ~16 principles in the original CAI constitution, each crafted to capture some dimension of "good model behaviour." Different teams use different constitutions; each represents an explicit, auditable statement of "what counts as a good response."
+
+### 3.2 The two-step CAI recipe
+
+**Step 1: SL-CAI (supervised stage).**
+
+The model is asked to:
+
+1. Generate an initial response to a prompt.
+2. **Critique** the response: "Identify ways your previous response is problematic according to these principles."
+3. **Revise** the response based on the critique.
+
+The pairs (original prompt, revised response) become **SFT data**. The model SFTs on its own self-revised outputs, internalising the constitutional principles.
+
+**Step 2: RLHF-style CAI (preference stage).**
+
+For each prompt:
+
+1. Generate two responses from the model.
+2. Ask the model to *choose between them* using the constitution — "Which response better satisfies the following principles?" $\to$ chosen $y_c$.
+
+These AI preferences train a reward model; then PPO or DPO as usual.
+
+Note: in CAI, the AI labeller is *the same model being trained* (or a closely related one). The constitution is what makes this circular setup productive: the principles externally specify what "better" means, even though the judgement itself is internal.
+
+### 3.3 The result
+
+CAI produces models that are **harmless** (refuse problematic requests, don't generate harmful content) without requiring human labellers to specify what harmful means at scale. The constitution does that work; the model implements it.
+
+Claude is trained with a CAI-derived recipe (extended and refined over multiple generations). The general "harmlessness" of frontier models in 2024–2026 — they generally refuse to help with bioweapon synthesis, child safety violations, etc. — owes much to CAI-style training.
+
+---
+
+## 4. Why CAI scales
+
+Three reasons CAI scales better than human-labelled RLHF.
+
+### 4.1 Principles transfer; labels don't
+
+A constitution is ~16 principles in natural language — a few pages of text. Human preferences are ~1M individual judgements that have to be re-collected for every model iteration.
+
+If your model gets better, the constitution still describes what good responses look like. You can re-apply it at scale to generate fresh preference data for the new model. Human-labelled data, by contrast, becomes stale as the model improves past where the labels were collected.
+
+### 4.2 Principles are auditable
+
+When a model is trained with constitutional rules, you can read the rules and decide whether they reflect the values you want. With human-labelled data, you have to trust the labellers' aggregate judgements — which are opaque and only emergent from the data.
+
+This makes CAI attractive for **regulated deployment**: an auditor can review the constitution, evaluate whether it covers the relevant safety dimensions, and check that the model actually follows it. The same audit on a human-labelled RLHF model would require sampling and inspecting labels — much harder.
+
+### 4.3 Principles are debuggable
+
+If a model misbehaves in a specific way, you can:
+
+1. Identify which principle the misbehaviour violates.
+2. Strengthen that principle or add a new one.
+3. Re-run the CAI loop with the updated constitution.
+
+The cycle is short and targeted. Human-labelled data has no comparable knob — you'd have to collect more labels in the relevant area, and the relationship between labels and behaviour is indirect.
+
+---
+
+## 5. The 2026 landscape
+
+CAI's influence extends well beyond Anthropic. The pattern — **"have a stronger model produce preferences for a weaker one, guided by explicit principles"** — has been adopted broadly:
+
+| Lab / Model | Variant |
+|---|---|
+| Anthropic / Claude | Constitutional AI (original, extended) |
+| OpenAI / GPT-4 | Internal CAI-like critique-and-revise on Model Spec |
+| Google DeepMind / Gemini | Sparrow rules; CAI-influenced safety training |
+| Meta / LLaMA-3-Instruct | RLAIF with internal preference rubrics |
+| Mistral / various | RLAIF for instruction tuning |
+| Open source / Tülu-3, etc. | LLM-as-judge for preferences with explicit rubrics |
+
+The variations differ in:
+
+- **Granularity** of the principles (few broad ones vs many specific ones).
+- **The relationship between judge and policy** (same model self-critiquing vs separate stronger judge).
+- **The role of human labels** (entirely replaced vs sample-checked vs used for the reward model).
+
+The trajectory is unmistakable: **human preferences are a quality control mechanism, not a primary training signal**, in modern alignment. The bulk of the gradient signal comes from AI-generated preferences against AI-evaluated rubrics.
+
+---
+
+## 6. The principal-agent question
+
+CAI raises a serious conceptual question: **if the AI is its own teacher, what stops the loop from drifting away from human values?**
+
+The answer is layered:
+
+### 6.1 The constitution anchors the loop
+
+The principles are *human-written*. They can't drift without an explicit human edit. As long as the constitution stays grounded in what humans want, the model trained against it stays grounded too.
+
+This is the "constitutional" part of CAI — the analogy to a written national constitution. The document fixes what the political system optimises for, even as the implementation evolves.
+
+### 6.2 Human evaluation samples the result
+
+Production teams maintain *evaluation* sets of human-labelled preferences. The model is tested against them periodically; if performance degrades on human-preferred dimensions, alarms trigger and the constitution is revised. Humans stay in the loop, but at the evaluation level rather than the labelling level.
+
+### 6.3 The principal-agent problem isn't fully solved
+
+Despite these safeguards, the question "is the AI optimising what we actually want?" remains open. The model's behaviour reflects the *constitution as written* — which is imperfect, evolves over time, and can have subtle misalignments with human intentions.
+
+Anthropic has published on this concern (the original CAI paper, the [Claude Model Card](https://www.anthropic.com/), etc.). The honest answer is: CAI dramatically reduces the scaling cost of alignment, makes the value specification *more* explicit (not less), and shifts the failure mode from "labels capture the wrong thing" to "the constitution captures the wrong thing." The latter is debuggable; the former isn't.
+
+---
+
+## 7. Practical takeaways
+
+For someone building an aligned model in 2026:
+
+1. **Use LLM judges as the default labeller.** Human labels for evaluation only; AI labels for training scale.
+2. **Write down your principles.** Even if you don't call it a constitution, having an explicit list of what counts as a good response is essential for debuggability and for prompting the judge LLM.
+3. **Audit the judge.** Sample a few hundred AI-labelled comparisons and check them yourself. Adjust the prompt, the principles, or the judge model if disagreement is too high.
+4. **Mix AI and human preferences when possible.** Even a small fraction of human labels (~5–10%) acts as a calibration check on the AI labels.
+5. **Iterate the constitution.** If the model misbehaves in some direction, add a principle. If a principle isn't being respected, strengthen it. Treat the constitution as living documentation.
+
+<Aside type="history">
+**The history of CAI is roughly:** Anthropic 2022 (original paper) → Anthropic 2023 (full integration into Claude training) → industry-wide adoption by 2024 → standard practice by 2026. The original paper was decisive — it provided both the conceptual framework and empirical evidence that AI-only feedback could produce safe-enough models. By 2024 every frontier lab had adopted some form of constitutional or LLM-judged training. By 2026 the question is no longer "should we use AI feedback?" but "what should the principles be?"
+</Aside>
+
+---
+
+## 8. What we keep going forward
+
+Three things:
+
+1. **RLAIF replaces human labels with LLM judges.** Same RLHF pipeline; the source of preference labels changes. 100× cheaper at ~85% the quality.
+2. **Constitutional AI makes RLAIF principled.** Explicit written principles anchor the judge's preferences and make the training auditable. Anthropic's framework; now standard across frontier labs.
+3. **The principal-agent question is real.** CAI moves the alignment problem from "label quality" to "principle quality" — a problem that's at least *visible* and debuggable.
+
+[Next session](/session/ch9-alignment/9.14-reward-hacking) examines what goes wrong when alignment scales: **reward hacking and over-optimization**. The Gao et al. (2022) scaling law for reward-model overoptimisation is the central reference.
+
+<SelfTest>
+
+**(a)** State the operational difference between RLHF and RLAIF. Which step changes? Which stays the same?
+
+**(b)** State the two stages of Constitutional AI: SL-CAI (supervised) and RL-CAI (preference). For each, identify what the model does and what data is produced.
+
+**(c)** A frontier lab uses RLAIF with GPT-4 as the judge. State three biases the judge will introduce. For each, suggest a mitigation.
+
+**(d)** Argue why a written constitution makes alignment *more auditable* than purely human-labelled data. (Hint: think about what a regulator could check in each case.)
+
+**(e)** Read [Bai et al., 2022](https://arxiv.org/abs/2212.08073) §2. Identify the specific kinds of harms the CAI principles target. How does the model's harmlessness compare to standard RLHF baselines?
+
+</SelfTest>

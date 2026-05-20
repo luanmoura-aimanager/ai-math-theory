@@ -1,0 +1,227 @@
+---
+title: "9.7 — Group Relative Policy Optimization (GRPO)"
+chapter: 9
+order: 7
+estimatedMinutes: 24
+goal: "Derive GRPO as a simplification of PPO that removes the critic by computing advantages within a *group* of completions per prompt. Identify why this matters for LLM RL — no value head, half the memory, half the compute — and place GRPO as the algorithm behind DeepSeek-Math, DeepSeek-V2-Math, and DeepSeek-R1's reasoning training."
+prerequisites: ["ch9-alignment/9.6-ppo"]
+---
+
+## 1. Why this session exists
+
+PPO ([9.6](/session/ch9-alignment/9.6-ppo)) is the workhorse of RLHF, but it carries machinery that LLM training stretches uncomfortably:
+
+- **A value-function critic** $V_\phi(x)$ — usually a second LLM-sized network (or an extra head on the policy) that estimates the expected reward of a prompt. Trained jointly with the policy via a value-loss term. In LLM RLHF, the critic doubles the memory and adds a non-trivial training cost.
+- **Generalised Advantage Estimation (GAE)** — a weighted sum of temporal-difference errors used to compute the advantage $A_t$. Sensible for multi-step control, but LLM trajectories are *one shot* (generate the whole response, get one reward at the end), so most of GAE's machinery is overkill.
+
+**Shao, Wang, Zhu, et al., 2024, *DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models*** ([arXiv:2402.03300](https://arxiv.org/abs/2402.03300)) introduced **Group Relative Policy Optimization (GRPO)**: drop the critic entirely; compute the advantage by sampling $K$ completions per prompt and normalising rewards *within the group*. Same clipped surrogate as PPO, no value head, half the memory.
+
+GRPO is the algorithm behind **DeepSeek-Math**, **DeepSeek-V2-Math**, and **DeepSeek-R1** ([2025, arXiv:2501.12948](https://arxiv.org/abs/2501.12948)) — the reasoning models that prompted the "o1-style" inference-time-scaling era. Beyond DeepSeek, GRPO has been adopted broadly for reasoning-RL since 2024: it's simpler, more memory-efficient, and (empirically) at least competitive with PPO at reasoning tasks.
+
+This session: the GRPO advantage estimator, the loss function, the relationship to PPO, and the practical recipe.
+
+---
+
+## 2. The group-relative advantage
+
+Consider a prompt $x$ and the policy $\pi_\theta(\cdot \mid x)$. PPO uses an advantage
+
+$$
+A(x, y) = r(x, y) - V_\phi(x),
+$$
+
+where $V_\phi$ is the critic — a learned baseline. GRPO replaces $V_\phi$ with an **empirical** baseline computed from a group of completions.
+
+### 2.1 The construction
+
+For each prompt $x$, sample $K$ completions $y_1, \dots, y_K \sim \pi_{\theta_\text{old}}(\cdot \mid x)$ from the current policy. Compute the rewards $r_i = r(x, y_i)$ for each. The group mean and standard deviation are
+
+$$
+\mu_G = \frac{1}{K} \sum_{i = 1}^{K} r_i, \qquad \sigma_G = \sqrt{\frac{1}{K} \sum_{i = 1}^{K} (r_i - \mu_G)^2}.
+$$
+
+Define the **group-relative advantage** for completion $i$:
+
+$$
+\boxed{\ A_i = \frac{r_i - \mu_G}{\sigma_G + \epsilon}. \ }
+$$
+
+with a small $\epsilon$ to guard against zero variance.
+
+That is *the entire advantage estimator*. No critic, no GAE, no temporal-difference machinery. Just "how much better than the rest of this group is this completion, in standard-deviation units?"
+
+### 2.2 Why this works
+
+The PPO-style critic $V_\phi(x)$ is trying to estimate $\mathbb{E}_{y \sim \pi_\theta}[r(x, y)]$ — the expected reward under the current policy. The group sample mean $\mu_G$ is an *unbiased Monte Carlo estimate* of exactly the same quantity, computed from $K$ samples per prompt. So $\mu_G$ replaces the critic's role *at no estimation-quality cost*, given enough $K$.
+
+Subtracting $\mu_G$ centres the advantage; dividing by $\sigma_G$ normalises it. After normalisation, $A_i$ is in standard-deviation units of the group's reward — comparable across prompts that have wildly different absolute reward magnitudes (e.g., easy vs hard math problems).
+
+The normalisation is what distinguishes GRPO from earlier "REINFORCE with sample baseline" methods. It gives a *scale-invariant* gradient signal that doesn't blow up for high-variance prompts.
+
+### 2.3 The reward is a scalar at the end of the sequence
+
+For LLM RL, the reward is usually a *single scalar per completion*: either a verifier output (math problem solved correctly?), a code-execution outcome (tests pass?), or a reward-model score. There's no per-token reward; the policy gradient applies the same group-advantage $A_i$ at every token of completion $i$:
+
+$$
+\nabla_\theta J = \mathbb{E}_{x}\left[\frac{1}{K} \sum_{i = 1}^{K} A_i \cdot \nabla_\theta \log \pi_\theta(y_i \mid x)\right] = \mathbb{E}_{x}\left[\frac{1}{K} \sum_{i = 1}^{K} A_i \cdot \sum_{t = 1}^{|y_i|} \nabla_\theta \log \pi_\theta(y_{i,t} \mid x, y_{i, <t})\right].
+$$
+
+Each token contributes the same $A_i$ to the gradient. (Variants attach token-level advantages from a process reward model — see [9.12](/session/ch9-alignment/9.12-process-reward-models).)
+
+---
+
+## 3. The GRPO loss
+
+GRPO inherits PPO's clipped surrogate ([9.6 §3](/session/ch9-alignment/9.6-ppo)) and adds the same KL penalty as RLHF ([9.9](/session/ch9-alignment/9.9-kl-penalty)). The per-token clipped objective:
+
+$$
+\mathcal{L}_\text{GRPO}(\theta) = \mathbb{E}_{x, \{y_i\}}\!\left[\frac{1}{K} \sum_{i = 1}^{K} \frac{1}{|y_i|} \sum_{t = 1}^{|y_i|} \min\!\Big( \rho_{i, t}\, A_i,\; \text{clip}(\rho_{i, t}, 1 - \epsilon, 1 + \epsilon)\, A_i \Big) - \beta\, \text{KL}\!\big[\pi_\theta \,\Vert\, \pi_\text{ref}\big]\right],
+$$
+
+with the importance ratio
+
+$$
+\rho_{i, t} = \frac{\pi_\theta(y_{i, t} \mid x, y_{i, <t})}{\pi_{\theta_\text{old}}(y_{i, t} \mid x, y_{i, <t})}.
+$$
+
+Same shape as PPO, with three things changed:
+
+1. **$A_i$ is the group-relative advantage**, not the critic-based $A$.
+2. **The outer expectation includes the average over the group** — $\frac{1}{K} \sum_i$ — to combine the $K$ completions per prompt.
+3. **No value-loss term** for training a critic.
+
+The KL term keeps the policy from drifting too far from a reference policy $\pi_\text{ref}$ (typically the SFT model). Same as RLHF; we cover it properly in 9.9.
+
+---
+
+## 4. The compute and memory savings
+
+The single biggest practical advantage of GRPO over PPO for LLMs.
+
+### 4.1 Memory
+
+PPO needs *three* models in memory:
+
+- **Policy $\pi_\theta$** — the LLM being trained.
+- **Value critic $V_\phi$** — usually an LLM-sized network (or an LLM with a value head).
+- **Reference policy $\pi_\text{ref}$** — the SFT baseline, frozen, used for the KL term.
+
+Plus, often, a fourth: the **reward model**. For PPO-RLHF you carry all four.
+
+GRPO drops the critic. Three models become two (plus the reward model). For a 70B-parameter model in bf16 with Adam-state-included memory:
+
+- PPO: $\sim 140$ GB (policy) + $\sim 140$ GB (critic) + $\sim 14$ GB (frozen ref) = $\sim 294$ GB.
+- GRPO: $\sim 140$ GB (policy) + $\sim 14$ GB (frozen ref) = $\sim 154$ GB.
+
+That's a ~$50\%$ memory saving for the training stack alone. With reward-model included, the absolute saving is a smaller fraction but still substantial.
+
+### 4.2 Compute
+
+The critic's forward and backward passes during PPO are roughly the same cost as the policy's. So GRPO's per-step compute is roughly **half** of PPO's — at fixed number of samples and gradient steps.
+
+GRPO does pay for sampling $K$ completions per prompt (PPO needs only one). But $K$ is typically small ($K \in \{4, 8, 16\}$) and the sampling cost is forward-only (no backward), so this is a modest counter. Net: GRPO is meaningfully cheaper per outer training step.
+
+### 4.3 Why the savings matter for reasoning RL
+
+The reasoning-RL regime (training a model on math/code/reasoning tasks via RL) requires *long* completions — a chain of thought, often thousands of tokens. Sampling $K = 8$ completions per prompt is already $8\times$ the inference budget of a single completion. Removing the critic's forward/backward at each step frees substantial compute and memory, which can be spent on more samples or larger models.
+
+DeepSeek-R1's reasoning training reportedly uses GRPO with $K = 64$ completions per prompt — feasible because the critic is gone.
+
+---
+
+## 5. The GRPO training loop
+
+Pseudocode for one outer GRPO step on a batch of $N$ prompts:
+
+```
+For each prompt x in the batch:
+    Sample K completions {y_1, ..., y_K} ~ π_θ_old(·|x)
+    Compute rewards r_i = r(x, y_i)            # reward model or verifier
+    Compute group statistics μ_G, σ_G
+    Compute per-completion advantages A_i = (r_i - μ_G) / (σ_G + ε)
+
+# All N · K completions are now associated with an A value
+# Optimise the clipped surrogate + KL for M inner steps:
+
+For m = 1, ..., M:
+    For each (x, y_i, A_i):
+        Compute ρ_{i,t} = π_θ(y_{i,t}|x, y_{i,<t}) / π_θ_old(y_{i,t}|x, y_{i,<t})
+        Compute per-token clipped loss
+        Compute KL term against π_ref
+    Update θ by gradient descent
+
+θ_old ← θ        # snapshot for next outer iteration
+```
+
+The outer loop ($\sim 10^3$–$10^4$ iterations) drives the policy through reasoning RL. The inner loop ($M = 4$ or so) reuses each batch of samples for multiple gradient steps, like PPO. Sampling is the bottleneck in wall-clock; compute-cheap inner steps are essentially free.
+
+---
+
+## 6. GRPO vs PPO: when to use which
+
+A short comparison:
+
+| | PPO | GRPO |
+|---|---|---|
+| Critic | yes ($V_\phi$, learned) | no (group mean) |
+| Advantage | GAE on rewards | $(r_i - \mu_G) / \sigma_G$ |
+| Memory | $\sim 2N$ for policy+critic | $\sim N$ for policy |
+| Compute per step | full forward+backward × 2 | full forward+backward × 1 |
+| Samples per prompt | 1 | $K = 4$–$64$ |
+| KL penalty | usually yes | usually yes |
+| Best for | dense per-token rewards | sparse end-of-sequence rewards |
+
+**Use PPO when:** you have per-token rewards (e.g., a per-step process reward model from [9.12](/session/ch9-alignment/9.12-process-reward-models)) — the critic and GAE machinery actually earn their keep.
+
+**Use GRPO when:** you have a sparse end-of-sequence reward (verifier outcome, reward model score) — which is the typical RLHF and reasoning-RL setting. The simpler estimator suffices.
+
+---
+
+## 7. The DeepSeek-R1 story
+
+DeepSeek-R1 ([2025, arXiv:2501.12948](https://arxiv.org/abs/2501.12948)) is the canonical demonstration of GRPO at frontier scale. Two relevant points:
+
+### 7.1 RL on a pretrained base, no SFT
+
+DeepSeek-R1-Zero takes the pretrained base model (no SFT, no human demonstrations) and applies GRPO directly with an automatic reward signal — "correct math answer?" verified by an external checker. The model learns reasoning *from RL alone*. This was the breakthrough finding: pure RL on a pretrained base, with a sparse correctness reward, produces chain-of-thought reasoning behaviour.
+
+### 7.2 RL after SFT, the production version
+
+DeepSeek-R1 (the full model) uses a two-stage recipe:
+
+1. SFT on curated reasoning data.
+2. GRPO with a mixture of verifier and reward-model signals.
+
+Stage 2 is GRPO with $K \sim 64$ completions per prompt, running for hundreds of thousands of steps. The resulting model matches OpenAI o1-preview on reasoning benchmarks (AIME, MATH, code).
+
+The empirical lesson: **GRPO is a viable alternative to PPO for frontier RLHF**, especially when rewards are sparse and completions are long. PPO is not deprecated — most of OpenAI and Anthropic's RLHF infrastructure remains PPO-based — but GRPO is now a real choice.
+
+<Aside type="note">
+**GRPO is a special case of REINFORCE-with-baseline.** The group mean $\mu_G$ is a Monte-Carlo critic; the variance normalisation $\sigma_G$ is a per-prompt rescaling. Without the clipping, GRPO is exactly REINFORCE with a sample-based baseline. The PPO-style clipping is what allows multiple inner gradient steps per outer sample batch — without it, you'd need fresh samples for each gradient. So GRPO = REINFORCE-with-sample-baseline + PPO-style importance-sampling reuse + KL penalty. Each ingredient has decades of RL provenance; the contribution is the synthesis.
+</Aside>
+
+---
+
+## 8. What we keep going forward
+
+Three things:
+
+1. **GRPO's advantage is empirical, not learned.** $(r_i - \mu_G) / \sigma_G$ from a group of $K$ samples per prompt. No critic.
+2. **GRPO is ~$50\%$ cheaper than PPO** at the cost of more samples per prompt. Best for sparse end-of-sequence rewards, which is most LLM RL.
+3. **DeepSeek-R1 is the existence proof.** Frontier reasoning models can be trained with GRPO.
+
+[Next session](/session/ch9-alignment/9.8-rlhf-end-to-end) puts the pieces together: SFT → reward model → PPO (or GRPO) → KL-penalised policy. The full RLHF pipeline, end to end.
+
+<SelfTest>
+
+**(a)** Write down the GRPO advantage formula and identify each term's role. Compare with PPO's $A = r - V_\phi$. Why does the group mean $\mu_G$ replace the critic without loss of unbiasedness?
+
+**(b)** A GRPO setup uses $K = 16$ completions per prompt with rewards $r = [0.8, 0.2, 0.5, 0.6, 0.1, 0.9, 0.4, 0.7, 0.3, 0.5, 0.8, 0.6, 0.2, 0.4, 0.7, 0.3]$. Compute $\mu_G$, $\sigma_G$, and the advantage of the *best* and *worst* completions.
+
+**(c)** GRPO is ~50% cheaper than PPO at the cost of more samples per prompt. State why this trade is favourable for *long, reasoning-style* completions (where each completion is thousands of tokens).
+
+**(d)** DeepSeek-R1-Zero trains directly from a pretrained base with no SFT. Argue why this is feasible with GRPO + a verifier reward but would be expensive with PPO.
+
+**(e)** Read [Shao et al., 2024](https://arxiv.org/abs/2402.03300) §4. Identify the empirical comparison between GRPO and PPO on math reasoning. What is the magnitude of the GRPO improvement, and at what cost?
+
+</SelfTest>

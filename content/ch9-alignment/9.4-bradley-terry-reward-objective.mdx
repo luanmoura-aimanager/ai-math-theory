@@ -1,0 +1,206 @@
+---
+title: "9.4 — The Bradley-Terry model and the reward objective"
+chapter: 9
+order: 4
+estimatedMinutes: 24
+goal: "Derive the Bradley-Terry model p(y_c ≻ y_r | x) = σ(r(x, y_c) − r(x, y_r)). Write the reward-model training loss as the negative log-likelihood of the observed preferences. Specify the reward model architecture (a scalar-head LLM) and the training recipe. Connect the reward identifiability ambiguity to what RLHF and DPO each pick out."
+prerequisites: ["ch9-alignment/9.3-reward-modeling-preference-data", "ch0-math-foundations/0.7-cross-entropy-mle"]
+---
+
+## 1. Why this session exists
+
+§9.3 ended with preference data $\mathcal{D}_\text{pref} = \{(x_i, y_c^i, y_r^i)\}$. To use this data for fine-tuning, we need a *scalar* function $r(x, y)$ that scores responses by predicted preferability — a reward model. The preference data does not directly give us such a function (it gives binary "$y_c$ beats $y_r$" labels), so we have to *fit* a reward model that is consistent with the observed preferences.
+
+The standard fit is via the **Bradley-Terry model** (Bradley & Terry, 1952, "Rank analysis of incomplete block designs"). The model assumes a latent quality score $r(x, y)$ for each response and predicts the preference probability as a logistic function of the score difference:
+
+$$
+p(y_c \succ y_r \mid x) = \sigma\bigl(r(x, y_c) - r(x, y_r)\bigr).
+$$
+
+Reward-model training is then **maximum-likelihood estimation** of $r_\phi$ under this model: minimise the negative log-likelihood of the observed preferences. The loss falls out of standard MLE machinery ([0.7](/session/ch0-math-foundations/0.7-cross-entropy-mle)) applied to a logistic likelihood.
+
+This session derives the Bradley-Terry model from first principles, writes the reward-model loss, specifies the architecture, names the regularisation tricks that prevent overfitting, and surfaces an identifiability ambiguity ($r$ and $r + c$ give the same preferences) that we will return to when deriving DPO (§9.10).
+
+---
+
+## 2. The Bradley-Terry model
+
+Postulate: for each prompt $x$ and response $y$, there is a latent scalar quality $r(x, y) \in \mathbb{R}$. The probability that a labeller prefers $y_c$ over $y_r$ for prompt $x$ is
+
+$$
+\boxed{\ p(y_c \succ y_r \mid x) = \frac{\exp(r(x, y_c))}{\exp(r(x, y_c)) + \exp(r(x, y_r))} = \sigma\bigl(r(x, y_c) - r(x, y_r)\bigr), \ }
+$$
+
+where $\sigma(z) = (1 + e^{-z})^{-1}$ is the logistic function.
+
+The model has two interpretations.
+
+**(a) Logistic regression on response differences.** The preference is a binary outcome (chosen vs rejected); the logit of the preference probability is $r(x, y_c) - r(x, y_r)$. This is a standard logistic regression, with the "feature" being the difference of two scalar quality scores rather than a linear function of attributes.
+
+**(b) Softmax over a pair.** The numerator is $\exp(r(x, y_c))$; the denominator sums $\exp(r(x, \cdot))$ over the pair $\{y_c, y_r\}$. This is a $2$-way softmax. The Bradley-Terry model is *exactly* a binary softmax classifier where the "features" are the two candidates' reward scores.
+
+The $K$-way generalisation (Plackett-Luce, useful when preference data is a full ranking instead of pairwise) replaces the 2-way softmax with a $K$-way one. We focus on the pairwise version because, per §9.3, that is the dominant data format.
+
+### 2.1 Why this functional form
+
+A natural question: why a logistic of differences rather than some other function? Several justifications, of varying depth.
+
+**Scale invariance of differences.** Adding a constant $c$ to all $r(x, \cdot)$ leaves $r(x, y_c) - r(x, y_r)$ unchanged. So the preference probability depends only on *differences* in reward, not on absolute reward values. This is the right structural property — preferences are relative judgments.
+
+**Independence of irrelevant alternatives.** Suppose the labeller's choice among $\{y_a, y_b, y_c\}$ is consistent with pairwise preferences (the labeller's choice between any two is the same when a third option is added). Then there is a (unique up to additive constant) function $r$ such that the labeller's choice probability satisfies the Bradley-Terry form. This is the *Luce choice axiom* (Luce, 1959) — a foundational result in decision theory.
+
+**Maximum entropy.** The Bradley-Terry distribution is the *maximum entropy* distribution over pairwise outcomes consistent with the constraint "the expected preference depends only on the reward difference." Maximum-entropy reasoning provides a principled "default" choice of functional form when only certain moments are constrained.
+
+**Empirical fit.** The Bradley-Terry model fits human preference data well in practice. Calibration analyses on labelled preference datasets (InstructGPT §3.4, Anthropic 2022) report that the model's predicted preference probabilities match observed labeller agreement rates within $\sim 5\%$.
+
+For practical purposes: the Bradley-Terry model is the conventional choice; departures from it (e.g., adding asymmetric ties, modelling labeller-specific biases) are minor variants of the same machinery.
+
+---
+
+## 3. The reward-model training loss
+
+Given preference data $\mathcal{D}_\text{pref} = \{(x_i, y_c^i, y_r^i)\}_{i=1}^{N}$, the negative log-likelihood under the Bradley-Terry model is
+
+$$
+\mathcal{L}_\text{RM}(\phi) = -\sum_{i=1}^{N} \log p_\phi(y_c^i \succ y_r^i \mid x_i) = -\sum_{i=1}^{N} \log \sigma\bigl(r_\phi(x_i, y_c^i) - r_\phi(x_i, y_r^i)\bigr).
+$$
+
+This is a standard logistic-regression loss. We re-write using $\log \sigma(z) = -\log(1 + e^{-z})$:
+
+$$
+\boxed{\ \mathcal{L}_\text{RM}(\phi) = \mathbb{E}_{(x, y_c, y_r) \sim \mathcal{D}_\text{pref}} \left[ \log\bigl(1 + \exp\bigl(-(r_\phi(x, y_c) - r_\phi(x, y_r))\bigr)\bigr) \right]. \ }
+$$
+
+The gradient is the standard logistic-regression gradient:
+
+$$
+\nabla_\phi \mathcal{L}_\text{RM} = -\mathbb{E}\left[ (1 - \sigma(\Delta r))\, \nabla_\phi (r_\phi(x, y_c) - r_\phi(x, y_r)) \right],
+$$
+
+where $\Delta r = r_\phi(x, y_c) - r_\phi(x, y_r)$ and the prefactor $(1 - \sigma(\Delta r))$ is small when the model already strongly prefers $y_c$ (correctly classified, low loss) and large when the model is wrong or uncertain (high loss). This down-weighting of already-correct examples is structurally analogous to the cross-entropy gradient on classification problems.
+
+### 3.1 The training loop
+
+The reward model $r_\phi$ is a function from prompt-response strings to scalars. The conventional architecture (§4) is a transformer LM with a small linear head producing a single scalar. Training:
+
+1. Sample a batch of preference tuples $\{(x_i, y_c^i, y_r^i)\}$ from $\mathcal{D}_\text{pref}$.
+2. Tokenise each $(x, y_c)$ and $(x, y_r)$ to sequences.
+3. Forward both sequences through the transformer; read the scalar reward from the final-token position (or a pooled position; details in §4).
+4. Compute the loss $\log(1 + \exp(-\Delta r))$ per tuple, sum or average over the batch.
+5. Backprop and update $\phi$ via AdamW.
+
+The training is structurally simple. The main complications are *regularisation* (preventing overfitting; §3.2) and *architectural choice* (where to read the reward from; §4).
+
+### 3.2 Overfitting and regularisation
+
+A reward model trained to convergence on a fixed preference dataset usually overfits — held-out preference accuracy plateaus before training-set accuracy. Standard countermeasures:
+
+- **Single epoch.** Most production RM training uses one epoch, exactly because more epochs degrade held-out performance. This is the same intuition as SFT's epoch limit (§9.2).
+- **L2 / weight decay.** Mild weight decay ($0.01$–$0.1$ on the LM body, none on the reward head) is standard.
+- **Reward-margin regularisation.** Add a small term that penalises $|r_\phi(x, y)|$ being too large in absolute terms — keeps the rewards near 0 and prevents the optimiser from finding "blow up the differences" shortcuts.
+- **Hold-out validation.** Standard practice; the RM checkpoint with best held-out accuracy is selected, not the final-step checkpoint.
+
+A subtler issue: the reward model is only as good as the *distribution* of responses it was trained on (§9.3). When PPO or DPO drives the policy's output distribution to high-reward regions, the policy's outputs eventually leave the RM training distribution. The RM's predictions on out-of-distribution outputs are unreliable, and the policy can exploit these unreliable predictions — *reward hacking* (§9.14). This is the central failure mode of static-RM RLHF and motivates iterative-DPO recipes (§9.11) that re-collect preference data on the updated policy.
+
+---
+
+## 4. Reward-model architecture
+
+A reward model takes a prompt-response pair $(x, y)$ and emits a scalar. The conventional architecture is:
+
+1. **A pretrained transformer LM as the backbone**, often initialised from the same base model as the policy (or its SFT-finetuned variant). Reward modeling fine-tunes the LM with the same compute budget as SFT (one epoch, small LR).
+2. **A scalar reward head** — a linear layer from the model's final-layer hidden dimension $d$ to $1$. Read this scalar from a specific position in the sequence.
+
+The "specific position" choice has two standard variants:
+
+- **End-of-response position.** Read the scalar from the hidden state of the last response token (or a special end-of-response token). This is what InstructGPT and most subsequent recipes use. The intuition: the final hidden state has read the entire response, so the scalar conditional on it is conditioning on the whole $(x, y)$.
+- **Pooled across response positions.** Read the scalar as a mean or weighted pool over response token positions. Marginally less common; sometimes used when the reward should be position-invariant.
+
+Either choice works; the end-of-response convention is dominant.
+
+### 4.1 The reward model's size
+
+A practical question: should the reward model be the same size as the policy, smaller, or larger?
+
+**Smaller.** Cheaper to train and run. The downside is reward-model bias: a smaller RM has less capacity to model the preference distribution accurately, and the policy's PPO objective will be a noisier approximation of true preferences. Empirically, RMs $\sim 1/4$ the policy size produce competent results; RMs $< 1/10$ start to degrade.
+
+**Same size.** The default for most public alignment recipes. The InstructGPT paper used a 6B RM for a 175B policy, but later recipes (Llama 2, Llama 3) use same-size RMs. Same-size RMs match the policy's capacity at evaluating its own outputs.
+
+**Larger.** Rare but possible: train a $70$B RM to score a $7$B policy. Provides a stronger "judge" but is computationally expensive to run during PPO. Some research recipes use this for high-fidelity reward signals.
+
+The Tülu 3 ablation (§3.4) reports that RM size is a relatively small lever — a $7$B RM and a $70$B RM produce similar downstream policy quality at the same compute budget, suggesting that RM-size scaling is not the binding constraint.
+
+---
+
+## 5. Reward identifiability: $r$ and $r + c(x)$ are indistinguishable
+
+A structural property of the Bradley-Terry loss: it depends only on the *difference* $r(x, y_c) - r(x, y_r)$. Adding any function of $x$ alone to $r$ leaves all such differences unchanged. So for any function $c : x \mapsto \mathbb{R}$:
+
+$$
+r'(x, y) := r(x, y) + c(x) \quad \implies \quad \mathcal{L}_\text{RM}(r') = \mathcal{L}_\text{RM}(r).
+$$
+
+The reward is *only identified up to an additive prompt-dependent constant*. The Bradley-Terry loss cannot distinguish between "the model's average reward is 0" and "the model's average reward is 100" — both fit the preferences identically.
+
+This non-identifiability has practical consequences:
+
+- **Reward magnitudes are not directly comparable across prompts.** Saying "this response got reward 3.5" is meaningful only relative to other responses to the *same* prompt. Cross-prompt reward comparisons are uninformative.
+- **PPO uses the reward directly**, so its updates are well-defined despite the non-identifiability — what matters is the gradient direction of the *difference*, which is invariant.
+- **DPO (§9.10) implicitly fixes the additive constant** by tying the reward to a log-ratio of the policy and the reference. This is one of the technical observations that makes DPO work.
+
+The identifiability ambiguity is a feature, not a bug: it expresses the fact that preference data only tells us about relative reward, not absolute reward. We will return to this in §9.10.
+
+<Aside type="note">
+**Reward calibration.** A useful diagnostic: take a held-out preference dataset, compute the RM's predicted preference probability $\sigma(\Delta r)$ for each tuple, and bin by predicted probability. In a well-calibrated RM, the fraction of "$y_c \succ y_r$" labels in each bin should equal the bin's midpoint. Real RMs typically over-estimate confidence (predicted $0.9$ corresponds to true preference rate of $\sim 0.85$) and undershoot on the extremes. Calibration-aware RMs (Lightman et al. 2023, Schulman 2023) add a temperature-tuning step to recover calibration. For non-Constitutional-AI alignment, the calibration error has limited downstream effect; for RLAIF and high-stakes safety work, calibration matters.
+</Aside>
+
+---
+
+## 6. The reward-model API
+
+After training, the reward model is queried as follows:
+
+```
+def reward(prompt: str, response: str) -> float:
+    sequence = chat_template(prompt, response)   # apply chat template
+    tokens = tokenize(sequence)
+    hidden_states = transformer_forward(tokens)
+    final_hidden = hidden_states[-1]              # last response token
+    return reward_head(final_hidden)              # scalar
+```
+
+This API will be used in §9.5–§9.8 by the RLHF policy gradient: for each policy sample $(x, y)$, compute $r_\phi(x, y)$ and use it as the per-trajectory reward. The reward model is *frozen* during policy training — only the policy parameters $\theta$ are updated.
+
+A complete RLHF pipeline thus involves three trained models: the SFT policy ($\pi_\text{SFT}$, the starting point), the reward model ($r_\phi$, frozen after RM training), and the final policy ($\pi_\theta$, updated by PPO). The reward model's job is to compress preference data into a function that PPO can backpropagate through.
+
+---
+
+## 7. What we keep going forward
+
+1. **The Bradley-Terry model assumes a latent reward $r(x, y)$ and predicts preferences via the logistic of the reward difference.** Theoretically well-motivated (Luce's choice axiom, max-entropy) and empirically a good fit to human preference data.
+
+2. **Reward-model training is MLE under Bradley-Terry**: minimise $\sum \log(1 + \exp(-\Delta r))$ over preference tuples. Standard logistic-regression machinery.
+
+3. **The RM is a transformer LM with a scalar head reading from the end-of-response position.** Typically initialised from the SFT checkpoint; same size as the policy.
+
+4. **Reward is identified only up to an additive prompt-dependent constant.** Cross-prompt reward magnitudes are uninformative; DPO uses this fact structurally (§9.10).
+
+5. **Reward hacking is the central failure mode of static-RM RLHF.** When the policy drifts out of the RM training distribution, the RM's predictions become unreliable; the policy can exploit this. Iterative-DPO recipes (§9.11) re-collect preference data on the policy.
+
+Next: §9.5 introduces policy gradient and REINFORCE — the basic RL machinery for optimising a policy against a reward signal.
+
+<SelfTest>
+
+**(a)** State the Bradley-Terry model formula and derive both forms (logistic of difference and 2-way softmax). Verify they are equivalent.
+
+**(b)** Write the negative log-likelihood reward-model loss in full. Take its gradient with respect to $\phi$ and identify the per-example weight $(1 - \sigma(\Delta r))$. Interpret the weight: when is it large, when small?
+
+**(c)** Why is the RM typically trained for *one* epoch only? Connect to the SFT-epoch convention of [9.2 §5](/session/ch9-alignment/9.2-sft).
+
+**(d)** Derive the reward identifiability: show that $r(x, y)$ and $r(x, y) + c(x)$ give the same Bradley-Terry preferences for any function $c$ of $x$ alone. Why is this *not* a bug?
+
+**(e)** A reward model is trained on preferences over responses from policy $\pi_\text{SFT}$. After many PPO steps, the policy has drifted to a different distribution $\pi_\theta$. Predict what happens when we use the RM to score $\pi_\theta$'s outputs. What is this failure mode called? Which session of Chapter 9 addresses it?
+
+**(f)** Suppose your reward model's calibration analysis (note in §5) reveals it over-estimates confidence. State one consequence for PPO training. State one mitigation.
+
+</SelfTest>

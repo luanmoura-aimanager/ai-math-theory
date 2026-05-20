@@ -1,0 +1,218 @@
+---
+title: "9.2 — Supervised fine-tuning (SFT)"
+chapter: 9
+order: 2
+estimatedMinutes: 22
+goal: "Define SFT as continued pretraining on (instruction, response) pairs, with the prompt tokens loss-masked. Specify the chat template that imposes the instruction/response structure on the token stream. Quantify dataset size, learning-rate, epoch-count, and KL-drift conventions. Place SFT as the structural-but-not-final step of the alignment pipeline."
+prerequisites: ["ch9-alignment/9.1-why-pretrained-llms-arent-useful", "ch3-optimization-regularization/3.6-adamw"]
+---
+
+## 1. Why this session exists
+
+§9.1 framed alignment as a distribution shift from $p_\text{web}$ to $p_\text{assistant}(y \mid x)$. The most direct way to push the model toward the new distribution is to *show it examples* — pairs $(x_i, y_i)$ of instructions and ideal responses — and continue training with the same next-token-prediction loss as pretraining. This is **supervised fine-tuning (SFT)**, sometimes called *instruction tuning*.
+
+SFT is mechanically simple: same loss, same optimiser, same data pipeline as pretraining; only the dataset changes. But three details require care, and getting them wrong is a common failure mode for first-time alignment work:
+
+1. **Loss masking.** The loss is computed only over the response tokens, not the instruction. Without this masking, the model spends capacity learning to "predict instructions" — which is not what we want.
+2. **Chat template.** The (instruction, response) structure is imposed on the token stream by a *template* with special role-marker tokens. Different model families use different templates, and inconsistent templating at SFT vs inference is a common source of "the model is broken" reports.
+3. **Avoiding catastrophic capability drift.** SFT continues training on a much smaller, more curated dataset than pretraining; without care, the model rapidly drifts away from the broad capabilities of the base model. Conventional choices for learning rate, epoch count, and dataset diversity preserve capability.
+
+This session derives the loss, defines the chat template carefully, names the conventional hyperparameter values, and connects SFT to where the alignment pipeline goes next (preference learning, §9.3 onward).
+
+---
+
+## 2. The SFT objective
+
+Fix a dataset $\mathcal{D}_\text{SFT} = \{(x_i, y_i)\}_{i=1}^{N_\text{SFT}}$ of instruction-response pairs. Each $x_i$ and $y_i$ is a string; after tokenisation they become token sequences $x_i = (x_{i,1}, \dots, x_{i,T_x^i})$ and $y_i = (y_{i,1}, \dots, y_{i,T_y^i})$.
+
+The SFT loss is the average per-token cross-entropy over the *response* tokens only, conditioning on the full instruction:
+
+$$
+\boxed{\
+\mathcal{L}_\text{SFT}(\theta) = -\mathbb{E}_{(x, y) \sim \mathcal{D}_\text{SFT}} \left[ \frac{1}{T_y} \sum_{t=1}^{T_y} \log \pi_\theta(y_t \mid x, y_{<t}) \right].
+\ }
+$$
+
+Two things in this formula matter and are easy to miss.
+
+**(a) The conditioning includes the full instruction $x$.** When predicting $y_1$, the model sees all of $x$ as left-context. This is what makes the model *instruction-conditional* — it has to use $x$ to predict $y$.
+
+**(b) The instruction tokens are not in the sum.** The loss has no term for $\log \pi_\theta(x_t \mid x_{<t})$. The instruction is given as context, not predicted. Implementationally this is "loss masking": construct the sequence $[x; y]$, compute per-token log-likelihoods as usual, and zero out the contributions from positions in the $x$ part of the sequence before averaging.
+
+If you forget the loss mask, the model also learns to *predict instructions* — i.e., it learns the marginal distribution of training-set queries. This sometimes does not break things obviously but degrades quality: capacity is spent on the wrong task, and the model can hallucinate user-like turns ("turn-passing"; the model writes the next user message instead of stopping at the end of its response). All major SFT codebases apply the mask by default; verify it whenever you write your own training loop.
+
+### 2.1 Same loss as pretraining
+
+The per-token loss is identical to the pretraining loss of [7.3 §2](/session/ch7-training-language-models/7.3-forward-pass-at-scale): next-token cross-entropy. The *only* differences from pretraining are (i) the data distribution and (ii) the loss mask on instruction tokens. SFT is, structurally, "pretraining on a different corpus, with some of the tokens marked don't-count."
+
+This is why SFT is sometimes called "continued pretraining on instruction data." The framing emphasises that nothing in the optimiser, the architecture, or the loss function has changed; only the dataset.
+
+---
+
+## 3. The chat template
+
+The (instruction, response) structure has to be made *visible to the model* somehow. The conventional mechanism is a **chat template** — a string formatter that wraps each (role, content) turn in role-marker tokens before tokenisation.
+
+A concrete example (the ChatML template, used by GPT-4 and many open-source models):
+
+```
+<|im_start|>system
+You are a helpful, honest assistant.<|im_end|>
+<|im_start|>user
+What's the capital of France?<|im_end|>
+<|im_start|>assistant
+Paris.<|im_end|>
+```
+
+The tokens `<|im_start|>`, `<|im_end|>`, the role names "system", "user", "assistant", and the embedded newlines are all *literal characters* that the tokenizer turns into tokens. The model sees this as a single concatenated token sequence; the structure is just "particular tokens at particular positions."
+
+A different example — the Llama-3 chat template:
+
+```
+<|begin_of_text|><|start_header_id|>system<|end_header_id|>
+
+You are a helpful, honest assistant.<|eot_id|><|start_header_id|>user<|end_header_id|>
+
+What's the capital of France?<|eot_id|><|start_header_id|>assistant<|end_header_id|>
+
+Paris.<|eot_id|>
+```
+
+The role-marker tokens differ; the content does not. Templates are *family-specific*: GPT-4, Llama-3, Mistral, Qwen, Claude all use distinct token sequences for their role markers. Cross-family template confusion is a frequent operational bug — if you train a Llama-3 base model with ChatML and then serve it with the Llama-3 template, every inference is malformed.
+
+### 3.1 The loss-mask on the template
+
+The loss mask applies to *everything except the assistant's response content*. In the ChatML example, the loss applies *only* to the tokens that encode "Paris.<|im_end|>" — not to "<|im_start|>assistant\n", not to the user turn, not to the system prompt.
+
+Some implementations also unmask the `<|im_end|>` token specifically, so the model learns where to stop. Some implementations also unmask the assistant role-header tokens (`<|im_start|>assistant\n`), arguing the model should learn the conditional dependency on its own role marker. The choice is implementation-dependent and small in effect; the structural requirement is "loss is applied to the content the model is supposed to generate, not to the prompt context."
+
+### 3.2 Multi-turn conversations
+
+When the SFT data has multiple turns:
+
+```
+user: What's the capital of France?
+assistant: Paris.
+user: And of Germany?
+assistant: Berlin.
+```
+
+The conventional treatment is to apply the loss to *every assistant turn* simultaneously — so the single forward pass over the multi-turn sequence accumulates loss from both "Paris." and "Berlin." This is implementationally just "loss-mask is 1 on every assistant content token, 0 elsewhere." Per-step gradient: one forward pass through the full conversation, gradient summed over all unmasked positions.
+
+Multi-turn SFT teaches the model to handle (a) referring to earlier turns ("And of Germany?" implicitly refers back), (b) maintaining a consistent role across turns, and (c) responding appropriately to follow-up questions. Single-turn SFT alone gives a model that often loses coherence in multi-turn use.
+
+---
+
+## 4. Datasets: what goes in $\mathcal{D}_\text{SFT}$
+
+The data is the heart of SFT. What you put in determines what comes out. A few canonical datasets and the recipes that produced them.
+
+**InstructGPT (2022).** $\sim 13{,}000$ prompts from a mix of OpenAI API users and labeller-written prompts; demonstrations written by a team of $\sim 40$ contractors. The demonstrations are *short*, *direct*, and *follow specific writing guidelines* (avoid hedging, do not refuse without explanation, be concise). This dataset never released, but its design is documented in the InstructGPT paper §3.3.
+
+**FLAN (2021, T5-era) and Super-NaturalInstructions (2022).** Re-purpose existing NLP benchmarks as instruction-response pairs. E.g., SQuAD becomes "Given the following passage, answer the question: ..." with the SQuAD answer. Easy to scale (lots of benchmarks exist), but the responses are *short* and benchmark-shaped — better for closing the "I don't know how to be conditional on a prompt" gap than for teaching nuanced conversational behaviour.
+
+**Alpaca (2023).** $\sim 52{,}000$ instructions generated by prompting GPT-3.5 with seed examples ("self-instruct"). The responses are GPT-3.5's responses. Distillation from a stronger model — cheap, scales easily, and the model effectively learns to imitate the teacher's instruction-following behaviour.
+
+**ShareGPT (2023).** $\sim 90{,}000$ real ChatGPT conversations shared by users via the ShareGPT browser extension. Free, large, and *real-conversation-shaped*, which is a different distribution than benchmark-shaped or labeller-written. Quality varies (some conversations are toy or low-effort); typical recipes filter by length and language.
+
+**Llama 2 (2022).** $\sim 28{,}000$ human-written instruction-response pairs, hand-curated for quality and diversity. The Llama 2 paper §3.1 reports that smaller-but-higher-quality SFT data outperforms larger-lower-quality data, a finding replicated in many subsequent papers.
+
+**Tülu 3 (2024).** $\sim 939{,}000$ instructions across many domains, heavily filtered and augmented with synthetic data. Modern SFT recipes use $100$k–$1$M examples, typically a mix of human-written, distilled, and benchmark-derived.
+
+The empirical lesson from this evolution: **SFT quality is more about data curation than quantity**. A $10$k-example dataset of clean, diverse, well-formatted demonstrations frequently outperforms a $1$M-example dataset of mixed quality. The Llama 2 SFT recipe became the canonical "quality over quantity" reference.
+
+### 4.1 Synthetic vs human data
+
+Synthetic data — generated by prompting a stronger model — is now dominant at the data-volume level. The advantages: cheap to scale, diverse (the teacher model can be prompted into different domains), reasonably well-formatted, and the bottleneck is teacher-model API cost rather than labeller hiring. The disadvantage: the student model is bounded above by the teacher (you cannot distil to a better model than your teacher).
+
+Frontier labs use a hybrid: human-written data for the most important behaviours (refusals, safety-critical responses, format-critical tasks like tool use), synthetic data for breadth and volume. Llama 3's training documentation describes a $5$M-example SFT dataset with $\sim 30\%$ human, $\sim 70\%$ synthetic.
+
+---
+
+## 5. Training hyperparameters
+
+SFT is *small* relative to pretraining — $10$k–$1$M examples vs the trillions of tokens of pretraining — and the hyperparameters reflect that.
+
+**Learning rate.** $1$–$5 \times 10^{-6}$ for the base parameters; some recipes use $1$–$3 \times 10^{-5}$. This is $10$–$100\times$ smaller than pretraining peak LR. Larger LR causes the model to overshoot the local pretraining minimum and degrade capability; smaller LR underfits the SFT data. Empirically, $2 \times 10^{-6}$ for a 7B-scale model and $5 \times 10^{-7}$ for a 70B-scale are widely-used defaults.
+
+**Epochs.** $1$–$3$ epochs over $\mathcal{D}_\text{SFT}$. More than 3 epochs frequently *hurts*: the model memorises the SFT data and loses generalisation. Llama 2 used $2$ epochs; Tülu 3 used $1$.
+
+**Optimiser.** Same AdamW ([3.6](/session/ch3-optimization-regularization/3.6-adamw)) as pretraining, with $\beta_1 = 0.9, \beta_2 = 0.95, \epsilon = 10^{-8}$. Weight decay $0.0$–$0.1$ — modern recipes (Llama 3) drop weight decay for SFT entirely on the argument that it works against the goal of staying near the pretrained weights.
+
+**Batch size.** $32$–$1024$ examples (much smaller than pretraining's millions of tokens per step). Smaller batches give more gradient steps per epoch, which matters when the dataset is small.
+
+**Sequence length.** Pad to the maximum length the model supports (e.g., $4096$ or $8192$ tokens) and document-pack multiple shorter examples into one sequence. Otherwise FLOPs are wasted on padding.
+
+**LR schedule.** Linear warmup over $\sim 10\%$ of total steps, then cosine decay or constant. Some recipes use constant LR throughout; the data is small enough that the schedule has minor effect.
+
+### 5.1 Why these numbers and not the pretraining numbers
+
+The intuition is "stay close to the pretrained weights." The base model has a vast amount of stored knowledge and capability; SFT data is comparatively narrow. Aggressive optimisation would erase the stored knowledge in favour of fitting the SFT data, which is *worse* than the pretrained model on most queries.
+
+A useful diagnostic: the KL divergence between the SFT model's output distribution and the base model's, $\mathbb{E}_x [\text{KL}(\pi_\text{SFT}(\cdot \mid x) \| \pi_\text{base}(\cdot \mid x))]$. After conventional SFT, this is a few nats per token. After aggressive (too-many-epoch, too-high-LR) SFT, it can be tens of nats — which signals the model has changed its distribution drastically and likely lost capability on out-of-distribution queries. We will see this same drift-monitoring idea show up explicitly as the KL penalty in RLHF (§9.9).
+
+---
+
+## 6. What SFT achieves and where it stops
+
+After SFT, the model exhibits three structural changes from the base model:
+
+1. **Instruction-following.** Asked "What's the capital of France?", the model responds "Paris" rather than continuing a question list. The model has learned that the chat-template structure signals "this is an instruction, produce a response."
+2. **Format compliance.** The model adopts a consistent assistant persona, ends responses with the `<|eot|>` token, formats lists with bullets when asked, writes code when asked, etc.
+3. **Refusal of clearly-harmful requests.** If the SFT data includes refusals to harmful prompts, the model learns to refuse similar prompts. This is the *baseline* safety behaviour, refined further by preference-based methods.
+
+Where SFT stops:
+
+1. **Quality is bounded by the demonstration data.** If the demonstrations are mediocre, the model is mediocre. To exceed the demonstrations, the model needs feedback on its own outputs — which is what preference training provides.
+2. **No way to discriminate between two valid responses.** The SFT loss has no notion of "this response is *better* than that response." If the data shows both a concise and a verbose answer to the same question, the model learns a mixture. To explicitly prefer concise (or verbose), we need preferences.
+3. **The model still hallucinates.** SFT does not teach the model what it knows vs what it doesn't know; it teaches the model what *the demonstrations* said, which is not the same as "what the model can reliably produce." Reducing hallucination requires either preference training (penalising hallucinated outputs) or RAG (avoiding the question by retrieving from a knowledge base).
+
+These three limits are the motivation for the rest of Chapter 9. §9.3 begins the preference machinery that pushes the model beyond what SFT alone achieves.
+
+<Aside type="note">
+**LoRA SFT.** Many practitioners SFT with parameter-efficient methods (LoRA, Hu et al. 2021, [arXiv:2106.09685](https://arxiv.org/abs/2106.09685)) — only a small number of low-rank adapter matrices are trained, leaving the base model frozen. The advantages: $1000\times$ smaller checkpoints (only the LoRA adapters need to be stored), no GPU memory for optimiser state of the base parameters, and the base model remains usable for other tasks by swapping adapters. The disadvantage: slightly worse downstream quality than full-parameter SFT (typically $1$–$3\%$ on standard benchmarks). For production-grade alignment, frontier labs do full-parameter SFT; LoRA is the dominant choice for community-driven fine-tuning of open-weights models.
+</Aside>
+
+---
+
+## 7. The SFT-only model: a fully-functional baseline
+
+It is worth noting that an SFT-only model is *already* useful as a chat assistant. The first generation of useful open-source LLMs (Vicuna, Alpaca) were SFT-only. The InstructGPT paper showed that even a 1.3B-parameter SFT-only model was preferred by labellers over the 175B-parameter base GPT-3.
+
+What you don't get from SFT-only:
+
+- Robust refusal of adversarial harmful prompts (jailbreaks). Preference training with adversarial examples closes more of this gap.
+- Consistent calibrated confidence. SFT teaches the model to imitate confident-sounding demonstrations, including when it shouldn't be confident.
+- Strong performance on tasks where the demonstration ceiling is low (e.g., complex multi-step reasoning where labellers struggle to produce good demonstrations).
+
+For a long time, the conventional view was "SFT is the cheap, structural step; RLHF is where the real quality comes from." The 2024 evidence (Llama 3 SFT performance, Tülu 3) revised this: with enough careful data curation, SFT can get *most* of the way to a high-quality model. Preference-based methods then add the last 10–20%, which is still meaningful at the frontier.
+
+---
+
+## 8. What we keep going forward
+
+1. **SFT is continued pretraining on $\mathcal{D}_\text{SFT} = \{(x, y)\}$ with loss masked on instruction tokens.** Same loss, optimiser, and data pipeline as pretraining; only the dataset and the mask differ.
+
+2. **The chat template is the mechanism by which the (instruction, response) structure becomes visible to the model.** Family-specific role-marker tokens; consistency at SFT and inference is essential.
+
+3. **Hyperparameters: small LR ($\sim 2 \times 10^{-6}$), few epochs (1–3), modest dataset ($10$k–$1$M).** The goal is to stay close to the base model's weights while teaching it the instruction-following structure.
+
+4. **SFT gets you a usable baseline assistant.** What it doesn't get you: explicit "better/worse" discrimination, calibrated confidence, robust refusal of adversarial prompts. These are the gaps that preference-based methods (§9.3–§9.13) fill.
+
+The next session begins the preference-based machinery: how to collect preference data, what it looks like, and why it's a more scalable feedback signal than demonstrations.
+
+<SelfTest>
+
+**(a)** Write the SFT loss exactly as in §2. Mark which tokens contribute to the sum. Explain why loss-masking the instruction tokens is essential.
+
+**(b)** Construct a one-turn conversation in the ChatML template of §3. Identify exactly which tokens are unmasked in the loss.
+
+**(c)** Two SFT runs use the same data but differ in learning rate ($2 \times 10^{-6}$ vs $2 \times 10^{-4}$). Predict, qualitatively, the difference in the resulting models. Why is the higher-LR run typically *worse* at downstream tasks even if it fits the SFT data better?
+
+**(d)** Compare InstructGPT's $13$k-example human-written SFT dataset with Tülu 3's $939$k-example mostly-synthetic dataset. Argue why both can produce strong models. What does this say about the "quality vs quantity" tradeoff?
+
+**(e)** Name three things SFT achieves and three things SFT *does not* achieve. For each "does not", say which subsequent session of Chapter 9 addresses it.
+
+**(f)** A practitioner reports "my SFT model sometimes writes the next user turn instead of stopping at end-of-response." Diagnose the most likely bug, citing §2's loss-masking requirement and §3's chat-template handling.
+
+</SelfTest>

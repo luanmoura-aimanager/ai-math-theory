@@ -1,0 +1,145 @@
+---
+title: "9.1 — Why pretrained LLMs aren't 'useful' yet"
+chapter: 9
+order: 1
+estimatedMinutes: 18
+goal: "Name precisely the gap between 'model the internet' (next-token cross-entropy on a web corpus) and 'follow instructions' (produce helpful, honest, harmless responses to user queries). Frame alignment as a distribution-shift problem: pretraining matches p_data(t), inference asks for p_user-intent(t | instruction). The chapter that follows is the toolkit for closing the gap."
+prerequisites: ["ch7-training-language-models/7.14-gpt3-paper-read", "ch8-modern-llm-architectures/8.1-decoder-only"]
+---
+
+## 1. Why this session exists
+
+Chapters 6–8 built a *pretrained* decoder-only LLM: an autoregressive model $\pi_\theta(t)$ trained to minimise the cross-entropy of next-token prediction on a web-scale corpus. By the end of [7.14](/session/ch7-training-language-models/7.14-gpt3-paper-read), the GPT-3 paper had demonstrated that this object — at $175$B parameters and $300$B training tokens — has surprising emergent capabilities accessible via few-shot prompting: translation, simple arithmetic, code completion, question answering. The base model is *capable*.
+
+It is not, however, *useful* — at least not in the sense that the chat assistants of 2026 are useful. Ask a raw pretrained LLM "What's the capital of France?" and the most likely continuation is not "Paris." It is more likely to be "What's the capital of Germany? What's the capital of Spain?" — the next-token-prediction objective makes the model continue the *distribution* of internet text, which often contains lists of geography questions without their answers, FAQ headers without bodies, and prompts that segue into other prompts.
+
+The gap between "model the internet" and "behave like a helpful assistant" is the subject of Chapter 9. The closing of this gap is called **alignment**: a collection of post-pretraining training stages that shift the model's distribution from $p_\text{web}(t)$ to $p_\text{assistant}(t \mid \text{instruction})$ while preserving the capabilities the base model learned.
+
+This session pins down the gap precisely, names the three desiderata that "useful" decomposes into, and previews the toolkit (SFT → reward modeling → RLHF / DPO) the remaining 14 sessions develop.
+
+---
+
+## 2. The base model's objective, exactly
+
+After pretraining (Chapter 7), the model $\pi_\theta(\cdot)$ has been optimised to minimise
+
+$$
+\mathcal{L}_\text{pretrain}(\theta) = -\mathbb{E}_{t_{1:T} \sim p_\text{web}} \left[ \frac{1}{T} \sum_{i=1}^{T} \log \pi_\theta(t_i \mid t_{<i}) \right],
+$$
+
+where $p_\text{web}$ is the distribution of token sequences in the (filtered, deduplicated) web corpus described in [7.1](/session/ch7-training-language-models/7.1-pretraining-data). The optimiser at convergence has $\pi_\theta(\cdot) \approx p_\text{web}(\cdot)$ — i.e., the model assigns probability to text approximately in proportion to how likely it is to appear on the trained web slice.
+
+The base model is therefore *exactly* a distribution-matcher. Any sequence $t_{1:T}$ that is common in the corpus is high-probability under $\pi_\theta$; anything uncommon is low-probability. The pretraining objective has no notion of "good answer" — only "likely continuation given my training corpus."
+
+### 2.1 What this means in practice
+
+Three concrete consequences of "the base model matches the corpus."
+
+**(a) Continuation, not answer.** Given the prompt "What's the capital of France?", the most likely continuation under $p_\text{web}$ is determined by how that string actually appears on the internet. If the string most often appears in lists of practice questions (FAQ pages, quiz banks, educational worksheets), the continuation is another question. The string sometimes appears followed by "Paris." — but typically only in *answer keys*, which are a small fraction of the corpus relative to question lists.
+
+The base model has no concept of "this is a query, I should respond with an answer." It has a concept of "this is a string, here is the most-likely-string-that-follows-it-on-the-internet."
+
+**(b) Imitation of the corpus's median quality.** The web is *median* quality. A base model trained on the web outputs median-quality text: full of unsupported claims, low-effort writing, mild factual errors, occasional toxicity, and a heavy bias toward genres that are over-represented (forum posts, listicles, marketing copy). The model is not "trying to be wrong"; it is *successfully matching the distribution it was given*.
+
+**(c) No persona, no stance.** Asked "What is the best programming language?", the model's distribution over completions is essentially a sample from internet flame-wars on the topic — sometimes "Python", sometimes "Rust", sometimes a several-paragraph defence of C, sometimes a snide non-answer. The base model has no consistent voice because the web has no consistent voice.
+
+The base model is, mathematically, doing exactly what its loss told it to do. The problem is not the model; it is the choice of target distribution.
+
+---
+
+## 3. What "useful" decomposes into
+
+The InstructGPT paper (Ouyang et al., 2022, [arXiv:2203.02155](https://arxiv.org/abs/2203.02155)) named three desiderata that "useful" decomposes into. These three are the standard reference framing that every modern alignment paper inherits:
+
+- **Helpful.** Given an instruction, produce a response that *advances the user's actual goal*. Helpfulness requires (i) reading the instruction as an instruction (not as a string to continue), (ii) inferring the user's intent, and (iii) producing output that serves that intent.
+- **Honest.** Do not make up facts, do not pretend to know what the model does not know, and acknowledge uncertainty when appropriate. Honesty is partly an epistemic property of the model's outputs and partly a calibration property of its claimed confidence.
+- **Harmless.** Refuse to assist with requests that would harm the user, third parties, or society (e.g., instructions for synthesising bioweapons, generating child-sexual-abuse material, manipulating individuals into self-harm). Harmlessness is partly a refusal property and partly a counterfactual-impact property.
+
+The three are sometimes in tension. A user asks "How do I pick this lock?" — the *helpful* answer is to explain lock-picking; the *harmless* answer depends on whether the user is locked out of their own house (helpful and harmless to answer) or trying to break into a stranger's (the question of "harmless" is then non-trivial). Alignment training has to navigate these tensions, and the standard approach (rewarding human preferences over model outputs) implicitly forces the model to learn a culturally- and task-specific balance.
+
+For the remainder of Chapter 9, we will use "helpful + honest + harmless" as shorthand for "what alignment is optimising toward." The mathematics in §9.3 onwards is *agnostic to the desideratum*: any property expressible as "this response is preferred to that response" can be optimised by the same machinery. The desiderata enter only via the preference labels used to train the reward model.
+
+<Aside type="history">
+**Three-axis framing pre-dates LLMs.** The "helpful, honest, harmless" decomposition was articulated by Anthropic in Askell et al. (2021, "A General Language Assistant as a Laboratory for Alignment", [arXiv:2112.00861](https://arxiv.org/abs/2112.00861)) and codified as the InstructGPT design target the following year. By 2026 it is standard vocabulary across the major labs, with variations: Anthropic adds "honest" as the central operational hinge in their Constitutional AI work (§9.13); OpenAI emphasises "helpful" via SFT on demonstration data; DeepMind's Gemini training documents add "safety" as a distinct axis from "harmless". The exact wording shifts; the three-axis decomposition is stable.
+</Aside>
+
+---
+
+## 4. The shape of the gap, formally
+
+A *useful* assistant is a conditional distribution $p_\text{assistant}(y \mid x)$ where $x$ is an instruction and $y$ is a helpful, honest, harmless response. The base model is $p_\text{web}(t_{1:T})$ — an *unconditional* distribution over web text. The gap is:
+
+$$
+\boxed{\
+\text{Pretraining gives:}\quad p_\text{web}(t) \qquad
+\text{Useful behaviour requires:}\quad p_\text{assistant}(y \mid x).
+\ }
+$$
+
+Several things are different across the equals sign:
+
+1. **Conditional vs unconditional.** The base model defines a joint over sequences; the assistant defines a conditional over responses given an instruction. We need to *transform* the joint into a conditional — formally, a posterior over completions given a prompt. The base model already supports this (just feed the prompt and sample), but the conditional that comes out is $p_\text{web}(y \mid x)$, which is "the distribution of web continuations of the prompt $x$" — not "the distribution of useful responses to the instruction $x$."
+
+2. **Different target distribution.** $p_\text{web}$ and $p_\text{assistant}$ are *fundamentally different objects*. The former is what the internet writes; the latter is what a thoughtful, helpful, honest expert would write. The two overlap on factually-correct, well-written content (encyclopedia articles, well-curated tutorials), but $p_\text{assistant}$ excludes huge swaths of $p_\text{web}$ (toxic posts, unsupported claims, low-effort responses, irrelevant tangents) and is heavily weighted toward genres that are rare on the web (concise direct answers to questions, instruction-following with clearly-marked refusals when warranted).
+
+3. **No training data for $p_\text{assistant}$ at scale.** The web does not contain examples of "ideal assistant responses to arbitrary instructions" in any reasonable quantity. We cannot just point at a corpus and say "fit this." The data has to be *constructed* — by paid human labellers (InstructGPT, Llama 2), by distillation from a stronger model (Alpaca, Vicuna), or by feedback-based methods that don't require explicit demonstrations (RLHF, DPO).
+
+The gap, in one sentence: **the pretraining corpus contains examples of "what the internet looks like" but not examples of "what an aligned response to a query looks like," so the base model has matched the wrong distribution.**
+
+---
+
+## 5. The two-step bridge
+
+The standard 2024–2026 recipe for closing the gap, which we will develop in detail across §9.2–§9.13:
+
+**Step 1: Supervised fine-tuning (SFT, §9.2).** Continue training $\pi_\theta$ on a *small* dataset of high-quality instruction-response pairs $\{(x_i, y_i)\}_{i=1}^{N_\text{SFT}}$. The loss is the same cross-entropy as pretraining, but the data distribution is shifted from "web" to "demonstrations of useful behaviour." InstructGPT used $N_\text{SFT} \approx 13{,}000$ human-written demonstrations; modern recipes use $10$k–$1$M, often heavily synthetic-data-supplemented.
+
+SFT does most of the structural work: after SFT, the model has learned to interpret an instruction as an instruction (not a string to continue), to produce a direct response (not a continuation of the conversation as listicle), and to adopt a consistent helpful-assistant voice. But SFT is bounded by the quality of the demonstration data: the model can only get as good as the demonstrations it imitates.
+
+**Step 2: Preference-based training (§9.3–§9.13).** Beyond SFT, the model can be improved using *preferences* — judgments of the form "$y_a$ is better than $y_b$ for instruction $x$" — collected from human labellers or AI judges. The preferences are converted into a reward function (§9.3–§9.4) and the policy is optimised to maximise expected reward (§9.5–§9.6, by PPO; §9.10, by DPO; §9.7, by GRPO). This step refines the model beyond what demonstrations alone can produce, because (a) preferences are cheaper than demonstrations to collect, (b) preferences directly express *relative quality* without requiring labellers to write the ideal answer themselves, and (c) preferences can be collected on the model's own outputs, providing a self-improving loop.
+
+The full pipeline:
+
+$$
+\underbrace{\pi_\text{pretrain}}_\text{base model} \xrightarrow{\text{SFT}} \underbrace{\pi_\text{SFT}}_\text{instruction-following} \xrightarrow{\text{preferences} + \text{RL or DPO}} \underbrace{\pi_\text{aligned}}_\text{helpful, honest, harmless}.
+$$
+
+The remaining 14 sessions of Chapter 9 develop each arrow. §9.2 is SFT. §9.3–§9.7 are the machinery of preference learning: data, Bradley-Terry, policy gradient, PPO, GRPO. §9.8–§9.9 assemble end-to-end RLHF and explain the KL penalty. §9.10–§9.11 derive DPO and its iterative variant. §9.12–§9.13 are extensions: process rewards for reasoning, constitutional AI for scaling preferences. §9.14 is a cautionary session on reward over-optimization; §9.15 is inference-time alignment.
+
+---
+
+## 6. What alignment is *not*
+
+Three things worth disambiguating, because the term "alignment" carries other meanings in the broader AI safety literature.
+
+**(a) Alignment $\neq$ safety in the existential sense.** The "AI alignment" research field at large includes deep questions about whether arbitrarily intelligent agents can be made to robustly pursue human values across distributions they were not trained on. Chapter 9 is *not* about that. Chapter 9 is about *finetuning recipes* — the specific algorithms used in 2024–2026 to turn a pretrained LLM into a usable chat assistant. The two senses of "alignment" share vocabulary and some techniques (RLHF, Constitutional AI), but the framing here is engineering, not safety theory.
+
+**(b) Alignment $\neq$ moral philosophy.** The choice of "helpful, honest, harmless" as desiderata is operationally useful but morally non-trivial: who decides what is harmful? what counts as helpful when users disagree? The Chapter 9 mathematics is *neutral* on these questions — it gives a toolkit for optimising against *any* preference distribution. The choice of preferences is a separate, important, and not-purely-technical question. We will note it where it matters (§9.3 on preference-data design, §9.13 on Constitutional AI) but the chapter is not a moral-philosophy treatise.
+
+**(c) Alignment $\neq$ pretraining done differently.** Some early proposals — train on a "cleaner" corpus, filter the web more aggressively, augment with more high-quality data — were attempts to solve the alignment gap with better pretraining. They help, but they do not close the gap. The structural reason: even an ideal-quality web corpus does not contain the *conditional* "useful response given instruction" distribution; it contains *unconditional* high-quality web text. The conditional has to be learned separately, which is what SFT and preference training do.
+
+---
+
+## 7. Where this chapter sits in the course
+
+Chapter 9 is the most distinctively post-2020 chapter in the course. Pretraining (Chapters 6–7) was largely settled by GPT-3; the architectural refinements of Chapter 8 are local edits to a stable skeleton. Alignment, by contrast, is *the* active area of research in 2024–2026 — new methods (GRPO, iterative DPO, Constitutional AI, PRMs) appear monthly, and the recipes used by frontier labs are updated training run by training run.
+
+The 15 sessions of this chapter give a *snapshot* of the state of the art in mid-2026. The structural ideas — preference data, reward modeling, policy gradient, KL-regularised RL, DPO, AI-generated feedback, process rewards — are durable. The specific recipes (the auxiliary loss in GRPO, the data ordering in iterative DPO, the constitution wording in Constitutional AI) are not, and you should expect them to shift over the next two years.
+
+After Chapter 9, Chapter 10 covers inference and decoding (greedy/beam, temperature/top-p, KV-cache details, speculative decoding, FlashAttention, quantisation, test-time scaling, vLLM, agentic decoding). Chapter 11 covers interpretability and the frontier. Chapter 12 is the capstone: build and train a tiny GPT, including a mini-RLHF loop.
+
+<SelfTest>
+
+**(a)** State the pretraining loss of [Chapter 7](/session/ch7-training-language-models/7.3-forward-pass-at-scale) precisely. At convergence, what distribution does $\pi_\theta(\cdot)$ approximate?
+
+**(b)** Give three concrete examples of base-model behaviour that are not "useful" from a user perspective, and explain in each case why the base model's behaviour is *correct* with respect to its pretraining objective.
+
+**(c)** Decompose "useful" into the three InstructGPT desiderata. For each, give a one-sentence operational definition. Where might the three be in tension with each other?
+
+**(d)** Write the formal "distribution gap" of §4 in your own notation. Identify the three differences between the pretraining target and the alignment target.
+
+**(e)** Describe the two-step bridge (SFT $\to$ preference-based training) of §5 in your own words. Why is SFT alone insufficient to reach $\pi_\text{aligned}$?
+
+**(f)** Distinguish "alignment" as used in Chapter 9 from (i) AI-safety-in-the-existential-sense and (ii) "just train on a better corpus." Give a one-paragraph argument for why (ii) cannot close the gap that Chapter 9 is closing.
+
+</SelfTest>

@@ -1,0 +1,268 @@
+---
+title: "9.6 — Proximal Policy Optimization (PPO)"
+chapter: 9
+order: 6
+estimatedMinutes: 28
+goal: "Derive the PPO clipped surrogate objective from the importance-sampling identity. Understand the role of the clip threshold ε, the value-function critic, the advantage estimator (GAE), and the per-token application in LLM training. Place PPO as the workhorse RL algorithm of RLHF since 2017."
+prerequisites: ["ch9-alignment/9.5-policy-gradient-reinforce"]
+---
+
+## 1. Why this session exists
+
+§9.5 ended with REINFORCE: a correct but high-variance, sample-inefficient policy gradient algorithm. The two operational problems were (a) fresh samples are required for each gradient step, so each step is expensive, and (b) a single unlucky large gradient step can push the policy off-distribution and break it.
+
+**Proximal Policy Optimization** (Schulman et al., 2017, [arXiv:1707.06347](https://arxiv.org/abs/1707.06347)) addresses both. The core idea: use *importance sampling* to reuse on-policy samples for multiple gradient steps, and *clip* the importance-weighted objective so that each step cannot drag the policy too far from its sampling distribution.
+
+PPO became the default RL algorithm in 2017 for control / robotics and was inherited by RLHF in 2020. Every major RLHF deployment from InstructGPT (2022) through Llama 3 (2024) used PPO until DPO and GRPO offered alternatives. Even now, PPO remains the reference algorithm — the one DPO is *derived against* (§9.10) and the one GRPO is *simplified from* (§9.7).
+
+This session derives the clipped surrogate objective, names the additional machinery (advantage estimation with GAE, value-function critic, per-token application), and writes the full PPO loop for LLM training.
+
+---
+
+## 2. Importance sampling and the surrogate objective
+
+REINFORCE's gradient is $\mathbb{E}_{y \sim \pi_\theta}[r(y) \nabla \log \pi_\theta(y)]$. The expectation is *under the current policy* — we cannot reuse old samples from a previous policy $\pi_{\theta_\text{old}}$, because the gradient direction depends on $\theta$, not just on the samples.
+
+Importance sampling lifts this restriction. The identity is
+
+$$
+\mathbb{E}_{y \sim \pi_\theta}[f(y)] = \mathbb{E}_{y \sim \pi_{\theta_\text{old}}}\left[ \frac{\pi_\theta(y)}{\pi_{\theta_\text{old}}(y)} f(y) \right],
+$$
+
+which holds for any function $f$ such that the ratio is well-defined. The ratio $\rho_\theta(y) := \pi_\theta(y) / \pi_{\theta_\text{old}}(y)$ is the **importance-sampling weight** that re-weights samples from $\pi_{\theta_\text{old}}$ to give expectations under $\pi_\theta$.
+
+Applying this to the policy gradient:
+
+$$
+\nabla_\theta J(\theta) = \mathbb{E}_{y \sim \pi_{\theta_\text{old}}}\left[ \rho_\theta(y)\, A(x, y)\, \nabla_\theta \log \pi_\theta(y \mid x) \right] = \nabla_\theta \mathbb{E}_{y \sim \pi_{\theta_\text{old}}}\left[ \rho_\theta(y)\, A(x, y) \right],
+$$
+
+where we've replaced the raw reward with the advantage $A(x, y) = r(x, y) - b(x)$ (§9.5 §5.1) — a baseline-subtracted reward — and the second equality uses $\nabla_\theta \rho_\theta = \rho_\theta \cdot \nabla_\theta \log \pi_\theta$.
+
+So the gradient of $\mathbb{E}_{y \sim \pi_{\theta_\text{old}}}[\rho_\theta(y) A(x, y)]$ — a function of $\theta$ that *can be evaluated on samples from $\pi_{\theta_\text{old}}$* — is the policy gradient at the current $\theta$. We can take *multiple gradient steps* on this objective using a single batch of samples, as long as we treat $\pi_{\theta_\text{old}}$ as fixed and the importance ratio updates as $\theta$ moves.
+
+This is the **surrogate objective**:
+
+$$
+\mathcal{L}^\text{surr}(\theta) = \mathbb{E}_{y \sim \pi_{\theta_\text{old}}} \bigl[ \rho_\theta(y)\, A(x, y) \bigr].
+$$
+
+Maximising $\mathcal{L}^\text{surr}$ with respect to $\theta$ moves the policy in the direction of higher expected reward — but only locally. If $\theta$ moves too far from $\theta_\text{old}$, the importance ratio $\rho_\theta$ can become extreme (very large or very small), and the surrogate becomes a poor approximation to the true objective.
+
+---
+
+## 3. The clipping trick
+
+Schulman's contribution: prevent $\theta$ from moving too far in one update by *clipping* the importance ratio in the surrogate.
+
+Define
+
+$$
+\boxed{\
+\mathcal{L}^\text{PPO}(\theta) = \mathbb{E}_{y \sim \pi_{\theta_\text{old}}} \Bigl[ \min\bigl( \rho_\theta(y)\, A(x, y),\ \text{clip}(\rho_\theta(y), 1 - \epsilon, 1 + \epsilon)\, A(x, y) \bigr) \Bigr],
+\ }
+$$
+
+where $\text{clip}(z, a, b) = \min(\max(z, a), b)$ saturates $z$ to the interval $[a, b]$, and $\epsilon$ (typically $0.1$–$0.3$, with $0.2$ as the de facto default) is the clip threshold.
+
+The structure of the clipping:
+
+- **If $A > 0$** (the action was better than the baseline) and $\rho > 1 + \epsilon$, the clipped version is $(1 + \epsilon) A$, which is smaller than $\rho A$. The $\min$ picks the smaller, *capping* the surrogate reward. So the policy update will not chase a more-than-$(1+\epsilon)$-times increase in this action's probability.
+- **If $A < 0$** (the action was worse than the baseline) and $\rho < 1 - \epsilon$, the clipped version is $(1 - \epsilon) A$, which is *larger* than $\rho A$ (because $A < 0$, smaller-magnitude $\rho$ gives a less-negative value). The $\min$ now picks $\rho A$, *not* clipping. So the policy is allowed to push probability all the way down. The clipping is asymmetric and only triggers when probability is being *increased* on positive advantage or *decreased* on negative advantage.
+
+Wait, that last paragraph is mis-stated. Let me redo it carefully.
+
+The $\min$ is over (a) the unclipped surrogate $\rho A$ and (b) the clipped surrogate $\text{clip}(\rho, 1-\epsilon, 1+\epsilon) \cdot A$. The objective is *maximised* with respect to $\theta$. So:
+
+- **If $A > 0$:** We want $\rho$ to grow (to increase the action's probability). If $\rho > 1 + \epsilon$, clipping caps it at $1 + \epsilon$. Since $A > 0$, the clipped term $(1+\epsilon) A < \rho A$. The $\min$ picks the smaller, so the objective is the clipped value. The gradient with respect to $\theta$ at this point is *zero* — further increases in $\rho$ do not improve the objective. So the policy stops pushing this action's probability up.
+- **If $A < 0$:** We want $\rho$ to shrink (to decrease the action's probability). If $\rho < 1 - \epsilon$, clipping floors it at $1 - \epsilon$. Since $A < 0$, the clipped term $(1-\epsilon) A > \rho A$ (less negative). The $\min$ picks the smaller, $\rho A$, which is the *unclipped* value. So the objective continues to decrease as $\rho$ decreases — the policy *can* push this action's probability further down.
+
+Hmm, this is the *opposite* behaviour. Let me re-derive. Actually I had it right the first time but got the asymmetry direction confused; here is the careful version:
+
+PPO uses $\min(\rho A, \text{clip}(\rho, 1-\epsilon, 1+\epsilon) A)$. The two terms are:
+
+- $\rho A$: the unclipped surrogate.
+- $\text{clip}(\rho, 1-\epsilon, 1+\epsilon) A$: the clipped surrogate.
+
+When $A > 0$: clipping $\rho$ at $1+\epsilon$ (from above) lowers $\rho A$. $\min$ picks the lower of the two. So $\min$ caps the *upside* of the surrogate when $\rho > 1+\epsilon$: no incentive to push $\rho$ beyond $1+\epsilon$. When $\rho < 1-\epsilon$, clipping floors $\rho$ at $1-\epsilon$, making the clipped term *larger* than $\rho A$; $\min$ picks $\rho A$, the unclipped — so the objective is *not* clipped from below for positive $A$. The policy continues to be rewarded for moving $\rho$ up from a too-low value.
+
+When $A < 0$: clipping $\rho$ at $1-\epsilon$ (from below) lowers $\rho A$ further (more negative). $\min$ picks $\rho A$, which is the lower. So the surrogate is *not* clipped here — the policy keeps being penalised. When $\rho > 1+\epsilon$, clipping floors $\rho$ at $1+\epsilon$, making the clipped term less negative; $\min$ picks $\rho A$ (the unclipped, more negative one). So again the surrogate is not clipped from below.
+
+Net effect: **the clipping caps the upside of moving probability in the "right" direction**. Moving an action's probability beyond $1+\epsilon$ when it has positive advantage, or below $1-\epsilon$ when it has negative advantage, gives no further gradient. The policy is bounded from making any single action's probability move by more than a multiplicative factor of $1\pm\epsilon$ per update.
+
+This is the **trust region** interpretation: PPO's clipping keeps the new policy within a multiplicative-ratio neighbourhood of the old, preventing destabilising large updates.
+
+<Aside type="note">
+**Trust-region origins.** PPO descends from Trust Region Policy Optimization (TRPO; Schulman et al., 2015), which directly imposed a KL constraint between the new and old policies via a constrained optimisation. TRPO was theoretically clean but operationally complex (each step required a constrained optimiser). PPO replaced TRPO's hard constraint with a soft clipped objective that captured most of the benefit at a fraction of the implementation cost. The 2017 paper's main selling point was "TRPO performance, much simpler code."
+</Aside>
+
+---
+
+## 4. The advantage function and GAE
+
+PPO uses *advantages* $A(x, y)$ rather than raw rewards (§9.5 §5.1). The advantage is the expected-reward improvement of taking action $y$ at prompt $x$ over the prompt's baseline.
+
+For LLM RLHF, the standard advantage estimator is **Generalised Advantage Estimation** (GAE; Schulman et al., 2015, [arXiv:1506.02438](https://arxiv.org/abs/1506.02438)). For a trajectory with per-step rewards $r_t$ and value-function estimates $V_\psi(s_t)$, GAE defines per-step advantages
+
+$$
+\hat A_t^\text{GAE} = \sum_{l=0}^{\infty} (\gamma \lambda)^l\, \delta_{t+l}, \qquad \delta_t := r_t + \gamma V_\psi(s_{t+1}) - V_\psi(s_t),
+$$
+
+where $\delta_t$ is the temporal-difference error and $\gamma, \lambda \in [0, 1]$ are hyperparameters. GAE interpolates between high-variance Monte Carlo estimates ($\lambda = 1$) and high-bias one-step TD estimates ($\lambda = 0$).
+
+For LLM RLHF the conventions are usually:
+
+- $\gamma = 1$ (no per-token discount — we care equally about all tokens of the response).
+- $\lambda \in [0.95, 1]$ (close to Monte Carlo; some bias for variance reduction).
+- Per-token reward $r_t = 0$ except at the last token, where $r_t = r_\phi(x, y)$ — possibly with the KL penalty subtracted at each token (§9.9).
+
+The value function $V_\psi$ is a separate neural network trained jointly with the policy — the *critic* in actor-critic terminology.
+
+---
+
+## 5. The value-function critic
+
+The critic $V_\psi(s)$ estimates the expected return from state $s$. It is trained by regression on the observed returns:
+
+$$
+\mathcal{L}^\text{V}(\psi) = \mathbb{E}\bigl[ (V_\psi(s_t) - R_t)^2 \bigr],
+$$
+
+where $R_t = \sum_{t' \geq t} \gamma^{t'-t} r_{t'}$ is the empirical return-to-go.
+
+In LLM RLHF, the critic is usually:
+
+- The same architecture as the policy (a transformer).
+- Initialised from the policy or the reward model.
+- Trained jointly with the policy in PPO's training loop.
+
+This doubles the GPU memory cost of PPO (we now hold the policy, the frozen RM, *and* the critic — three transformers — plus the frozen reference policy for the KL penalty of §9.9, which is four). PPO RLHF is *memory-hungry* compared to SFT or DPO, which is one of DPO's selling points.
+
+---
+
+## 6. The full PPO loop for LLM RLHF
+
+Putting it all together:
+
+```
+PPO for LLM RLHF:
+
+Initialize π_θ ← π_SFT, V_ψ (critic, e.g. from RM init), π_ref ← π_SFT (frozen).
+
+For iteration k = 1, 2, ...:
+    # === ROLLOUT ===
+    1. Sample a batch of prompts {x_i}.
+    2. For each x_i, sample y_i ~ π_θ_old(· | x_i), and record per-token log-probs.
+    3. Compute per-token rewards: r_t = (RM reward at last token) - β · KL(π_θ_old || π_ref).
+    4. Compute per-token advantages Â_t via GAE using V_ψ.
+
+    # === MULTIPLE UPDATES per rollout ===
+    For epoch e = 1, ..., E_ppo (typically 2-4):
+        For minibatch in batch:
+            # Compute importance ratios
+            log_probs_new = π_θ.log_probs(y_i | x_i, per-token)
+            ratios = exp(log_probs_new - log_probs_old)  # ρ_t per token
+
+            # PPO clipped policy loss
+            loss_policy = -mean( min(ratios · Â, clip(ratios, 1-ε, 1+ε) · Â) )
+
+            # Critic loss
+            loss_value = mean( (V_ψ(s_t) - R_t)^2 )
+
+            # Optional entropy bonus
+            loss_entropy = -mean(entropy(π_θ))
+
+            loss = loss_policy + c_v · loss_value - c_e · loss_entropy
+            loss.backward()
+            optimizer.step()
+
+    # End of epoch: copy θ → θ_old, ψ → ψ_old.
+```
+
+A few important details:
+
+- **Multiple update epochs per rollout.** This is what importance sampling buys us: one expensive rollout, $E_\text{ppo} \in [2, 4]$ updates per data point. (More epochs sometimes destabilise — the importance ratios drift further from 1.)
+- **KL penalty applied at every token.** This is the standard practical way to handle the KL constraint we'll derive in §9.9. Alternative: KL only as a single term per trajectory.
+- **Entropy bonus.** A small term that rewards keeping the policy's per-token distribution from collapsing to determinism. Helps exploration. Coefficient $c_e \in [0, 0.01]$.
+- **Value coefficient.** $c_v \in [0.1, 1.0]$ scales the critic loss relative to the policy loss.
+
+### 6.1 Per-token vs per-trajectory
+
+A subtle implementation choice: the importance ratio $\rho$ can be defined per-token or per-trajectory.
+
+- **Per-token:** $\rho_t = \pi_\theta(y_t \mid x, y_{<t}) / \pi_{\theta_\text{old}}(y_t \mid x, y_{<t})$, one ratio per token, applied with the per-token advantage $\hat A_t$.
+- **Per-trajectory:** $\rho = \pi_\theta(y \mid x) / \pi_{\theta_\text{old}}(y \mid x)$, one ratio for the whole sequence.
+
+The per-token form is dominant: it gives finer-grained credit assignment and integrates naturally with GAE's per-step advantages. Per-trajectory is occasionally used in simpler implementations (e.g., RLOO).
+
+---
+
+## 7. Hyperparameters and recipes
+
+Standard PPO hyperparameters for LLM RLHF (Llama 2, InstructGPT, OpenRLHF default):
+
+| Hyperparameter | Typical value |
+|---|---|
+| Clip threshold $\epsilon$ | $0.2$ |
+| GAE $\gamma$ | $1.0$ |
+| GAE $\lambda$ | $0.95$–$1.0$ |
+| Update epochs $E_\text{ppo}$ | $2$–$4$ |
+| Value coefficient $c_v$ | $0.5$ |
+| Entropy coefficient $c_e$ | $0$–$0.01$ |
+| Learning rate (policy) | $1 \times 10^{-6}$–$5 \times 10^{-6}$ |
+| Learning rate (critic) | $1 \times 10^{-5}$ |
+| KL penalty coefficient $\beta$ | $0.01$–$0.2$, adaptive (§9.9) |
+| Rollout batch size | $128$–$1024$ prompts |
+| Generation max-new-tokens | $256$–$2048$ |
+
+The two parameters that materially change training are $\beta$ (the KL penalty, §9.9) and the learning rate. Most other hyperparameters are reasonably forgiving.
+
+PPO for LLM RLHF is mature engineering: open-source implementations (DeepSpeed-Chat, OpenRLHF, TRL) provide drop-in PPO trainers that handle the rollout / update split, multi-GPU sharding, and the four-model memory layout (policy, critic, RM, reference).
+
+---
+
+## 8. PPO's weaknesses
+
+PPO works well but has several well-known operational pains.
+
+**(a) Memory cost.** Holding four transformer-sized models (policy, critic, RM, reference) is expensive. For a 70B policy, this is roughly $4 \times 140$ GB $= 560$ GB just for model parameters in fp16, before activations and optimiser state. Multi-node sharding is standard.
+
+**(b) Hyperparameter sensitivity.** $\beta$, the KL coefficient, has to be tuned per dataset. Too small and the policy drifts off-distribution (reward hacks); too large and the policy never moves. Llama 2 used adaptive $\beta$ (auto-adjusted based on observed KL); even so, the recipe required substantial tuning per training run.
+
+**(c) Training instability.** PPO RLHF runs occasionally diverge: loss spikes, output quality crashes, KL explodes. The literature includes many cautionary tales and many proposed mitigations.
+
+**(d) Reward hacking.** The policy learns to exploit reward-model errors rather than improve substantively (§9.14). PPO has no structural defence beyond the KL penalty.
+
+These pains motivated DPO (§9.10), which skips the critic, the rollouts, the importance sampling, and the clipping entirely — by deriving the policy update directly from preferences. We will see in §9.10 that DPO is, in a precise sense, "the right answer of PPO at a specific limit."
+
+---
+
+## 9. What we keep going forward
+
+1. **PPO's clipped surrogate objective** $\mathcal{L}^\text{PPO} = \mathbb{E}[\min(\rho A, \text{clip}(\rho, 1-\epsilon, 1+\epsilon) A)]$ is the workhorse RL objective for LLM RLHF since 2017. It allows multi-step updates per rollout via importance sampling, with clipping preventing destabilising large updates.
+
+2. **GAE advantages with a learned value-function critic.** Per-token advantages $\hat A_t$ replace raw rewards; the critic $V_\psi$ provides the baseline.
+
+3. **The full RLHF PPO loop holds four models in memory:** policy, critic, RM, reference. Memory-hungry but mature.
+
+4. **Standard $\epsilon = 0.2$, $\lambda \approx 0.95$, $E_\text{ppo} \in [2,4]$.** Most other knobs are forgiving; $\beta$ (the KL coefficient) requires tuning per run.
+
+5. **PPO's weaknesses (memory, hyperparameter sensitivity, reward hacking) motivated DPO and GRPO** — the algorithms of §9.7 and §9.10 that recapture PPO's benefits with simpler structure.
+
+The next session derives GRPO — DeepSeek-Math / R1's group-relative simplification of PPO that eliminates the critic.
+
+<SelfTest>
+
+**(a)** Derive the surrogate objective $\mathcal{L}^\text{surr} = \mathbb{E}_{y \sim \pi_{\theta_\text{old}}}[\rho_\theta A]$ from the importance-sampling identity. Show that its gradient at $\theta = \theta_\text{old}$ equals the policy gradient.
+
+**(b)** Sketch the PPO clipped objective $\min(\rho A, \text{clip}(\rho, 1-\epsilon, 1+\epsilon) A)$ as a function of $\rho$ for (i) $A > 0$ and (ii) $A < 0$. Identify the region(s) where the gradient is zero.
+
+**(c)** Describe GAE: write the recursion for $\hat A_t^\text{GAE}$ and identify the high-variance ($\lambda = 1$) and high-bias ($\lambda = 0$) endpoints.
+
+**(d)** List the four transformer-sized models held in memory by the PPO LLM RLHF loop, with a one-line description of each. Estimate the total memory for a 70B-policy run in fp16.
+
+**(e)** A PPO run reports the importance ratios $\rho$ are routinely $> 5$ within an epoch. Diagnose: is $\epsilon$ too large or too small? What happens to the gradient signal?
+
+**(f)** Argue why PPO is *not* "doing pure policy gradient": identify the role of (i) importance sampling (multi-step reuse), (ii) clipping (trust region), (iii) GAE (advantage variance reduction). For each, name what PPO loses if it is omitted.
+
+</SelfTest>

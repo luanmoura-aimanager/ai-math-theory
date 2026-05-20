@@ -1,0 +1,226 @@
+---
+title: "9.11 — Iterative / Online DPO"
+chapter: 9
+order: 11
+estimatedMinutes: 18
+goal: "Understand the iterative DPO recipe: do one DPO round, generate new completions with the trained policy, preference-label them, do another round. This closes the gap with PPO's 'go beyond the data' property, and is the standard 2024+ alignment recipe (LLaMA-3-Instruct, Tülu 3, Hermes-3)."
+prerequisites: ["ch9-alignment/9.10-dpo"]
+---
+
+## 1. Why this session exists
+
+DPO ([9.10](/session/ch9-alignment/9.10-dpo)) is *offline*: it trains on a fixed preference dataset. Its main empirical limitation is that the trained policy cannot exceed the quality of the best completions in that dataset — DPO can only steer toward $y_c$ and away from $y_r$, never invent something better.
+
+PPO's advantage was the opposite: it samples from the *current* policy, scores with the reward model, and can discover completions that improve on any training pair. DPO loses that capability.
+
+**Iterative DPO** (sometimes called Online DPO) closes the gap. The idea: after one DPO round, the policy has improved beyond the original SFT model; sample fresh completions from it, preference-label those, and do another DPO round. Repeat. Each round explores the policy's *current* distribution, which is better than the previous one, providing a steady source of fresh preference data that improves with the policy.
+
+The recipe became the open-source default in 2024: **LLaMA-3-Instruct**, **Tülu 3**, **Hermes-3**, and most modern open instruction-tuned models use some form of iterative DPO. The 2024 paper that codified the approach is **Pang, Yuan, Cho, et al., 2024, *Iterative Reasoning Preference Optimization*** ([arXiv:2404.19733](https://arxiv.org/abs/2404.19733)), though the recipe predates the formal paper.
+
+This session: the iterative loop, the role of the labeller, how it bridges DPO and PPO empirically, and the practical recipe.
+
+---
+
+## 2. The iterative loop
+
+Pseudocode for $N$ DPO iterations:
+
+```
+Initialize π_0 ← π_SFT
+Initialize π_ref ← π_SFT       # frozen throughout
+
+For iteration n = 1, ..., N:
+    # 1. Sample completions from current policy
+    For each prompt x in iteration n's prompt set:
+        Sample 2 (or more) completions y_1, y_2, ... ~ π_{n-1}(·|x)
+
+    # 2. Label preferences
+    For each completion pair:
+        Determine y_c (chosen), y_r (rejected) via:
+            - human labelers, or
+            - a reward model r_φ, or
+            - LLM-as-judge (RLAIF, §9.13)
+
+    # 3. Run DPO on the new preference data
+    π_n ← DPO_train(π_{n-1}, π_ref, preferences)
+```
+
+Three iterations is typical for production runs; some use 5–10. Each iteration's preference data is fresh, generated from the current policy, and reflects the model's evolving capabilities.
+
+### 2.1 The fixed reference
+
+The reference model $\pi_\text{ref}$ stays fixed at $\pi_\text{SFT}$ across all iterations. Why?
+
+Three reasons:
+
+1. **The KL budget is cumulative.** $\mathrm{KL}(\pi_n \,\Vert\, \pi_\text{SFT})$ grows across iterations. If we instead anchored to $\pi_{n-1}$ at each step, the cumulative KL from $\pi_\text{SFT}$ could grow unboundedly — exactly the reward hacking failure mode of [9.9 §2.1](/session/ch9-alignment/9.9-kl-penalty).
+2. **The reference is the "safe ground."** $\pi_\text{SFT}$ defines what valid completions look like; we never want to drift so far that we forget. Anchoring to $\pi_\text{SFT}$ throughout keeps the model grounded.
+3. **Closed-form derivation requires it.** DPO's derivation ([9.10](/session/ch9-alignment/9.10-dpo)) treats $\pi_\text{ref}$ as a fixed prior. Updating it would invalidate the derivation.
+
+So: $\pi_\text{ref}$ is fixed; only the training data (per-iteration preference pairs) and the trained policy $\pi_n$ change.
+
+---
+
+## 3. The role of the labeller
+
+The bottleneck of iterative DPO is **how preferences are labelled**. Three options:
+
+### 3.1 Human labellers
+
+Most expensive. Each preference pair requires a human to read both completions and choose. For $N = 5$ iterations × $\sim 100$K preferences per iteration × $\sim 1$ minute per pair, you're spending half a million labour-minutes. Production teams have human labellers in the loop but typically also use cheaper sources for the bulk.
+
+### 3.2 A reward model
+
+If you already have an $r_\phi$ trained from human preferences ([9.4](/session/ch9-alignment/9.4-bradley-terry-reward-objective)), use it: score both completions, pick the higher-scoring as $y_c$. This is fast and reproduces the reward model's preferences across iterations.
+
+The catch: you've reintroduced the reward model. DPO was supposed to skip it. So iterative DPO with a reward model labeller is "PPO-RLHF with a different gradient method" — you still need the reward model.
+
+For many production teams this is fine; the reward model is reusable, and the rest of the DPO pipeline is still simpler.
+
+### 3.3 LLM-as-judge
+
+A cheap alternative: prompt a stronger LLM (often GPT-4, Claude, or a held-out larger model) to compare the two completions and pick the better one. This is **RLAIF** ([9.13](/session/ch9-alignment/9.13-rlaif-constitutional)) — AI-generated preference labels.
+
+Cost per preference: $\sim \$0.01$ at typical API rates. For 500K preferences across all iterations: $\sim \$5$K. Far cheaper than human labelling.
+
+Quality: surprisingly good. LLM judges have known biases (verbosity, formatting) but the *direction* of preference is usually right. For most tasks, LLM-judged preferences are within 80–90% agreement with human-judged preferences — enough signal to drive useful gradient updates.
+
+Production iterative DPO recipes often use a mix: a small set of human-labelled "gold" preferences for evaluation, and LLM judges for the bulk of training data.
+
+---
+
+## 4. Why iterating helps
+
+Three reasons iterative DPO beats single-round DPO on the same total preference budget.
+
+### 4.1 On-distribution preferences
+
+In single-round DPO, the preference pairs come from a fixed source — usually completions sampled from $\pi_\text{SFT}$. After one DPO round, $\pi_1$ has shifted; the original preferences are now somewhat *off-distribution* (they reflect what $\pi_\text{SFT}$ produced, not what $\pi_1$ produces). Continued DPO training on stale preferences runs into diminishing returns.
+
+Iterative DPO refreshes the data: round 2's preferences come from $\pi_1$, which is what $\pi_1 \to \pi_2$ should be trained on. Each iteration's training data is on-distribution for that iteration's starting policy.
+
+### 4.2 Discovering improvements
+
+If $\pi_1$ is better than $\pi_\text{SFT}$, then samples from $\pi_1$ include better completions than the original preference pairs ever had. Preference-labelling those new completions surfaces new, *better* "chosen" examples. DPO learns to prefer them. The next round's $\pi_2$ inherits these improvements.
+
+This is the closest iterative DPO gets to PPO's "go beyond the data" property. The policy improves; samples reflect the improvement; preferences select the best of those; the policy improves further. A feedback loop of self-improvement.
+
+### 4.3 Catching regressions
+
+If a DPO round accidentally degrades the model on some capability (over-fitting to verbose responses, e.g.), the next round's samples will reflect that degradation. Preference-labelling will surface those bad completions as $y_r$ — and the next DPO round will reverse the regression.
+
+In single-round DPO with stale data, regressions are invisible until evaluation. Iterative DPO's fresh sampling is partly a continuous monitoring mechanism.
+
+---
+
+## 5. The recipe in practice
+
+A representative production setup:
+
+| Stage | Steps | Data | What changes |
+|---|---|---|---|
+| SFT | $\sim 1$ epoch on $\sim 100$K demos | demonstrations | base → $\pi_\text{SFT}$ |
+| DPO round 1 | $\sim 1$ epoch on $\sim 100$K prefs | preference pairs from $\pi_\text{SFT}$ samples | $\pi_\text{SFT} \to \pi_1$ |
+| DPO round 2 | $\sim 1$ epoch on $\sim 100$K prefs | preference pairs from $\pi_1$ samples | $\pi_1 \to \pi_2$ |
+| DPO round 3 | $\sim 1$ epoch on $\sim 100$K prefs | preference pairs from $\pi_2$ samples | $\pi_2 \to \pi_3$ |
+
+Each round: sample completions, label preferences, train DPO. The training step is the same as single-round DPO; the *data* is new each time.
+
+Total preference budget: $\sim 300$K pairs across 3 rounds. Comparable to a typical single-round DPO budget but with the iterative structure.
+
+Total compute: $\sim 3\times$ a single DPO round. Quadrupled if you do an extra round to consolidate. Still much less than PPO-RLHF.
+
+### 5.1 Mixing data across iterations
+
+Naive: round $n$ uses *only* round-$n$ preferences. Slightly better: round $n$ uses a mix of round-$n$ preferences (fresh, on-distribution) and earlier rounds' preferences (anchors against forgetting earlier improvements).
+
+The mix ratio is a tuning parameter; ~30/70 (new/old) is a common starting point. Production teams tune empirically.
+
+### 5.2 Per-iteration $\beta$
+
+Some recipes anneal $\beta$ across iterations: larger $\beta$ in early rounds (more conservative; smaller policy moves), smaller $\beta$ in late rounds (more aggressive; finalising). The rationale: early rounds explore broadly; late rounds focus.
+
+Other recipes hold $\beta$ constant. Both work; the variation matters less than the iterative structure itself.
+
+---
+
+## 6. Iterative DPO vs PPO empirically
+
+A short comparison from public 2024 papers:
+
+| | PPO-RLHF | Iterative DPO |
+|---|---|---|
+| Compute (per epoch) | $\sim 10\times$ DPO | $\sim 1\times$ DPO |
+| Number of training rounds | 1 (continuous) | 3–10 |
+| Memory | 4 models (policy, critic, ref, reward) | 2 models (policy, ref) |
+| Preference data | $\sim 500$K | $\sim 300$K total across rounds |
+| Beats DPO single-round on Arena-Hard? | yes | yes |
+| Beats PPO? | — | competitive on most benchmarks |
+| Reward model exists at end? | yes | optional (only if used for labelling) |
+
+The headline: **iterative DPO matches PPO-RLHF on most benchmarks at a fraction of the compute**. The exceptions are at the frontier scale (70B+ for reasoning tasks) where PPO still seems to push further — likely because PPO's per-step exploration is finer-grained than iterative DPO's "once per round" exploration.
+
+LLaMA-3-Instruct used iterative DPO (with rejection-sampling fine-tuning, a small variation) for its instruction tuning. Tülu 3 ([Lambert et al., 2024](https://arxiv.org/abs/2411.15124)) uses iterative DPO with $\sim 8$ rounds and a custom labeller mix. Hermes-3 uses 5 rounds with mixed human/LLM labels.
+
+---
+
+## 7. Variations and refinements
+
+Three notable variants of iterative DPO that have appeared since 2024:
+
+### 7.1 Rejection-sampling fine-tuning (RSFT)
+
+Instead of DPO, do *SFT on the best-of-N* samples. Per iteration:
+
+1. Sample $N$ completions per prompt from $\pi_{n-1}$.
+2. Score each with the reward model (or judge).
+3. Keep the best as a new SFT demonstration.
+4. SFT $\pi_{n-1}$ on these demonstrations.
+
+This is closer to "filtered SFT" than to DPO — it doesn't use preference pairs, only the winners. Simpler implementation; loses the symmetric "down-weight rejected" signal.
+
+LLaMA-3 used RSFT in early iterations and DPO in later ones.
+
+### 7.2 RLOO (REINFORCE-with-Leave-One-Out)
+
+A REINFORCE-style update with a sample-based baseline:
+
+$$
+A_i = r(y_i) - \frac{1}{K - 1} \sum_{j \neq i} r(y_j).
+$$
+
+Sample $K$ completions per prompt; the advantage is the reward minus the average reward of the *other* completions. Then run REINFORCE.
+
+RLOO is a sibling of GRPO ([9.7](/session/ch9-alignment/9.7-grpo)) — same "compare within a group" structure, but with a leave-one-out baseline instead of mean/std normalisation. RLOO is sometimes used as the inner loop of iterative DPO when the labeller is a reward model.
+
+### 7.3 SPIN: Self-Play
+
+**Chen et al., 2024, *Self-Play Fine-Tuning Converts Weak Language Models to Strong Language Models* (SPIN)** ([arXiv:2401.01335](https://arxiv.org/abs/2401.01335)). A specific form of iterative DPO where the "chosen" $y_c$ is drawn from human-written SFT data, and the "rejected" $y_r$ is drawn from the current model. The policy learns to *imitate* human writing while distinguishing itself from its own outputs.
+
+SPIN avoids needing fresh preferences at each iteration — the SFT data serves as the perpetual $y_c$ source. Simpler than full iterative DPO; works well for SFT data with high consistency.
+
+---
+
+## 8. What we keep going forward
+
+Three things:
+
+1. **Iterative DPO closes the gap with PPO.** Same closed-form gradient as DPO; on-policy data refreshed every iteration; comparable performance to PPO-RLHF at a fraction of the compute.
+2. **The labeller is the bottleneck.** Three options: humans (expensive), reward model (fast, reintroduces RM), LLM judge (cheap, biased). Production mixes them.
+3. **The fixed reference matters.** $\pi_\text{ref} = \pi_\text{SFT}$ across all iterations. Otherwise KL drift compounds across rounds and the policy loses its anchor.
+
+[Next session](/session/ch9-alignment/9.12-process-reward-models) covers **Process Reward Models** — moving from outcome-level rewards (correct answer at the end?) to step-level rewards (was each reasoning step correct?). These underlie the o1- and R1-style reasoning model training.
+
+<SelfTest>
+
+**(a)** Write out the iterative DPO loop in 6 lines of pseudocode. Identify (i) what stays fixed across iterations, (ii) what changes.
+
+**(b)** Why does iterative DPO use $\pi_\text{SFT}$ as the reference at *every* round, rather than $\pi_{n-1}$? State the failure mode of using $\pi_{n-1}$.
+
+**(c)** State the three labeller options for iterative DPO preferences. For each, estimate the cost per preference pair (roughly).
+
+**(d)** Compare iterative DPO with PPO-RLHF. State the compute ratio. Why is iterative DPO competitive despite not using on-policy sampling between gradient steps?
+
+**(e)** Read [Pang et al., 2024](https://arxiv.org/abs/2404.19733) §3. Identify the specific task on which iterative DPO is demonstrated. How many iterations were used, and what was the per-iteration improvement?
+
+</SelfTest>

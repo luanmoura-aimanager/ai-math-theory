@@ -1,0 +1,283 @@
+---
+title: "9.10 — Direct Preference Optimization (DPO) — derivation"
+chapter: 9
+order: 10
+estimatedMinutes: 32
+goal: "Derive DPO from first principles: solve the KL-penalised RLHF objective in closed form to get the optimal policy π* as a Boltzmann distribution over rewards; invert this to express the reward r in terms of π* and π_ref; substitute into the Bradley-Terry preference loss to get a loss on the policy alone. No reward model, no PPO. The most beautiful derivation in this course."
+prerequisites: ["ch9-alignment/9.9-kl-penalty", "ch9-alignment/9.4-bradley-terry-reward-objective"]
+---
+
+## 1. Why this session exists
+
+**Rafailov, Sharma, Mitchell, et al., 2023, *Direct Preference Optimization: Your Language Model is Secretly a Reward Model*** ([arXiv:2305.18290](https://arxiv.org/abs/2305.18290)). The paper title is the entire idea: instead of training a reward model and then PPO-ing against it, *use the policy itself as the reward model*. The derivation does this in three steps:
+
+1. Solve the KL-penalised RLHF objective in closed form. Result: the optimal policy is a Boltzmann distribution over the (unknown) reward.
+2. Invert: express the reward as a function of the optimal policy. Result: $r(x, y) = \beta \log(\pi^*(y \mid x) / \pi_\text{ref}(y \mid x)) + \text{(constant in } y)$.
+3. Substitute the inverted expression for $r$ into the Bradley-Terry preference likelihood ([9.4](/session/ch9-alignment/9.4-bradley-terry-reward-objective)). The reward cancels; the loss is now a function of the policy alone.
+
+The result is one of the cleanest derivations in modern deep learning. It eliminates two of the three RLHF stages (reward modelling, PPO), replacing them with a single supervised loss directly on $(x, y_c, y_r)$ preference triples.
+
+DPO has become the default open-source alignment recipe since 2024 (LLaMA-3-Instruct, Mistral-Instruct, Tülu 3, Hermes-3). Frontier closed models still use RLHF, but for almost everyone else, DPO is "RLHF without the pain."
+
+This session derives DPO from scratch and ends with the loss function you can paste into your training loop.
+
+---
+
+## 2. Step 1: closed-form optimal policy
+
+Start with the KL-penalised RLHF objective ([9.8](/session/ch9-alignment/9.8-rlhf-end-to-end), [9.9](/session/ch9-alignment/9.9-kl-penalty)):
+
+$$
+\max_\pi \mathbb{E}_{x \sim \mathcal{D},\, y \sim \pi(\cdot \mid x)}\big[r(x, y)\big] - \beta \cdot \mathbb{E}_{x \sim \mathcal{D}}\!\left[\mathrm{KL}\!\big(\pi(\cdot \mid x) \,\Vert\, \pi_\text{ref}(\cdot \mid x)\big)\right].
+$$
+
+(We dropped the subscript $\theta$ to emphasise we're optimising over *all* distributions, not just parameterised ones.) Drop the prompt $x$ for clarity — everything below is "for each fixed $x$".
+
+Expand the KL:
+
+$$
+\max_\pi \sum_y \pi(y) \cdot r(y) - \beta \sum_y \pi(y) \cdot \log \frac{\pi(y)}{\pi_\text{ref}(y)},
+$$
+
+subject to $\pi$ being a valid distribution ($\sum_y \pi(y) = 1$, $\pi(y) \geq 0$).
+
+### 2.1 Lagrangian
+
+Introduce a Lagrange multiplier $\lambda$ for the normalisation constraint:
+
+$$
+\mathcal{L}(\pi, \lambda) = \sum_y \pi(y) \cdot r(y) - \beta \sum_y \pi(y) \cdot \log \frac{\pi(y)}{\pi_\text{ref}(y)} - \lambda \!\left(\sum_y \pi(y) - 1\right).
+$$
+
+Take $\partial \mathcal{L} / \partial \pi(y) = 0$:
+
+$$
+r(y) - \beta \cdot \left(\log \frac{\pi(y)}{\pi_\text{ref}(y)} + 1\right) - \lambda = 0.
+$$
+
+(The "$+1$" comes from $\partial/\partial \pi$ of $\pi \log \pi$.) Solve for $\log \pi(y)$:
+
+$$
+\log \pi(y) = \log \pi_\text{ref}(y) + \frac{r(y)}{\beta} - \frac{\lambda}{\beta} - 1.
+$$
+
+Equivalently,
+
+$$
+\pi(y) = \pi_\text{ref}(y) \cdot \exp\!\left(\frac{r(y)}{\beta}\right) \cdot C,
+$$
+
+with $C = \exp\!\left(-\lambda/\beta - 1\right)$ — a normalising constant independent of $y$. Pinning $C$ from $\sum_y \pi(y) = 1$:
+
+$$
+C = \frac{1}{Z(x)}, \quad Z(x) = \sum_y \pi_\text{ref}(y) \cdot \exp\!\left(\frac{r(y)}{\beta}\right).
+$$
+
+(Restoring the $x$ dependence — $Z(x)$ is the prompt-specific partition function.) The optimal policy is
+
+$$
+\boxed{\ \pi^*(y \mid x) = \frac{1}{Z(x)} \cdot \pi_\text{ref}(y \mid x) \cdot \exp\!\left(\frac{r(x, y)}{\beta}\right). \ }
+$$
+
+### 2.2 Interpretation
+
+This is a **Boltzmann distribution** over completions, with $r/\beta$ as the negative-energy and $\pi_\text{ref}$ as the prior. Three observations:
+
+1. **The reference is the prior.** $\pi^*$ inherits all of $\pi_\text{ref}$'s structure (vocabulary, syntax, basic content) and only modulates it by the reward.
+2. **$\beta$ controls how "sharp" the modulation is.** Large $\beta$: nearly flat exponent, $\pi^* \approx \pi_\text{ref}$. Small $\beta$: very sharp exponent, $\pi^*$ concentrates on high-reward completions.
+3. **The exponential structure is fundamental.** This is the same shape as the softmax distribution in [1.7](/session/ch1-linear-models-perceptron/1.7-softmax) and the energy-based-model literature. RLHF's exponential family arises *from the KL constraint*, not from any modelling choice.
+
+The partition function $Z(x) = \sum_y \pi_\text{ref}(y) \cdot \exp(r(x, y)/\beta)$ is intractable for LLMs (the sum is over all possible completions). This is what stops us from just *computing* $\pi^*$ directly. The DPO trick will be to make $Z(x)$ cancel.
+
+---
+
+## 3. Step 2: invert to express $r$ in terms of $\pi^*$
+
+Take logs of the boxed equation:
+
+$$
+\log \pi^*(y \mid x) = \log \pi_\text{ref}(y \mid x) + \frac{r(x, y)}{\beta} - \log Z(x).
+$$
+
+Solve for $r(x, y)$:
+
+$$
+\boxed{\ r(x, y) = \beta \log \frac{\pi^*(y \mid x)}{\pi_\text{ref}(y \mid x)} + \beta \log Z(x). \ }
+$$
+
+This is the **DPO inversion**. The reward — the thing we previously had to train a separate model for — is *exactly* the log-ratio of the optimal policy to the reference, scaled by $\beta$, plus a term that depends only on $x$.
+
+The $\beta \log Z(x)$ term is *independent of $y$*. So **for any two completions $y_1, y_2$ of the same prompt**:
+
+$$
+r(x, y_1) - r(x, y_2) = \beta \log \frac{\pi^*(y_1 \mid x)}{\pi_\text{ref}(y_1 \mid x)} - \beta \log \frac{\pi^*(y_2 \mid x)}{\pi_\text{ref}(y_2 \mid x)}.
+$$
+
+The intractable $Z(x)$ cancels.
+
+---
+
+## 4. Step 3: substitute into Bradley-Terry
+
+Recall ([9.4 §2](/session/ch9-alignment/9.4-bradley-terry-reward-objective)) the Bradley-Terry preference likelihood:
+
+$$
+p(y_c \succ y_r \mid x) = \sigma\big(r(x, y_c) - r(x, y_r)\big),
+$$
+
+where $\sigma$ is the logistic sigmoid. The reward-model training loss was
+
+$$
+\mathcal{L}_\text{RM}(\phi) = -\mathbb{E}_{(x, y_c, y_r)}\!\big[\log \sigma\big(r_\phi(x, y_c) - r_\phi(x, y_r)\big)\big].
+$$
+
+Now substitute the DPO inversion for $r$, with $\pi^*$ replaced by the policy $\pi_\theta$ being trained (since DPO claims $\pi_\theta$ *is* the reward model in disguise):
+
+$$
+r(x, y) - r(x, y') = \beta \log \frac{\pi_\theta(y \mid x)}{\pi_\text{ref}(y \mid x)} - \beta \log \frac{\pi_\theta(y' \mid x)}{\pi_\text{ref}(y' \mid x)}.
+$$
+
+Plug into Bradley-Terry:
+
+$$
+\boxed{\ \mathcal{L}_\text{DPO}(\theta) = -\mathbb{E}_{(x, y_c, y_r)}\!\left[\log \sigma\!\left( \beta \log \frac{\pi_\theta(y_c \mid x)}{\pi_\text{ref}(y_c \mid x)} - \beta \log \frac{\pi_\theta(y_r \mid x)}{\pi_\text{ref}(y_r \mid x)} \right)\right]. \ }
+$$
+
+This is the DPO loss. It is
+
+- a **supervised loss** on preference triples,
+- evaluable from $\pi_\theta$ and $\pi_\text{ref}$ alone (no reward model, no PPO),
+- requires only the **log-probability of each completion** under both models — a single forward pass each.
+
+You substitute it into your training loop and run. Standard cross-entropy-style optimisation. The total ML-engineering effort to switch from "train a model with SFT" to "train a model with SFT + DPO" is roughly 50 lines of code.
+
+---
+
+## 5. Why DPO works
+
+Three perspectives on the same fact.
+
+### 5.1 The reward and policy share parameters
+
+The DPO claim is "your language model is secretly a reward model." More precisely: the log-ratio $\log(\pi_\theta / \pi_\text{ref})$ has the *same gradient structure* as a reward model. Optimising this log-ratio with the Bradley-Terry loss is equivalent to optimising a reward model and then deriving the optimal policy.
+
+This is not a coincidence; it's the closed-form solution of the constrained optimisation problem. The reward model and the optimal policy are two sides of the same exponential-family pair.
+
+### 5.2 No exploration needed
+
+PPO is an RL algorithm — it samples from $\pi_\theta$, gets rewards, and updates. The sampling is what makes PPO expensive (long completions, four-model memory). DPO is *not* RL: there is no sampling step. You feed it pre-collected preference pairs, compute log-probabilities under $\pi_\theta$, take a gradient step. Off-policy, fully offline.
+
+This is why DPO is so much cheaper than PPO-RLHF: it eliminates the entire rollout phase.
+
+### 5.3 The implicit reward is well-defined
+
+The DPO trained policy $\pi_\theta^\text{DPO}$ corresponds, via the inversion, to an implicit reward
+
+$$
+\hat r(x, y) = \beta \log \frac{\pi_\theta^\text{DPO}(y \mid x)}{\pi_\text{ref}(y \mid x)},
+$$
+
+defined up to a $y$-independent constant. This reward can be *recovered* after training — useful for evaluation, Best-of-N selection ([9.15](/session/ch9-alignment/9.15-inference-time-alignment)), or any downstream task that wants a scalar score.
+
+DPO doesn't kill the reward model; it just makes it *implicit*. If you need an explicit reward, you can derive it from $\pi_\theta^\text{DPO}$.
+
+---
+
+## 6. The implementation
+
+Pseudocode:
+
+```python
+def dpo_loss(pi_theta, pi_ref, x, y_c, y_r, beta=0.1):
+    # log p(y | x) under each model — sum over tokens
+    log_p_chosen_theta = log_prob(pi_theta, x, y_c)
+    log_p_chosen_ref   = log_prob(pi_ref,   x, y_c)
+    log_p_reject_theta = log_prob(pi_theta, x, y_r)
+    log_p_reject_ref   = log_prob(pi_ref,   x, y_r)
+
+    log_ratio_chosen = log_p_chosen_theta - log_p_chosen_ref
+    log_ratio_reject = log_p_reject_theta - log_p_reject_ref
+
+    # DPO objective
+    logits = beta * (log_ratio_chosen - log_ratio_reject)
+    return -F.logsigmoid(logits).mean()
+```
+
+That's the whole thing. Substitute `log_prob` with your model's per-sequence log-likelihood (sum of per-token log-softmax values for the target tokens).
+
+### 6.1 Memory budget
+
+Two models in memory: $\pi_\theta$ (training) and $\pi_\text{ref}$ (frozen). Per training step, four forward passes (two completions × two models), one backward (only through $\pi_\theta$). No critic, no reward model, no sampling.
+
+For a 7B model in bf16 with Adam, total memory: $\sim 14$ GB (working) + $\sim 14$ GB (frozen ref) + $\sim 56$ GB (Adam, etc.) $\approx 84$ GB. Compare with PPO-RLHF's $\sim 300$ GB — roughly 4× less. This is why DPO has become the default for $\leq 70$B model alignment.
+
+### 6.2 Data requirements
+
+DPO needs the same preference data as a reward model training run: $(x, y_c, y_r)$ triples. Quality matters as much as quantity. Tülu 3 ($\sim 380$K preferences), LLaMA-3-Instruct ($\sim 10$M preferences) — large preference corpora are the new "scaling axis" for alignment.
+
+The data does *not* need to be on-policy: $y_c$ and $y_r$ can come from any model, even a different one. (Though sampling from $\pi_\theta$ itself, then preference-labelling, leads to **iterative DPO** — [9.11](/session/ch9-alignment/9.11-iterative-dpo).)
+
+---
+
+## 7. What DPO doesn't capture
+
+DPO is a beautiful derivation but has limits. Three worth knowing:
+
+### 7.1 No off-distribution improvement
+
+PPO can find completions *better than any in the preference data* by sampling from the policy and scoring with the reward model. DPO is bounded by the preference data's quality — it can only encourage what's in $y_c$ and discourage what's in $y_r$. If the best $y_c$ in your data is mediocre, DPO can't exceed it.
+
+This is the main empirical reason frontier labs still use PPO: at the limit of data quality, PPO can push further. (Iterative DPO partially closes this gap; see [9.11](/session/ch9-alignment/9.11-iterative-dpo).)
+
+### 7.2 No reward model for downstream use
+
+PPO-RLHF leaves you with a reward model $r_\phi$ that can be used for many things: Best-of-N inference, evaluation, data filtering. DPO leaves you with only $\pi_\theta^\text{DPO}$; you can recover the implicit reward but it's tightly tied to $\pi_\theta^\text{DPO}$, not an independent score.
+
+### 7.3 Length bias
+
+A subtle empirical issue: DPO tends to *increase response length* relative to the SFT baseline, even when length isn't preferred. The reason is that DPO's loss is per-sequence, not per-token, and longer completions have more total log-probability mass to shift. Length-normalised DPO variants (e.g., R-DPO, IPO) address this with a length-aware penalty.
+
+---
+
+## 8. The historical significance
+
+DPO arrived in May 2023. By late 2023 it was the default for academic alignment work. By mid-2024 it had displaced PPO for most open-source instruction tuning. The trajectory is unusually fast for an ML methodology — the derivation is just *clean enough* that practitioners trusted it immediately, and the implementation is just *small enough* that you can switch in an afternoon.
+
+DPO also opened the door to a family of related "supervised alignment" methods:
+
+- **IPO (Identity Preference Optimisation)** — addresses DPO's tendency to over-fit.
+- **KTO (Kahneman-Tversky Optimisation)** — uses *individual* ratings rather than pairwise.
+- **SimPO** — drops the reference model entirely.
+- **ORPO** — combines SFT and preference learning in one step.
+
+The derivational shape — "solve the KL-constrained policy, invert for the reward, substitute into a preference likelihood" — generalises. Each method varies the assumptions (Bradley-Terry vs Plackett-Luce vs etc.) or the data model (pairwise vs pointwise) but shares the core trick.
+
+<Aside type="history">
+**The DPO derivation is one of the cleanest results in modern deep learning.** Three pages of algebra take you from "we need RL with a learned reward and KL penalty" to "minimise this supervised loss on preference data." The clarity is partly because the underlying optimisation problem — KL-penalised reward maximisation — has a closed-form solution that no one had thought to *invert*. The trick to look for the closed form, invert it, substitute it into the preference likelihood, and watch the partition function cancel — that combination took six years (InstructGPT-era 2017 RLHF papers to DPO 2023) to find. A reminder that "the obvious thing" is sometimes obvious only in retrospect.
+</Aside>
+
+---
+
+## 9. What we keep going forward
+
+Three things:
+
+1. **The closed-form KL-optimal policy is a Boltzmann distribution over rewards** with the reference as prior. This is true for any KL-penalised reward-maximisation problem.
+2. **Invert it.** $r(x, y) = \beta \log(\pi^*/\pi_\text{ref}) + \beta \log Z(x)$. The reward is the log-ratio. The partition function cancels in pairwise comparisons.
+3. **DPO loss:** $-\log \sigma(\beta(\log(\pi_\theta(y_c)/\pi_\text{ref}(y_c)) - \log(\pi_\theta(y_r)/\pi_\text{ref}(y_r))))$. Supervised, off-policy, two models in memory.
+
+[Next session](/session/ch9-alignment/9.11-iterative-dpo) covers the modern recipe: **Iterative / Online DPO**, where you do DPO, generate new completions from the trained policy, preference-label them, and DPO again. This closes the gap with PPO's "go beyond the data" property and is the recipe behind LLaMA-3-Instruct, Tülu 3, and most 2024-onwards open instruction-tuned models.
+
+<SelfTest>
+
+**(a)** Reproduce the closed-form solution for the KL-penalised RLHF objective. State the role of the partition function $Z(x)$ and why it makes direct computation of $\pi^*$ intractable.
+
+**(b)** Show the DPO inversion: $r(x, y) = \beta \log(\pi^*/\pi_\text{ref}) + \beta \log Z(x)$. For any two completions of the same prompt, why does $Z(x)$ cancel?
+
+**(c)** Write the DPO loss in your own notation. Identify (i) the two model forward passes needed per training example, (ii) the data requirement.
+
+**(d)** Argue that DPO cannot exceed the quality of the best $y_c$ in its preference data, while PPO can. Connect this to the on-policy / off-policy distinction.
+
+**(e)** Read Rafailov et al. (2023) §4. State the empirical comparison between DPO and PPO on summarisation. Was DPO statistically equivalent, better, or worse?
+
+</SelfTest>

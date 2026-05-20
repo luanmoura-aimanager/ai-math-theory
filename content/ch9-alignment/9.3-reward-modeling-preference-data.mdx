@@ -1,0 +1,177 @@
+---
+title: "9.3 — Reward modeling: preference data"
+chapter: 9
+order: 3
+estimatedMinutes: 20
+goal: "Describe the structure of preference data: tuples (x, y_c, y_r) where y_c is the chosen and y_r the rejected response for the prompt x. State the design choices that produce useful preferences (sample diversity, labeller training, agreement rates) and how this data is used to train a reward model in §9.4. Argue why preferences scale better than demonstrations as a feedback signal."
+prerequisites: ["ch9-alignment/9.2-sft"]
+---
+
+## 1. Why this session exists
+
+SFT (§9.2) ended with the limit: the model can only get as good as the demonstrations it imitates. To exceed the demonstrations, we need a *feedback signal on the model's own outputs* — a way to tell the model "this response is better than that response" without requiring the labeller to write the ideal answer themselves.
+
+The standard signal in 2024–2026 alignment is **pairwise preference data**: tuples $(x, y_c, y_r)$ where $x$ is a prompt, $y_c$ ("chosen") and $y_r$ ("rejected") are two candidate responses, and the label asserts that $y_c$ is judged preferable to $y_r$ for $x$.
+
+Preference data is the input to **reward modeling** (§9.4): we train a model $r_\phi(x, y)$ that scores responses by their predicted preferability, fit to match the human preference distribution. The trained reward model is then the optimisation target for either RL-based fine-tuning (§9.5–§9.8) or, equivalently, DPO (§9.10).
+
+This session is about the *data* — what preference data looks like, how it is collected, what makes it useful, and why it is the right level of feedback for scaling. The mathematics of fitting a reward model is §9.4; we focus here on the dataset that feeds that mathematics.
+
+---
+
+## 2. The structure of a preference tuple
+
+A single labelled preference is a tuple
+
+$$
+(x, y_c, y_r) \quad \text{interpreted as: for prompt } x, \text{response } y_c \text{ is preferred to response } y_r.
+$$
+
+Some variants you will see in practice:
+
+- **Pairwise binary.** Just $(x, y_c, y_r)$. The simplest form; assumes the labeller has a clear preference.
+- **Pairwise with ties.** $(x, y_a, y_b, \text{label} \in \{a \succ b, b \succ a, \text{tie}\})$. Tie data is sometimes used to mark "responses are equally good"; many recipes drop tie examples on the argument that they don't drive the reward model in any direction.
+- **$K$-way rankings.** $(x, y_1, y_2, \dots, y_K)$ with a full ordering $y_{\sigma(1)} \succ y_{\sigma(2)} \succ \dots \succ y_{\sigma(K)}$. Equivalent to $\binom{K}{2}$ pairwise preferences. InstructGPT used $K = 4$ to $K = 9$ per prompt, which gives $6$ to $36$ pairwise comparisons from one labelling effort.
+- **Scalar ratings.** $(x, y, \text{score} \in [0, 10])$ or similar. Less common; harder to calibrate across labellers ("what does a 7 mean?"). Most pipelines convert ratings to pairwise preferences post hoc.
+
+The dominant choice in modern recipes (DPO, Llama 3, Tülu 3) is **pairwise binary**: it is the simplest data type, the easiest to label consistently, and is mathematically natural for the Bradley-Terry model that §9.4 will introduce.
+
+### 2.1 What "preferred" means
+
+The labeller is asked to choose the response that is *more aligned* with some criterion. The criterion is specified by labelling instructions:
+
+- InstructGPT (2022): "choose the response that is more helpful, honest, and harmless, in that priority order."
+- Llama 2 (2022): "choose the response that is more helpful, taking into account factuality and safety."
+- Anthropic HH (2022): two parallel preference datasets — *helpfulness* preferences and *harmlessness* preferences, collected and modelled separately, then combined at the reward-model level.
+- Tülu 3 (2024): multi-axis ratings (truthfulness, helpfulness, safety) collected and then combined into a single pairwise label.
+
+The choice of criterion has substantial downstream effect: a model trained on "prefer more helpful responses, with safety as a secondary constraint" is qualitatively different from one trained on "prefer more polite responses." The labelling instructions are part of the alignment specification.
+
+---
+
+## 3. Where the response pairs come from
+
+To label a preference $(x, y_c, y_r)$, the labeller needs to *see* two candidate responses. Where do $y_c$ and $y_r$ come from?
+
+Three standard recipes.
+
+**(a) Both samples from the same model (on-policy).** The model under training is asked to generate $K$ responses to the prompt $x$ (with temperature or top-$p$ sampling for diversity); labellers rank them. This is the InstructGPT recipe and the dominant choice.
+
+Advantages:
+- The reward model is trained on the *actual* output distribution of the policy it will later be used to fine-tune.
+- The labellers see realistic responses (not artificial "obviously wrong" responses).
+- The pipeline can iterate: improve the policy, re-sample, re-label, repeat (§9.11).
+
+Disadvantage: high variance in the early stages of training when the model's outputs are noisy.
+
+**(b) Samples from different models (off-policy / model-vs-model).** Common in open-source recipes: one $y$ from the model being trained, one from a stronger reference model (e.g., GPT-4). The reference model usually wins; the loser model is pushed toward the winner's distribution.
+
+This is essentially a form of distillation through preferences. It is fast and cheap to set up but has subtle failure modes: the model can learn surface stylistic features of the reference rather than substantive quality differences.
+
+**(c) Synthetic preferences (RLAIF / AI feedback).** A judge model (GPT-4, Claude) labels the preferences instead of a human. We dedicate §9.13 to this; the short version is that AI feedback closely tracks human feedback for many tasks and is several orders of magnitude cheaper to scale.
+
+Most production pipelines in 2024–2026 use a *mix*: human labels for the most important and difficult cases, AI labels for breadth. The Llama 3 paper reports human labels on $\sim 1.5$M preferences, supplemented by $\sim 100$M synthetic preferences from a judge model.
+
+---
+
+## 4. Why preferences scale better than demonstrations
+
+A natural question: if we have humans available to label preferences, why not just have them write demonstrations and do more SFT? The answer is *scaling*: preferences are systematically cheaper and easier to collect than demonstrations.
+
+**Cost per data point.** Writing a high-quality demonstration response to a complex prompt can take $5$–$15$ minutes of a skilled labeller's time. Choosing between two pre-generated responses takes $30$–$90$ seconds. Per labelling-minute, preference data is $\sim 10\times$ denser than demonstration data.
+
+**Skill ceiling.** Demonstrations require the labeller to *produce* a high-quality response. Their ceiling is the labeller's own writing/reasoning ability. Preferences only require the labeller to *recognise* a better response. Recognition is a strictly easier task than production for almost every domain — labellers can correctly judge a chess move's quality long before they can find the best move themselves; they can identify a logical error in a proof without being able to write the correct proof.
+
+This is the central asymmetry: **recognition is easier than production**, so feedback signals that only require recognition scale further than feedback signals that require production. Preferences leverage this; SFT does not.
+
+**Disagreement resolution.** Demonstrations from multiple labellers tend to be *all different* — there's a wide space of valid responses to most prompts. Preferences from multiple labellers tend to *converge* — there's much more agreement on "A is better than B" than on "what's the ideal response." This means preference data has lower noise per labelling-minute even before considering cost.
+
+These three properties — cheaper per example, lower skill requirements, lower variance — together explain why preference-based methods (RLHF, DPO) became the default for the alignment stage that comes *after* SFT.
+
+<Aside type="note">
+**The Anthropic helpfulness/harmlessness split.** Anthropic's 2022 paper "Training a helpful and harmless assistant with reinforcement learning from human feedback" ([arXiv:2204.05862](https://arxiv.org/abs/2204.05862)) split preference collection into two separate streams: a *helpfulness* stream where labellers chose the more helpful response to neutral prompts, and a *harmlessness* stream where labellers chose the more refusal-appropriate response to adversarial prompts. The two streams trained two separate reward models, which were then combined at PPO time. This separation is operationally cleaner than mixing the criteria, and the two reward models can be re-weighted at deployment. Modern Anthropic recipes (Constitutional AI, §9.13) extend this with finer-grained reward decomposition.
+</Aside>
+
+---
+
+## 5. Quality and labelling
+
+The reward model is only as good as the preferences it is trained on; preference quality has to be controlled. Standard practices:
+
+**(a) Labeller training and screening.** Labellers go through a training phase where they label a small set of "gold" preferences (with known answers) and are filtered for agreement with the gold. Typical retention rate: $30$–$60\%$ of applicants. The remaining labellers reach agreement levels that are productive but not perfect.
+
+**(b) Detailed labelling instructions.** A typical InstructGPT-style labelling guide is 10–30 pages long, covering edge cases, formatting expectations, the helpful-honest-harmless priority, and many examples of correctly-labelled disagreements. The guide is iterated as labellers report ambiguities.
+
+**(c) Inter-annotator agreement (IAA).** Multiple labellers label the same examples; agreement rates are computed (Cohen's $\kappa$, percent agreement, etc.). The InstructGPT paper reports labeller-labeller agreement of $\sim 73\%$, labeller-researcher agreement of $\sim 77\%$. For comparison, two researchers with shared context typically reach $\sim 85\%$. Agreement under $60\%$ is a warning sign that the labelling criteria are too ambiguous.
+
+**(d) Quality control during labelling.** Periodic re-labelling of previously-labelled examples by different labellers to detect drift; gold-set re-tests every $N$ labels; reviewer escalation for disputed labels.
+
+**(e) Filtering after labelling.** Many recipes filter the labelled preferences post hoc: drop preferences with marginal differences (where labellers might have been guessing), drop preferences from labellers with low gold-test agreement, drop preferences where the reward model strongly disagrees with multiple human labels (potential labeller error).
+
+---
+
+## 6. How much data do you need?
+
+Empirical numbers from public pipelines:
+
+| Recipe | # of preference labels |
+|---|---:|
+| InstructGPT-175B (2022) | $\sim 33{,}000$ |
+| WebGPT (2021) | $\sim 19{,}000$ |
+| Anthropic HH (2022) | $\sim 170{,}000$ (helpfulness) + $\sim 38{,}000$ (harmlessness) |
+| LLaMA 2 (2023) | $\sim 1{,}500{,}000$ (Meta-collected) + public datasets |
+| Llama 3 (2024) | $\sim 1{,}500{,}000$ + $\sim 100$M synthetic |
+| Tülu 3 (2024) | $\sim 290{,}000$ |
+
+The trend is upward, but the marginal benefit of more preferences diminishes. Data-quality experiments by the InstructGPT and Anthropic teams both report that going from $\sim 10$k to $\sim 100$k preferences provides large improvements; going from $100$k to $1$M provides moderate improvements; going beyond $1$M provides small improvements.
+
+In practice, $50$k–$200$k high-quality preferences are sufficient for a strong reward model, *if* the preferences cover the prompt distribution diverse enough. Larger datasets (Llama 3's $1.5$M+) buy mostly coverage of the long tail of prompt types and adversarial edge cases.
+
+### 6.1 Prompt diversity
+
+The reward model has to generalise to prompts beyond the labelled set. Achieving this requires prompt diversity: the labelled prompts should cover the full range of task types, difficulty levels, and user populations the deployed model will see.
+
+Standard practice: collect prompts from multiple sources (real user logs, synthetic generation, deliberate adversarial probes, benchmark-derived) and stratify the labelling effort across sources. The Llama 3 paper §4 documents a $\sim 50$-task taxonomy with preference data collected approximately uniformly across the taxonomy.
+
+---
+
+## 7. The data → reward model → policy pipeline
+
+To preview where this is going: preference data $\mathcal{D}_\text{pref} = \{(x_i, y_c^i, y_r^i)\}$ is used to train a reward model $r_\phi(x, y)$ that approximates the human preference function (§9.4). The reward model then defines a per-completion scalar reward, which is the optimisation target for either:
+
+- **PPO-based RLHF** (§9.5–§9.8): use $r_\phi$ as the per-trajectory reward, optimise the policy with policy gradient.
+- **DPO** (§9.10): skip the explicit reward model — derive a loss on the policy directly from the preference data, using a closed-form result about KL-regularised optimal policies.
+
+In both cases, *the preference data is the upstream input*. The choice between PPO and DPO is downstream of data collection. This is why preference-data design (§9.3) is structurally upstream of all the optimisation machinery of §9.5–§9.10.
+
+---
+
+## 8. What we keep going forward
+
+1. **A preference label is a tuple $(x, y_c, y_r)$.** Pairwise binary is the dominant format in 2024–2026.
+
+2. **Response pairs come from sampling the policy (on-policy), from a stronger reference model (off-policy), or from a judge model (RLAIF).** Production pipelines mix all three.
+
+3. **Preferences scale better than demonstrations** because recognition is easier than production: cheaper per label, lower skill ceiling, lower per-label variance.
+
+4. **Labeller training, detailed instructions, and IAA tracking are operationally essential.** Without quality control, the reward model overfits to labeller noise.
+
+5. **$50$k–$200$k high-quality preferences are typical for a strong reward model**, with larger datasets buying long-tail coverage at diminishing returns.
+
+The next session derives the Bradley-Terry model and the reward-model training objective from this data.
+
+<SelfTest>
+
+**(a)** Write the structure of a single preference tuple. State three label formats (pairwise binary, $K$-way ranking, scalar rating) and explain why pairwise binary is the dominant choice.
+
+**(b)** Distinguish on-policy, off-policy, and synthetic (RLAIF) preference sources. Give one advantage and one disadvantage of each.
+
+**(c)** State the recognition-vs-production asymmetry of §4. Why does it imply that preferences scale better than demonstrations? Give a domain example where the asymmetry is especially sharp.
+
+**(d)** Anthropic's HH split: helpfulness preferences and harmlessness preferences as separate streams. Argue why this separation is operationally cleaner than collecting "helpful + harmless" preferences in one stream.
+
+**(e)** A labelling pipeline reports $52\%$ inter-annotator agreement on a preference task. Diagnose: is the task ambiguous, are the labellers poorly trained, or both? What would you do to improve it?
+
+**(f)** Estimate the cost (in labeller-minutes) of producing (i) $50{,}000$ preference labels at $1$ min/label, (ii) $50{,}000$ demonstration responses at $10$ min/demonstration. Comment on the implication for scaling.
+
+</SelfTest>

@@ -1,0 +1,249 @@
+---
+title: "9.15 — Inference-time alignment: Best-of-N, rejection sampling, judge models"
+chapter: 9
+order: 15
+estimatedMinutes: 22
+goal: "Cover the inference-time alignment techniques — Best-of-N, rejection sampling, and judge-model selection — as complements (and alternatives) to RLHF/DPO. Identify the cost-quality trade-offs between training-time and inference-time alignment; close Chapter 9."
+prerequisites: ["ch9-alignment/9.14-reward-hacking"]
+---
+
+## 1. Why this session exists
+
+So far Chapter 9 has been about *training-time alignment* — SFT, RLHF, DPO, GRPO, CAI. These methods produce an aligned policy by *modifying the weights* of a base model. Once trained, the model is "the policy" and you deploy it.
+
+The complementary approach is **inference-time alignment**: keep the base model (or an SFT model) and align *at deployment time* by sampling multiple completions and selecting the best one according to some scoring function. The model weights don't move; the alignment happens in the sampling-and-selection loop.
+
+Three canonical techniques:
+
+- **Best-of-N (BoN).** Sample $N$ completions, score each with a reward model or judge, pick the highest-scoring.
+- **Rejection sampling.** Sample completions; discard any that fail a quality threshold; return the first acceptable one.
+- **LLM-as-judge selection.** Use a stronger LLM to compare candidates and pick the best.
+
+These methods are *complementary* to training-time alignment, not substitutes. Production systems use both: a DPO-trained policy with inference-time Best-of-N selection for high-quality outputs on hard prompts.
+
+This session closes Chapter 9: defines each technique, characterises the cost-quality trade-offs, and identifies where each is appropriate. With it, you have the full toolkit for taking a pretrained base LM to an aligned, deployable product.
+
+---
+
+## 2. Best-of-N
+
+The simplest and most-used inference-time technique. Algorithm:
+
+```
+Given prompt x and reward function r:
+    Sample N completions y_1, ..., y_N ~ π(·|x)
+    Compute r_i = r(x, y_i) for each
+    Return y* = y_{argmax_i r_i}
+```
+
+Three knobs: $N$ (number of samples), $\pi$ (the policy doing the sampling — usually SFT or RLHF-trained), $r$ (the scoring function — reward model, judge LLM, or task-specific verifier).
+
+### 2.1 What it buys
+
+BoN trades inference compute for quality. Sampling $N$ times costs $N \times$ the per-completion compute; the resulting quality improves with $N$.
+
+Empirically (across many tasks, many models), BoN scales as
+
+$$
+\text{quality}(\pi, N) \approx \text{quality}(\pi, 1) + \alpha \log N,
+$$
+
+with $\alpha$ depending on the policy's existing quality and the reward function. Doubling $N$ adds a *constant* improvement, so quality grows logarithmically in compute. Realistic ranges: $N \in [4, 64]$ for production deployments; $N \in [100, 1000]$ for benchmark optimisation; $N \in [10^4, 10^5]$ for research demonstrations.
+
+### 2.2 BoN as implicit optimisation
+
+BoN is *implicitly optimising* the reward $r$ via sampling. Each sample is a step on the policy's distribution; selecting the best is like taking a single optimisation step in the direction of $r$.
+
+Gao et al. (2022, [§5 of 9.14](/session/ch9-alignment/9.14-reward-hacking)) showed that BoN exhibits the *same* reward hacking as RL training does — past a critical $N$, the held-out human preference rate declines even as the reward model's score keeps climbing. The $N$ at which this happens is reward-model-dependent; for typical production setups, BoN starts hacking around $N \in [64, 256]$.
+
+Practical implication: **don't crank $N$ unbounded**. Past the reward-model-specific critical $N$, you're spending more inference compute to get *worse* outputs.
+
+### 2.3 BoN with verifiers vs reward models
+
+A clean alternative when the task allows it: replace the reward model with a **verifier** — a function that can determine *correctness* of an answer, not just preference.
+
+- Math problems → numerical answer checker.
+- Code → unit test runner.
+- Reasoning → multi-step proof checker.
+
+Verifiers don't reward-hack (they evaluate exact correctness, not learned preference), and BoN with a verifier is the dominant test-time strategy for reasoning models. DeepSeek-R1 ([2025, arXiv:2501.12948](https://arxiv.org/abs/2501.12948)) and OpenAI o1 both heavily rely on BoN-with-verifier for math and code reasoning evaluation.
+
+The downside: verifiers exist only for tasks with checkable answers. For open-ended chat or writing, you're stuck with reward-model-based BoN and its over-optimisation risk.
+
+---
+
+## 3. Rejection sampling
+
+A variant of BoN with a *threshold* instead of an argmax:
+
+```
+Given prompt x, reward r, threshold τ, max attempts N:
+    Sample y_1, ..., y_n ~ π(·|x) one at a time
+    Return the first y_i with r(x, y_i) > τ
+    If no y_i satisfies the threshold in N attempts, return best-so-far
+```
+
+The difference from BoN: rejection sampling *stops early* if a candidate exceeds the threshold $\tau$, saving compute on easy prompts.
+
+For hard prompts (where no candidate exceeds $\tau$), it falls back to BoN with $N$ samples.
+
+### 3.1 When rejection sampling beats BoN
+
+- **Easy prompts.** If $\pi$ produces high-quality completions most of the time, the first sample often passes the threshold. Average compute: ~$1$–$2$ samples per prompt rather than always $N$.
+- **Variable-difficulty workloads.** Production traffic has a mix of easy and hard prompts. Rejection sampling adapts the compute spend to the difficulty.
+
+### 3.2 When BoN beats rejection sampling
+
+- **Hard prompts.** If most candidates fail $\tau$, rejection sampling does $N$ work anyway, but uses an arbitrary stopping rule (first acceptable rather than best). BoN's argmax is then strictly better.
+- **Quality maximisation, not threshold.** If you want the *best* candidate, not the *first acceptable*, BoN is the right algorithm.
+
+In practice: rejection sampling is the right default for **production traffic** (mix of difficulties, latency-sensitive); BoN is the right default for **batch quality work** (offline evaluation, content generation where wall-clock isn't the bottleneck).
+
+### 3.3 Rejection sampling for SFT data generation
+
+A related technique: use rejection sampling to *generate fine-tuning data*. Sample many candidates from a model; keep those that score above a threshold; SFT a new model on the kept candidates.
+
+This is **rejection-sampling fine-tuning (RSFT)** — first appeared in LLaMA-3 ([9.11 §7.1](/session/ch9-alignment/9.11-iterative-dpo)) and is now a standard step in open-source instruction tuning. The trick: a model can be improved by SFTing on its *own* best outputs, provided the scoring function is informative.
+
+This blurs the boundary between inference-time alignment and training-time alignment: the inference-time selection step *generates* training-time data, which trains a better model, which makes inference-time selection better, etc.
+
+---
+
+## 4. LLM-as-judge selection
+
+A specialisation of BoN where the scoring function is **a stronger LLM** rather than a reward model:
+
+```
+Sample N candidates y_1, ..., y_N from π
+For each pair (y_i, y_j):
+    Ask judge LLM: "Which is better, y_i or y_j?"
+Tournament or pairwise comparison → pick the winner.
+```
+
+The judge can be GPT-4, Claude, a held-out larger model, or even the same model with a fresh context. The advantage over RM-based BoN: no reward model needed; the judge directly applies an evaluation rubric.
+
+### 4.1 Tournament vs pairwise
+
+Two implementations:
+
+- **Pairwise**: compare each candidate against every other; the one that wins the most is the answer. Cost: $O(N^2)$ judge calls.
+- **Single-elimination tournament**: bracket-style comparisons. Cost: $O(N)$ judge calls.
+
+Tournament is cheaper but loses some information (a candidate eliminated early might have been the best). Pairwise is more thorough but quadratic.
+
+For small $N$ ($\leq 8$), pairwise is fine. For larger $N$, use tournament with a few re-runs to amortise randomness.
+
+### 4.2 Judge quality matters
+
+LLM judges have biases ([9.13 §2.3](/session/ch9-alignment/9.13-rlaif-constitutional)): verbosity, position, self-preference. Judge-based BoN inherits these.
+
+The mitigation: use a *stronger* judge than the policy being judged. If the policy is a 7B model, judge with GPT-4 or Claude. If the policy is GPT-4, judge with a stronger model or use multiple judges and average.
+
+For frontier models with no clearly-stronger judge available, judge-based BoN faces an upper limit. Constitutional principles ([9.13](/session/ch9-alignment/9.13-rlaif-constitutional)) and human evaluation samples are the typical fallbacks.
+
+### 4.3 Cost
+
+A judge LLM call costs ~$0.005 per pairwise comparison on GPT-4. For $N = 8$ with a tournament: 7 comparisons, $0.035. For $N = 32$ pairwise: 496 comparisons, $2.50. Production deployments avoid the quadratic regime.
+
+---
+
+## 5. Training-time vs inference-time alignment: comparison
+
+| | Training-time (RLHF, DPO) | Inference-time (BoN, RS, judge) |
+|---|---|---|
+| Compute amortisation | One-time (training) | Per-query (inference) |
+| Quality ceiling | Limited by base + RM | Limited by base + sampler |
+| Latency at deploy | Same as base | $N\times$ base (BoN) or variable (RS) |
+| Per-query cost | Same as base | $N\times$ base |
+| Adaptability | Fixed after training | Can change scoring function anytime |
+| Catastrophic failure mode | Reward hacking baked into weights | Bounded by current sampling |
+
+The two are *complementary*, not substitutes. The right architecture is:
+
+1. **Train** a well-aligned base policy via SFT + RLHF or SFT + iterative DPO. Use this as the default.
+2. **At inference**, apply BoN or rejection sampling for high-stakes queries (correctness-critical, multi-step reasoning, user-facing). For ordinary queries, single-sample inference is fine.
+
+The fraction of queries that get inference-time alignment depends on the cost-quality budget. Frontier reasoning models (o1, R1) do BoN-style selection on a large fraction of queries; cheap chat models do single-sample inference for most queries with optional BoN on flagged-hard prompts.
+
+---
+
+## 6. The 2026 inference-time alignment landscape
+
+Three trends.
+
+### 6.1 BoN with verifiers
+
+For tasks with checkable correctness — math, code, structured outputs — BoN with a verifier is now the *test-time-scaling* paradigm. OpenAI's o1 documentation shows "thinking tokens" combined with selection over $N$ candidates; DeepSeek-R1's paper describes the same pattern.
+
+The "verifier" varies: for math, an exact-answer checker plus PRM ([9.12](/session/ch9-alignment/9.12-process-reward-models)) for step-level scoring. For code, unit tests. For reasoning, ground-truth comparison or a held-out verifier model.
+
+This is the dominant test-time strategy for hard-problem benchmarks (AIME, HumanEval, GPQA) as of 2026.
+
+### 6.2 Inference-time scaling laws
+
+Just as training-time has Kaplan/Chinchilla scaling laws ([7.11](/session/ch7-training-language-models/7.11-scaling-laws-kaplan)–[7.12](/session/ch7-training-language-models/7.12-chinchilla)), inference-time has its own emerging laws. **Snell, Lee, Xu, Choquette-Choo, 2024, *Scaling LLM Test-Time Compute Optimally***  ([arXiv:2408.03314](https://arxiv.org/abs/2408.03314)) and related work characterise the quality return per inference FLOP.
+
+The headline: for hard problems, inference-time compute can match or exceed training-time compute in marginal capability gain. A smaller model with more inference budget often beats a larger model with less. This is the analytic basis for "reasoning-model" deployments where each query may use $\sim 10$K–$100$K extra tokens of "thinking."
+
+### 6.3 Agentic loops as iterated inference-time alignment
+
+A 2024–2026 trend: rather than BoN over fixed completions, treat inference as a **multi-step agent loop**:
+
+1. Sample a candidate plan.
+2. Critique it (via the model itself or a held-out judge).
+3. Revise.
+4. Loop.
+
+This is "thinking + verification" iterated, often with explicit tool use (calculators, code execution, web search). The boundary between "inference-time alignment" and "agentic reasoning" blurs.
+
+Cap 10.9 covers agentic decoding in detail; here, the connection is that *agentic reasoning* is a generalisation of BoN where the search is over partial plans rather than complete outputs.
+
+---
+
+## 7. Putting Chapter 9 together
+
+Chapter 9 covered the alignment toolkit. To recap the full pipeline:
+
+1. **Pretraining** (Chapters 6–7) gives a fluent next-token predictor.
+2. **SFT** ([9.2](/session/ch9-alignment/9.2-sft)) teaches it to follow instructions.
+3. **Reward modelling** ([9.3](/session/ch9-alignment/9.3-reward-modeling-preference-data)–[9.4](/session/ch9-alignment/9.4-bradley-terry-reward-objective)) learns a proxy for human preferences.
+4. **RLHF (PPO)** ([9.5](/session/ch9-alignment/9.5-policy-gradient-reinforce)–[9.6](/session/ch9-alignment/9.6-ppo), [9.8](/session/ch9-alignment/9.8-rlhf-end-to-end), [9.9](/session/ch9-alignment/9.9-kl-penalty)) or **GRPO** ([9.7](/session/ch9-alignment/9.7-grpo)) optimises the policy against it.
+5. **DPO** ([9.10](/session/ch9-alignment/9.10-dpo)) and **Iterative DPO** ([9.11](/session/ch9-alignment/9.11-iterative-dpo)) provide a simpler alternative.
+6. **PRMs** ([9.12](/session/ch9-alignment/9.12-process-reward-models)) give dense per-step rewards for reasoning training.
+7. **RLAIF and CAI** ([9.13](/session/ch9-alignment/9.13-rlaif-constitutional)) replace human labels with AI labels at scale.
+8. **Reward hacking** ([9.14](/session/ch9-alignment/9.14-reward-hacking)) is the persistent failure mode; KL penalty, early stopping, RM ensembles mitigate it.
+9. **Inference-time alignment** (this session) complements the training-time pipeline with sampling-and-selection at deployment.
+
+A frontier deployment in 2026 uses essentially all of these. A small open-source model might use only steps 2, 5, 7, 9 — but the same conceptual toolkit applies.
+
+The **architecture** has been stable since GPT-2 (Chapter 6); the **pretraining recipe** has been stable since Chinchilla (Chapter 7); the **alignment recipe** is where most recent progress has happened, and where most rapid evolution still occurs. As of 2026, alignment is no longer "RLHF with PPO" — it is a multi-stage pipeline with substantial AI-in-the-loop automation and inference-time complement.
+
+<Aside type="note">
+**The alignment "stack" in 2026 is roughly:** Pretrain → SFT → Iterative DPO (with constitutional AI labels) → optional inference-time BoN-with-verifier for hard queries. RLHF-via-PPO is still used by Anthropic, OpenAI, DeepMind for frontier models, but open-source has standardised on the simpler DPO-based variant. The constitutional aspect — explicit principles, AI judges — is universal.
+</Aside>
+
+---
+
+## 8. What we keep going forward
+
+Three things:
+
+1. **Inference-time alignment is sampling + selection.** BoN, rejection sampling, judge-based comparison. Quality scales as $\log N$ until reward hacking sets in.
+2. **Verifiers beat reward models when available.** For math/code/checkable tasks, BoN with verifiers is the dominant test-time strategy. For open-ended, fall back to RM or judges.
+3. **Training-time and inference-time alignment compose.** Train a well-aligned base; add inference-time selection on hard queries. The right deployment uses both.
+
+Chapter 9 closes here. Chapter 10 — Inference and decoding opens the inference-side engineering: greedy/beam/sampling, KV cache details, FlashAttention, speculative decoding, quantisation, vLLM, test-time scaling, agentic loops. With aligned policies in hand, Cap 10 makes them deployable.
+
+<SelfTest>
+
+**(a)** Write the Best-of-N algorithm in 5 lines of pseudocode. State the three knobs ($N$, $\pi$, $r$) and what each controls.
+
+**(b)** State the empirical scaling form $\text{quality}(\pi, N) \approx \text{quality}(\pi, 1) + \alpha \log N$. What happens for sufficiently large $N$? (Hint: revisit [9.14](/session/ch9-alignment/9.14-reward-hacking).)
+
+**(c)** Compare BoN and rejection sampling. State when each is the right default.
+
+**(d)** A reasoning model uses BoN with a math-answer verifier. Argue why this combination doesn't reward-hack (cf. BoN with a learned RM). What does "verifier" buy that "RM" doesn't?
+
+**(e)** A frontier deployment runs DPO-trained policy + BoN at $N = 16$ on hard queries. State (i) the per-query cost vs single-sample inference, (ii) the expected quality gain from §2.1's $\log N$ scaling, (iii) when this is and isn't worth the cost.
+
+</SelfTest>

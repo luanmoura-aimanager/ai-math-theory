@@ -1,0 +1,254 @@
+---
+title: "9.5 — Policy gradient and REINFORCE"
+chapter: 9
+order: 5
+estimatedMinutes: 24
+goal: "Derive the policy gradient theorem ∇J(θ) = E[r(τ) ∇ log π_θ(τ)] from first principles. Cast LLM fine-tuning as an RL problem (state = prompt + partial response, action = next token, reward = scalar from the RM). Implement REINFORCE for an LLM and identify its high-variance failure mode that PPO will later fix."
+prerequisites: ["ch9-alignment/9.4-bradley-terry-reward-objective", "ch0-math-foundations/0.7-cross-entropy-mle"]
+---
+
+## 1. Why this session exists
+
+§9.4 ended with a trained reward model $r_\phi(x, y)$ that scores response quality for a prompt. The next goal: update the policy $\pi_\theta$ so its sampled outputs have higher expected reward. This is a *reinforcement learning* problem — the policy is the agent, $r_\phi$ is the environment, and we want to maximise expected reward via gradient ascent.
+
+The fundamental machinery is the **policy gradient theorem**:
+
+$$
+\nabla_\theta J(\theta) = \mathbb{E}_{\tau \sim \pi_\theta} \bigl[ r(\tau)\, \nabla_\theta \log \pi_\theta(\tau) \bigr],
+$$
+
+and its simplest implementation, **REINFORCE** (Williams, 1992). The theorem says: to increase expected reward, take the gradient of "log probability of generated trajectories, weighted by their reward." Trajectories with higher reward get a positive gradient on their log probability; those with lower reward get a negative one. Over many samples, the policy shifts toward high-reward regions.
+
+This session derives the policy gradient theorem from first principles (it's a one-line application of the log-derivative trick), casts LLM fine-tuning as an RL problem with this structure, writes the REINFORCE algorithm explicitly, and then names the high-variance failure mode that motivates everything after it: PPO (§9.6), GRPO (§9.7), and the variance-reduction baselines and clipping tricks that make RL on LLMs actually work.
+
+---
+
+## 2. The RL framing of LLM fine-tuning
+
+Cast LLM fine-tuning as an RL problem:
+
+| RL concept | LLM equivalent |
+|---|---|
+| State $s_t$ | Prompt + partial response so far: $(x, y_{<t})$ |
+| Action $a_t$ | Next token $y_t$ |
+| Policy $\pi_\theta(a_t \mid s_t)$ | $\pi_\theta(y_t \mid x, y_{<t})$, the LM's next-token distribution |
+| Trajectory $\tau$ | Full response $y_{1:T_y}$ (after the prompt $x$) |
+| Reward $r(\tau)$ | $r_\phi(x, y)$, the reward-model score on the full response |
+| Episode | One prompt-response pair |
+
+A few notes on this casting.
+
+**(a) The reward is "sparse" — at the end of the trajectory only.** Standard RL often has per-step rewards $r(s_t, a_t)$; in LLM RLHF, the reward comes only after the full response is generated. We can either (i) treat the per-token reward as zero except at the final step, where it equals $r_\phi(x, y)$, or (ii) attribute the reward equally across all response tokens. The formal gradient is the same either way; the variance behaviour differs. The common convention is to set per-token reward = 0 except at the final token.
+
+**(b) Episodes are short.** A typical LLM response is hundreds to thousands of tokens; not the millions of steps of e.g. Atari training. Variance in policy gradients accumulates with episode length, so short LLM episodes are easier than long control-policy episodes.
+
+**(c) The action space is huge.** $|\mathcal{V}| \sim 100{,}000$ — far larger than typical robotics control problems. This is why policy gradient (which scales gracefully with action space) is preferred to value-based methods (which often need a $|\mathcal{V}|$-output per state).
+
+**(d) The dynamics are deterministic.** Once we sample $a_t = y_t$, the next state $s_{t+1}$ is determined: $(x, y_{<t}) \to (x, y_{<t+1})$. No stochastic transition. This collapses the standard RL Bellman machinery: there is only one trajectory probability term, $\pi_\theta(y \mid x) = \prod_t \pi_\theta(y_t \mid x, y_{<t})$.
+
+The simplifications mean that the standard RL theory carries over essentially unchanged but with shorter episodes and deterministic dynamics. We will keep using the RL vocabulary because it is precise; the LLM specifics are tracked in parallel.
+
+---
+
+## 3. The policy gradient theorem
+
+The objective is the expected reward under the policy:
+
+$$
+J(\theta) = \mathbb{E}_{x \sim \mathcal{D}_\text{prompts},\ y \sim \pi_\theta(\cdot \mid x)} \bigl[ r_\phi(x, y) \bigr].
+$$
+
+To gradient-ascend on $J$, we need $\nabla_\theta J$. The complication: the *sampling distribution* depends on $\theta$, so we cannot just push the gradient inside the expectation.
+
+The fix is the **log-derivative trick** (or "score-function estimator"). Start from the definition of expectation:
+
+$$
+J(\theta) = \sum_y \pi_\theta(y \mid x) \cdot r_\phi(x, y), \quad \text{(at fixed prompt } x\text{)}
+$$
+
+and differentiate (with respect to $\theta$, which only appears in $\pi_\theta$):
+
+$$
+\nabla_\theta J(\theta) = \sum_y \nabla_\theta \pi_\theta(y \mid x) \cdot r_\phi(x, y).
+$$
+
+Now use the identity $\nabla_\theta \pi_\theta = \pi_\theta \cdot \nabla_\theta \log \pi_\theta$ (the log-derivative trick) to write
+
+$$
+\nabla_\theta J(\theta) = \sum_y \pi_\theta(y \mid x) \cdot \bigl[ r_\phi(x, y) \cdot \nabla_\theta \log \pi_\theta(y \mid x) \bigr] = \mathbb{E}_{y \sim \pi_\theta} \bigl[ r_\phi(x, y) \cdot \nabla_\theta \log \pi_\theta(y \mid x) \bigr].
+$$
+
+Take expectation over prompts as well:
+
+$$
+\boxed{\ \nabla_\theta J(\theta) = \mathbb{E}_{x, y \sim \pi_\theta} \bigl[ r_\phi(x, y)\, \nabla_\theta \log \pi_\theta(y \mid x) \bigr]. \ }
+$$
+
+This is the policy gradient theorem in its plainest form. The right-hand side is a Monte Carlo estimator: sample $(x, y)$ pairs by running the policy, evaluate the per-pair reward, weight the log-probability gradient.
+
+### 3.1 Per-token form
+
+Expand $\log \pi_\theta(y \mid x) = \sum_t \log \pi_\theta(y_t \mid x, y_{<t})$:
+
+$$
+\nabla_\theta J(\theta) = \mathbb{E}\left[ r_\phi(x, y)\, \sum_{t=1}^{T_y} \nabla_\theta \log \pi_\theta(y_t \mid x, y_{<t}) \right].
+$$
+
+Per-token, the gradient is the sum of all per-token log-probability gradients, weighted by the *single* trajectory-level reward $r_\phi(x, y)$. Every token's log-probability gets the same multiplicative reward signal — there is no per-token credit assignment.
+
+This is the "per-token" form that appears in REINFORCE implementations: for each token in the generated response, compute its log-probability under the current policy, multiply by the trajectory-level reward, sum, and take the gradient.
+
+### 3.2 The intuition
+
+Why does this work? The gradient $\nabla_\theta \log \pi_\theta(y \mid x)$ points in the direction in parameter space that *increases* the probability of $y$ given $x$. Multiplying by reward $r_\phi(x, y)$ scales this gradient:
+
+- If $r_\phi(x, y)$ is **high**, the gradient updates $\theta$ toward making $y$ more likely (good: high-reward $y$ is more likely in future).
+- If $r_\phi(x, y)$ is **low (or negative)**, the gradient points in the opposite direction — *decreasing* the probability of $y$ (good: low-reward $y$ becomes less likely).
+- If $r_\phi(x, y) = 0$, there is no update.
+
+So policy gradient is "reinforce what worked, suppress what didn't, weighted by how well it worked." Hence "REINFORCE."
+
+---
+
+## 4. The REINFORCE algorithm
+
+The simplest policy-gradient method: estimate the expectation by Monte Carlo sampling, take a gradient step, repeat.
+
+```
+REINFORCE for LLM fine-tuning:
+
+Initialize π_θ = π_SFT.
+For k = 1, 2, ...:
+    1. Sample a batch of prompts {x_i} ~ D_prompts.
+    2. For each x_i, sample y_i ~ π_θ(· | x_i).
+    3. Compute r_i = r_φ(x_i, y_i).
+    4. Compute the gradient estimate:
+         ĝ = (1/B) Σ_i r_i · ∇_θ log π_θ(y_i | x_i)
+    5. Update: θ ← θ + α · ĝ.
+```
+
+Step 2 (sampling) requires forward-only evaluation. Step 4 requires a backward pass through the policy: we compute $\log \pi_\theta(y_i \mid x_i)$ (sum of per-token log-probabilities of the sampled response), multiply by the scalar $r_i$, and call `.backward()`.
+
+### 4.1 The connection to SFT
+
+A useful observation: the REINFORCE update is *almost* the same as SFT. SFT computes $\nabla_\theta \log \pi_\theta(y \mid x)$ for a fixed demonstration $(x, y)$ from the SFT dataset. REINFORCE computes the same gradient but for a *sampled* $(x, y)$ from the policy, weighted by reward.
+
+When $r_\phi(x, y) = 1$ for all sampled trajectories, REINFORCE is *identical* to SFT on self-generated data — which is a form of self-training. The reward signal makes the difference: with rewards in $\{0, 1\}$, REINFORCE is "do SFT on the trajectories that got reward 1" — a kind of rejection-sampling SFT. With continuous rewards, REINFORCE is a soft generalisation.
+
+This connection will reappear in §9.10 when we derive DPO: DPO will turn out to be an SFT-like loss on a specific weighted version of the preferences.
+
+---
+
+## 5. The variance problem
+
+REINFORCE is correct in expectation but extremely noisy in practice. Two structural problems:
+
+**(a) High variance from the reward scale.** If $r_\phi$ takes values in $[-5, +5]$ across trajectories, the gradient estimate scales with the reward magnitude. A few outliers (especially negatives) dominate the gradient and produce large parameter changes — which then make the policy worse and require more updates to recover.
+
+**(b) Sample inefficiency.** Each REINFORCE step requires fresh on-policy samples. We cannot reuse old samples because $\nabla \log \pi_\theta$ has to be evaluated at the *current* $\theta$. For LLMs, sampling is slow (one forward pass per generated token), so each gradient step costs a substantial amount of compute.
+
+**(c) Credit assignment.** Every token in the response gets the same reward signal, even though the reward depends on the *full* response. A response that is mostly good but ends with a bad sentence gets a low reward, and *every* token in that response is penalised — including the good ones. A better algorithm would attribute reward at the token (or sub-trajectory) level.
+
+These three problems motivate the techniques of §9.6 (PPO) and §9.7 (GRPO). Both reduce variance via baselines and group statistics; PPO additionally introduces a clipped objective that allows reusing samples for multiple gradient steps.
+
+### 5.1 Baselines: a free variance reduction
+
+A classical variance-reduction trick that we'll need: subtracting a **baseline** $b(x)$ from the reward leaves the policy gradient unbiased but reduces variance. Verify:
+
+$$
+\mathbb{E}_{y \sim \pi_\theta} \bigl[ b(x)\, \nabla_\theta \log \pi_\theta(y \mid x) \bigr] = b(x) \cdot \nabla_\theta \sum_y \pi_\theta(y \mid x) = b(x) \cdot \nabla_\theta\, 1 = 0.
+$$
+
+The expected baseline-times-score is zero, so
+
+$$
+\nabla_\theta J(\theta) = \mathbb{E}\bigl[ (r_\phi(x, y) - b(x))\, \nabla_\theta \log \pi_\theta(y \mid x) \bigr]
+$$
+
+for any function $b(x)$ of the prompt alone. The optimal $b(x)$ (for variance reduction) is $\mathbb{E}_{y \sim \pi_\theta}[r_\phi(x, y)]$ — the expected reward at prompt $x$. In practice, $b(x)$ is estimated by either:
+
+- **A learned value function $V_\psi(x)$.** This is the *critic* in actor-critic methods like PPO. The critic is a separate neural network that estimates the expected reward at each prompt.
+- **A batch mean of rewards on similar prompts.** Simpler; this is essentially what GRPO does (§9.7) by averaging reward within a group of $K$ responses to the same prompt.
+
+The advantage function $A(x, y) := r_\phi(x, y) - b(x)$ replaces the raw reward in the policy gradient. PPO works exclusively with advantages, not raw rewards.
+
+---
+
+## 6. REINFORCE in code
+
+A reference implementation:
+
+```python
+def reinforce_step(model, reward_model, prompts):
+    """One REINFORCE gradient step on a batch of prompts."""
+    # 1. Sample responses
+    responses, response_log_probs = model.generate_with_log_probs(prompts)
+    # response_log_probs: [B, T_y], the log-prob of each generated token
+
+    # 2. Compute trajectory-level reward (frozen RM)
+    rewards = reward_model(prompts, responses)  # [B], scalar per trajectory
+
+    # 3. Compute the (negative, for minimization) loss
+    # Sum log-probs over time, multiply by reward, average over batch
+    sum_log_probs = response_log_probs.sum(dim=-1)   # [B]
+    loss = -(rewards * sum_log_probs).mean()
+
+    # 4. Backprop and update
+    loss.backward()
+    optimizer.step()
+    optimizer.zero_grad()
+```
+
+Two implementation notes:
+
+- The `response_log_probs` must be computed *while sampling* (or by re-running the model on the sampled response in evaluation mode). The standard generate-and-detach trick — sample, then evaluate `log_probs` on the detached samples — must keep the gradient graph alive on the model parameters.
+- The reward model is *frozen*: `with torch.no_grad():` wrapping the reward computation. Only the policy gradients are propagated.
+
+This is the simplest possible RLHF training loop. It works — slowly, noisily, and prone to collapse — but it works. PPO (§9.6) is a substantially improved version of the same loop.
+
+---
+
+## 7. Why REINFORCE alone is not used at scale
+
+A summary of why frontier alignment recipes do not use plain REINFORCE:
+
+1. **Variance.** Without a baseline or critic, gradient estimates are too noisy for stable training at scale.
+2. **Sample inefficiency.** Each step requires fresh on-policy samples; we cannot reuse data across gradient steps.
+3. **No safeguard against large policy updates.** A single large gradient step (driven by one outlier reward) can push the policy far from its SFT initialisation, breaking it. This is the central problem PPO's clipped objective addresses.
+4. **No KL constraint to the reference.** REINFORCE will happily drive the policy to arbitrarily distant distributions in pursuit of reward, even if those distributions are nonsensical from a language-modeling perspective. KL regularisation (§9.9) is essential.
+
+Despite this, REINFORCE-derivative methods (REINFORCE++, RLOO) have made a comeback in 2024–2025 because their simplicity makes the training loop easier to debug, and modern variance-reduction techniques (group baselines, multi-sample REINFORCE) can close most of the gap with PPO. We will see this thread in §9.7 (GRPO is closer to REINFORCE++ in spirit than to PPO).
+
+But the historically dominant choice and the one we will derive next is PPO — Proximal Policy Optimization — which adds a clipped surrogate objective that allows safe multi-step updates per batch of on-policy samples.
+
+---
+
+## 8. What we keep going forward
+
+1. **The policy gradient theorem:** $\nabla_\theta J = \mathbb{E}[r(\tau) \nabla \log \pi_\theta(\tau)]$, derived via the log-derivative trick. Trajectories with higher reward get their log-probabilities pushed up; lower-reward trajectories get pushed down.
+
+2. **LLM fine-tuning is an RL problem with sparse end-of-trajectory rewards, short episodes, huge action spaces, and deterministic dynamics.** All standard RL machinery applies but is simplified.
+
+3. **REINFORCE is the simplest policy-gradient algorithm.** Sample trajectories, weight log-probability gradients by reward, take a step. It works but has high variance.
+
+4. **Subtracting a prompt-dependent baseline reduces variance for free.** This gives the advantage function $A(x, y) = r_\phi(x, y) - b(x)$. PPO uses a learned value-function baseline; GRPO uses a group-mean baseline.
+
+5. **REINFORCE alone is rarely used at scale.** Variance, sample inefficiency, and lack of update safeguards motivate PPO (§9.6) and GRPO (§9.7).
+
+The next session derives PPO's clipped surrogate objective — the workhorse algorithm of large-scale RLHF since 2017.
+
+<SelfTest>
+
+**(a)** Apply the log-derivative trick to a one-step example: $J(\theta) = \mathbb{E}_{a \sim \pi_\theta}[r(a)]$ where $\pi_\theta(a) = \text{softmax}(\theta)_a$ over a 3-element action set. Derive $\nabla_\theta J$ explicitly.
+
+**(b)** State the LLM-as-RL-problem mapping from §2. Identify the state, action, policy, trajectory, and reward in LLM RLHF. Which of these are simplified by the deterministic transition dynamics?
+
+**(c)** Write the REINFORCE update equation per-token. Why does every token in a response get the same reward signal in the per-token form? What is the credit-assignment problem this creates?
+
+**(d)** Show that subtracting a prompt-only baseline $b(x)$ from the reward leaves $\nabla_\theta J$ unbiased. State (without proof) the variance-minimising choice of $b(x)$.
+
+**(e)** A practitioner runs plain REINFORCE on an LLM and reports that the policy collapses after a few hundred steps (outputs become repetitive nonsense). Diagnose three contributing factors from §5.
+
+**(f)** Argue the connection between REINFORCE and SFT of §4.1. When does REINFORCE reduce to "SFT on self-generated trajectories"?
+
+</SelfTest>

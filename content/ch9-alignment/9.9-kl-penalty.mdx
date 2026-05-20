@@ -1,0 +1,205 @@
+---
+title: "9.9 — The KL penalty and why it's there"
+chapter: 9
+order: 9
+estimatedMinutes: 18
+goal: "Define the KL penalty r̃ = r − β KL(π_θ ‖ π_ref). Argue that it prevents (i) reward hacking and (ii) mode collapse. Derive the per-token implementation as a log-ratio reward correction. Identify how β is tuned and why the choice of reference matters."
+prerequisites: ["ch9-alignment/9.8-rlhf-end-to-end", "ch0-math-foundations/0.6-entropy-kl"]
+---
+
+## 1. Why this session exists
+
+The RLHF and GRPO formulae of [9.7](/session/ch9-alignment/9.7-grpo)–[9.8](/session/ch9-alignment/9.8-rlhf-end-to-end) both contain an extra term beyond the reward:
+
+$$
+\tilde r(x, y) = r(x, y) - \beta \cdot \mathrm{KL}\!\big(\pi_\theta(\cdot \mid x) \,\Vert\, \pi_\text{ref}(\cdot \mid x)\big).
+$$
+
+The $-\beta \cdot \mathrm{KL}$ term looks like an arbitrary regulariser. It is not arbitrary; it is the *single most important safety mechanism* in RLHF, preventing two structural failure modes that would otherwise destroy the trained model.
+
+This session derives the penalty from first principles, identifies what goes wrong without it, and shows how to tune $\beta$ in practice. The same penalty reappears in DPO's derivation ([9.10](/session/ch9-alignment/9.10-dpo)) — DPO's closed-form solution is exactly the KL-penalised RLHF objective minimised analytically.
+
+---
+
+## 2. What goes wrong without the KL
+
+Imagine running PPO with just the raw reward $r_\phi(x, y)$, no KL penalty. The objective is
+
+$$
+\max_\theta \mathbb{E}_{x, y \sim \pi_\theta}\big[r_\phi(x, y)\big].
+$$
+
+The policy $\pi_\theta$ can drift arbitrarily far from $\pi_\text{SFT}$ in pursuit of higher reward. Two specific failure modes follow.
+
+### 2.1 Reward hacking
+
+The reward model $r_\phi$ is an *approximation* of human preferences, trained on a finite set of comparisons. It has bugs, biases, and out-of-distribution failures. If the policy drifts far enough, it can find completions that score very high under $r_\phi$ but are *bad* under true human preferences.
+
+A canonical example: $r_\phi$ might have learned that longer answers are preferred (training data was correlated with length). PPO without KL discovers this and produces increasingly verbose completions — eventually arriving at multi-page rambles that score well under $r_\phi$ but are unhelpful to users.
+
+This is **reward hacking** (or Goodhart's law in disguise): when a proxy metric becomes the optimisation target, the proxy stops being a good measure. The KL penalty bounds how far the policy can drift, keeping it in the region where $r_\phi$ is approximately a valid proxy.
+
+### 2.2 Mode collapse
+
+A second failure: the policy starts to **collapse** to a single deterministic output per prompt. If one completion scores well, the policy concentrates probability mass on it; the gradient amplifies that concentration; eventually the policy is near-deterministic, producing the same completion for any related prompt.
+
+Mode collapse destroys the model's *generative diversity*. The pretrained base could write a story in 10 different styles; after PPO without KL, it writes the same story 10 times.
+
+The KL penalty resists collapse because $\mathrm{KL}(\pi_\theta \,\Vert\, \pi_\text{ref})$ explodes if $\pi_\theta$ becomes degenerate (a delta) when $\pi_\text{ref}$ has spread mass. The penalty fights collapse and preserves the diversity of $\pi_\text{ref}$.
+
+Both failure modes are *practical observations*, not theoretical guarantees. InstructGPT (Ouyang et al. 2022) §3.5 documents both; every subsequent RLHF paper that ablates the KL term reproduces them.
+
+---
+
+## 3. The penalty term, mathematically
+
+Recall ([0.6](/session/ch0-math-foundations/0.6-entropy-kl)) the KL divergence between two distributions $p, q$ on $\mathcal{Y}$:
+
+$$
+\mathrm{KL}(p \,\Vert\, q) = \mathbb{E}_{y \sim p}\big[\log p(y) - \log q(y)\big] = \mathbb{E}_{y \sim p}\!\left[\log \frac{p(y)}{q(y)}\right] \geq 0,
+$$
+
+with equality iff $p = q$. Two key properties:
+
+- **Non-negative.** $\mathrm{KL} \geq 0$.
+- **Asymmetric.** $\mathrm{KL}(p \,\Vert\, q) \neq \mathrm{KL}(q \,\Vert\, p)$ in general.
+- **Mode-seeking.** The forward direction $\mathrm{KL}(p \,\Vert\, q)$ is *infinite* if $p$ puts mass anywhere $q$ doesn't. So if $\pi_\text{ref}$ has full support, $\pi_\theta$ cannot collapse to a delta on regions outside $\pi_\text{ref}$'s support without paying infinite KL.
+
+In RLHF, $p = \pi_\theta(\cdot \mid x)$ (the policy being trained) and $q = \pi_\text{ref}(\cdot \mid x)$ (the SFT reference). The penalty term added to the reward:
+
+$$
+- \beta \cdot \mathrm{KL}\!\big(\pi_\theta \,\Vert\, \pi_\text{ref}\big) = -\beta \cdot \mathbb{E}_{y \sim \pi_\theta}\!\left[\log \frac{\pi_\theta(y \mid x)}{\pi_\text{ref}(y \mid x)}\right].
+$$
+
+### 3.1 Per-token implementation
+
+For autoregressive LLMs, $\pi(y \mid x) = \prod_t \pi(y_t \mid x, y_{<t})$, so
+
+$$
+\log \frac{\pi_\theta(y \mid x)}{\pi_\text{ref}(y \mid x)} = \sum_{t = 1}^{T} \log \frac{\pi_\theta(y_t \mid x, y_{<t})}{\pi_\text{ref}(y_t \mid x, y_{<t})}.
+$$
+
+The KL penalty distributes across tokens. In PPO, each token's reward becomes
+
+$$
+\boxed{\ r_t = -\beta \log \frac{\pi_\theta(y_t \mid x, y_{<t})}{\pi_\text{ref}(y_t \mid x, y_{<t})} + \mathbb{1}[t = T] \cdot r_\phi(x, y). \ }
+$$
+
+The reward model fires at the end of the sequence; the KL penalty fires every token as a per-step log-ratio correction. GAE then accumulates these into advantages for PPO.
+
+This per-token implementation has two consequences:
+
+- **The penalty is computed online** — using $\pi_\theta$ and $\pi_\text{ref}$ at sampling time. Both must be in memory.
+- **The KL is "as $\pi_\theta$ moves"** — strictly $\mathrm{KL}(\pi_\theta \,\Vert\, \pi_\text{ref})$, not the symmetric or reversed direction. The asymmetry matters in §3.
+
+### 3.2 Why forward-KL, not reverse?
+
+The choice $\mathrm{KL}(\pi_\theta \,\Vert\, \pi_\text{ref})$ (forward, sampling from $\pi_\theta$) vs $\mathrm{KL}(\pi_\text{ref} \,\Vert\, \pi_\theta)$ (reverse, sampling from $\pi_\text{ref}$) is not arbitrary.
+
+**Forward KL is *mode-seeking* in the wrong direction for our purposes** — strictly speaking, it forces $\pi_\theta$ to cover all of $\pi_\text{ref}$'s support, which is what we want for diversity preservation. But sampling from $\pi_\theta$ during training is *practical* — those are the samples PPO already needs for the policy gradient. So forward KL is computed for free from the same samples.
+
+**Reverse KL** would require sampling from $\pi_\text{ref}$, which is extra forward passes through the frozen reference. Possible but inefficient.
+
+Empirically, forward KL works well enough that the inefficiency-driven choice is also a good choice in practice. DPO's derivation ([9.10](/session/ch9-alignment/9.10-dpo)) uses forward KL implicitly through the same reasoning.
+
+---
+
+## 4. Choosing $\beta$
+
+$\beta$ is the single most important hyperparameter of RLHF after the SFT and reward-model choices.
+
+### 4.1 Effects of $\beta$
+
+- **$\beta \to 0$**: KL term vanishes. Policy can drift arbitrarily; reward hacking and mode collapse dominate.
+- **$\beta \to \infty$**: KL term dominates. Policy cannot move from $\pi_\text{ref}$; RL contributes nothing.
+- **$\beta$ "just right"**: policy improves reward while staying close to $\pi_\text{ref}$. Balance of exploration and constraint.
+
+Typical $\beta \in [0.01, 0.3]$ in published recipes. InstructGPT used $\beta = 0.02$. LLaMA-2 used $\beta = 0.01$. The trend over time has been *lower* $\beta$ — meaning more freedom for the policy to move — as practitioners have learned where the sweet spot is for different model scales.
+
+### 4.2 Adaptive $\beta$
+
+Some implementations adapt $\beta$ during training. The most common rule: monitor the average KL during sampling; if it exceeds a target value $\mathrm{KL}^*$, increase $\beta$; if it falls below, decrease $\beta$. This keeps the *effective* drift bounded.
+
+Adaptive $\beta$ is helpful when the reward model's gradient pushes the policy unevenly across prompts: easy prompts have small gradients (less KL), hard prompts have large gradients (more KL). A fixed $\beta$ either under-constrains hard prompts or over-constrains easy ones. Adaptive control balances them.
+
+### 4.3 Connection to TRPO / natural gradient
+
+Mathematically, the KL-penalised reward is the Lagrangian of the constrained optimisation
+
+$$
+\max_\theta \mathbb{E}\big[r(x, y)\big] \quad \text{subject to} \quad \mathrm{KL}\!\big(\pi_\theta \,\Vert\, \pi_\text{ref}\big) \leq \delta,
+$$
+
+with $\beta$ the Lagrange multiplier. TRPO (Schulman et al., 2015) implements this constraint directly via a trust-region search; PPO with KL penalty approximates it with the dual form. The "KL penalty" is the *soft* version of the "trust region" idea — penalise instead of constrain.
+
+This makes the KL penalty mathematically natural: it is the Lagrangian formulation of "don't move the policy too far from the reference in one step."
+
+---
+
+## 5. The "KL budget" view
+
+A useful mental model: think of the cumulative KL between $\pi_\theta$ and $\pi_\text{ref}$ as a **budget** that PPO spends to improve reward.
+
+Empirically, the policy improves reward roughly linearly with KL distance from the reference, up to some point. Past that, reward hacking sets in and the *true* reward (human preference) degrades even as $r_\phi$ keeps improving. The "sweet spot" KL budget is implementation-specific but typically $\mathrm{KL} \in [10, 30]$ nats per completion at convergence.
+
+This is why early stopping on a held-out preference set is standard practice in production RLHF: stop training when the held-out preference rate stops improving, even if $r_\phi$ score on the training distribution keeps climbing. The KL budget gives a tight handle on this; you can monitor cumulative KL and decide when "enough is enough".
+
+<Aside type="warning">
+**The KL penalty does not fix a bad reward model.** It only prevents the policy from running away to the extreme tail of the reward model's predictions. If the reward model is systematically biased — say, prefers verbose answers — the KL-bounded policy still becomes verbose, just less so than the unbounded policy. Fixing the bias requires better preference data or better reward modelling, not bigger $\beta$.
+
+A common debugging anti-pattern: "increase $\beta$ to fix reward hacking" — this often hides the symptom rather than the cause. If you see degraded quality on a held-out set, investigate the reward model first; tune $\beta$ second.
+</Aside>
+
+---
+
+## 6. Why the reference matters
+
+The KL is computed against $\pi_\text{ref}$, which in the canonical RLHF recipe is $\pi_\text{SFT}$ — the supervised-fine-tuned model. Three reasons this is the right choice:
+
+**(a) SFT is already in the "instruction-following" mode.** Using $\pi_\text{base}$ (the pretrained model) as reference would anchor the policy to "next-token predictor" behaviour, which is incompatible with the RLHF goal of "instruction follower." The KL would explode trying to keep an instruction-following policy close to a next-token predictor.
+
+**(b) SFT defines the "valid distribution" of completions.** Anything outside $\pi_\text{SFT}$'s support is suspicious — it's not the kind of response humans tend to write or that the reward model has been trained on. The KL penalty enforces "stay inside what we've validated."
+
+**(c) SFT gives us natural diversity.** $\pi_\text{SFT}$ still has high entropy from its pretraining background; this is the diversity we want to preserve. Anchoring to $\pi_\text{base}$ would over-constrain; anchoring to a more focused intermediate model would under-constrain.
+
+A few RLHF variants use $\pi_\text{base}$ or a separate "diversity model" as reference. These are exotic; the standard is $\pi_\text{SFT}$.
+
+---
+
+## 7. Connection to information theory
+
+The KL penalty has a natural information-theoretic interpretation. $\mathrm{KL}(\pi_\theta \,\Vert\, \pi_\text{ref})$ measures the *additional information* required to encode samples from $\pi_\theta$ given a code optimised for $\pi_\text{ref}$. In nats:
+
+$$
+\mathrm{KL}(\pi_\theta \,\Vert\, \pi_\text{ref}) = \mathbb{E}_{y \sim \pi_\theta}[\log \pi_\theta(y) - \log \pi_\text{ref}(y)].
+$$
+
+If $\pi_\theta = \pi_\text{ref}$, no extra information is required. As $\pi_\theta$ diverges, the per-sample "encoding penalty" grows. The penalty $-\beta \cdot \mathrm{KL}$ is paying for the bits of information by which the new policy departs from the old.
+
+This connects to **rate-distortion theory**: the policy may distort outputs (increase $r$) but pays an information-theoretic cost (KL). The Pareto frontier of $(r, \mathrm{KL})$ traces what's achievable; PPO with a particular $\beta$ picks one point on it.
+
+---
+
+## 8. What we keep going forward
+
+Three things:
+
+1. **The KL penalty prevents reward hacking and mode collapse.** Both are practical, observed failure modes; the penalty is the structural safeguard.
+2. **Per-token implementation** as $r_t = r_\text{model}(\mathbb{1}[t = T]) - \beta \cdot \log(\pi_\theta(y_t)/\pi_\text{ref}(y_t))$. PPO's GAE then accumulates these.
+3. **$\beta$ is the most important hyperparameter** of RLHF after the reward model. Typical $\beta \in [0.01, 0.3]$. Adaptive $\beta$ that targets a fixed KL is a common production refinement.
+
+[Next session](/session/ch9-alignment/9.10-dpo) is **DPO** — Direct Preference Optimization. The derivation builds *directly* on the KL-penalised objective of this session: solve the RLHF objective in closed form, then re-parameterise to skip the explicit reward model. The most beautiful derivation in the entire roadmap.
+
+<SelfTest>
+
+**(a)** State the KL penalty in the form $-\beta \cdot \mathrm{KL}(\pi_\theta \,\Vert\, \pi_\text{ref})$. Identify the asymmetry (forward vs reverse) and explain why forward KL is operationally cheaper.
+
+**(b)** Derive the per-token form of the KL penalty: show that for an autoregressive LLM, $\log(\pi_\theta(y)/\pi_\text{ref}(y))$ decomposes into a sum of per-token log-ratios.
+
+**(c)** Without the KL penalty, two specific failure modes appear: reward hacking and mode collapse. Give a concrete example of each — what would the policy do?
+
+**(d)** A team trains PPO with $\beta = 0.5$ and observes the policy hardly moves from $\pi_\text{SFT}$ in 1000 steps. Then they try $\beta = 0.001$ and observe verbose, repetitive completions after 1000 steps. Suggest a debug procedure.
+
+**(e)** Show that the KL-penalised reward $\tilde r = r - \beta \cdot \mathrm{KL}$ is the Lagrangian of the constrained problem $\max \mathbb{E}[r]$ subject to $\mathrm{KL} \leq \delta$. State the relationship between $\beta$ and $\delta$.
+
+</SelfTest>

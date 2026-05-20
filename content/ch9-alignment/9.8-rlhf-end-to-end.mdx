@@ -1,0 +1,235 @@
+---
+title: "9.8 — RLHF, end-to-end"
+chapter: 9
+order: 8
+estimatedMinutes: 22
+goal: "Draw the full RLHF pipeline: SFT model → reward model → PPO with KL penalty to the SFT reference. Identify the four models involved (policy, ref, reward, critic), the data flow, and where InstructGPT diverges from a textbook RL setup. State why this recipe persists in production despite DPO's rise."
+prerequisites: ["ch9-alignment/9.6-ppo", "ch9-alignment/9.4-bradley-terry-reward-objective"]
+---
+
+## 1. Why this session exists
+
+We have all the pieces:
+
+- **SFT** ([9.2](/session/ch9-alignment/9.2-sft)) — fine-tune a pretrained LM on instruction-response pairs.
+- **Reward modeling** ([9.3](/session/ch9-alignment/9.3-reward-modeling-preference-data)–[9.4](/session/ch9-alignment/9.4-bradley-terry-reward-objective)) — train $r_\phi(x, y)$ from human pairwise preferences via Bradley-Terry.
+- **PPO** ([9.6](/session/ch9-alignment/9.6-ppo)) — the RL algorithm that optimises the policy against the reward.
+
+This session assembles them. **RLHF (Reinforcement Learning from Human Feedback)** is the three-stage recipe that takes a pretrained LM to a useful instruction-following assistant: SFT → reward model → PPO. **Ouyang, Wu, Jiang, et al., 2022, *Training Language Models to Follow Instructions with Human Feedback*** ([arXiv:2203.02155](https://arxiv.org/abs/2203.02155)) — the InstructGPT paper — is the canonical reference. ChatGPT, Claude, Gemini, LLaMA-3-Instruct, Mistral-Instruct, and every other instruction-tuned production LLM has been trained with some variation of this.
+
+After 9.8 you can draw the full data flow on a whiteboard and identify every input/output between the four models involved. The follow-up sessions ([9.10](/session/ch9-alignment/9.10-dpo) DPO, [9.11](/session/ch9-alignment/9.11-iterative-dpo) Iterative DPO, [9.13](/session/ch9-alignment/9.13-rlaif-constitutional) RLAIF) are all *modifications* of this pipeline; understanding the canonical version first makes the modifications clear.
+
+---
+
+## 2. The three stages
+
+### 2.1 Stage 1: SFT
+
+Start with a pretrained base LM $\pi_\text{base}$ (Chapter 7's output). Fine-tune on a corpus of $(x, y)$ pairs where $x$ is an instruction and $y$ is a human-written response. Loss: standard next-token cross-entropy on $y$ given $x$, exactly as in pretraining.
+
+Output: $\pi_\text{SFT}$, a model that **roughly follows instructions** but is unaligned in quality, safety, and helpfulness.
+
+The SFT step gives you a *competent prompt-follower* — most of the LLM's emergent capabilities are already present from pretraining; SFT just teaches it to *use* them in instruction-following mode. SFT alone gets you to ~80% of the way; the remaining 20% is what RLHF (or DPO) adds.
+
+### 2.2 Stage 2: Reward modeling
+
+Collect preference data: for each instruction $x$, generate two completions $y_1, y_2$ from $\pi_\text{SFT}$; ask a human which they prefer. Train a reward model $r_\phi(x, y)$ via Bradley-Terry log-likelihood ([9.4 §3](/session/ch9-alignment/9.4-bradley-terry-reward-objective)):
+
+$$
+\mathcal{L}_\text{RM}(\phi) = -\mathbb{E}_{(x, y_c, y_r)}\big[\log \sigma(r_\phi(x, y_c) - r_\phi(x, y_r))\big].
+$$
+
+Output: $r_\phi$, a scalar function that scores any $(x, y)$ pair. It is approximately a proxy for "what would a human reviewer score this completion?", learned from $\sim 100$K–$1$M comparison pairs.
+
+The reward model is typically initialised from $\pi_\text{SFT}$ with the LM head replaced by a regression head, then fine-tuned on preferences. Reward models are usually $\sim 6$B–$70$B parameters (substantial — the reward model is *not* tiny).
+
+### 2.3 Stage 3: PPO with KL penalty
+
+Now run RL: optimise $\pi_\theta$ to maximise
+
+$$
+\mathbb{E}_{x \sim \mathcal{D},\, y \sim \pi_\theta(\cdot \mid x)}\big[r_\phi(x, y) - \beta \cdot \mathrm{KL}\!\big(\pi_\theta(\cdot \mid x) \,\Vert\, \pi_\text{SFT}(\cdot \mid x)\big)\big],
+$$
+
+with $\pi_\theta$ initialised from $\pi_\text{SFT}$. The KL penalty (covered in detail in [9.9](/session/ch9-alignment/9.9-kl-penalty)) keeps $\pi_\theta$ close to $\pi_\text{SFT}$ — preventing reward hacking and mode collapse.
+
+PPO is the optimiser. The policy is updated via clipped surrogate ([9.6 §3](/session/ch9-alignment/9.6-ppo)) with the reward $r_\phi(x, y) - \beta \cdot \log\frac{\pi_\theta(y \mid x)}{\pi_\text{SFT}(y \mid x)}$ (the KL is incorporated per-token as a log-ratio).
+
+Output: $\pi_\text{RLHF}$ — the production-ready model.
+
+---
+
+## 3. The four models in memory
+
+A subtle practical point: PPO-based RLHF requires *four* models, all in memory simultaneously (or quickly swappable):
+
+| Model | Role | Trainable? |
+|---|---|---|
+| $\pi_\theta$ | The policy being trained | Yes |
+| $\pi_\text{SFT}$ (= $\pi_\text{ref}$) | Frozen SFT reference for the KL penalty | No |
+| $r_\phi$ | Reward model | No (trained in stage 2) |
+| $V_\psi$ | Value-function critic (for PPO) | Yes (auxiliary) |
+
+The policy and critic train; the reference and reward are frozen. For a 70B target model:
+
+- $\pi_\theta$: ~$140$ GB (with Adam state).
+- $V_\psi$: ~$140$ GB if same-size critic, but often a smaller critic (~$7$B) is used.
+- $r_\phi$: frozen, ~$14$ GB.
+- $\pi_\text{SFT}$: frozen, ~$14$ GB.
+
+Total: $\sim 300$ GB just for the model stack. With sharding (FSDP / TP / PP from [7.10](/session/ch7-training-language-models/7.10-fsdp-zero) and [7.9](/session/ch7-training-language-models/7.9-tensor-pipeline-parallelism)), this is tractable on a multi-node cluster. Without sharding, infeasible.
+
+This is one of the reasons **GRPO** ([9.7](/session/ch9-alignment/9.7-grpo)) is attractive: drops $V_\psi$. And **DPO** ([9.10](/session/ch9-alignment/9.10-dpo)) is even more attractive: drops both $V_\psi$ and $r_\phi$, training directly against preferences.
+
+---
+
+## 4. The data flow
+
+The full pipeline, with data and model dependencies marked:
+
+```
+                                                ┌──────────────────────────┐
+                                                │  Pretrained base LM      │
+                                                │  (Chapter 7 output)      │
+                                                └────────────┬─────────────┘
+                                                             │
+              ┌─────────────────────────────────┐   SFT      │
+              │  SFT data:                      │   fine-tune│
+              │  (instruction, demonstration)   ├────────────┤
+              │  ~10K–100K pairs                │            │
+              │  (humans write demonstrations)  │            │
+              └─────────────────────────────────┘            ▼
+                                                ┌──────────────────────────┐
+                                                │  π_SFT                   │
+                                                │  (Stage 1 output)        │
+                                                └────────────┬─────────────┘
+                                                             │
+                                                             │ sample 2 completions
+                                                             │ per prompt
+                                                             ▼
+              ┌─────────────────────────────────┐
+              │  Preference data:               │
+              │  (instruction, completion_c,    │ <─── humans label
+              │   completion_r)                 │      which is better
+              │  ~100K–1M pairs                 │
+              └─────────────────────────────────┘
+                                                             │
+                                                             │ BT loss
+                                                             │ (init from π_SFT)
+                                                             ▼
+                                                ┌──────────────────────────┐
+                                                │  r_φ (reward model)      │
+                                                │  (Stage 2 output)        │
+                                                └────────────┬─────────────┘
+                                                             │
+                                                             │ PPO loop
+                                                             │ • sample from π_θ
+                                                             │ • score with r_φ
+                                                             │ • add KL penalty
+                                                             │   (vs π_SFT)
+                                                             │ • clipped surrogate
+                                                             ▼
+                                                ┌──────────────────────────┐
+                                                │  π_RLHF                  │
+                                                │  (Stage 3 output)        │
+                                                └──────────────────────────┘
+                                                       Production model
+```
+
+The arrow weights matter:
+
+- **SFT demonstrations are expensive** — humans write full responses. $\sim 10$K–$100$K pairs typically.
+- **Preference data is cheap** — humans just choose between two completions. $\sim 100$K–$1$M pairs typically. This is why RLHF scales: preference labelling is cheaper per data point than demonstration writing.
+- **Sampling for PPO is the bottleneck of stage 3** — each PPO step needs fresh completions from $\pi_\theta$. With long completions ($1$K+ tokens) at 70B scale, this is the dominant wall-clock cost.
+
+---
+
+## 5. InstructGPT's variations from textbook PPO
+
+A few details from Ouyang et al. (2022) that distinguish production RLHF from textbook PPO:
+
+### 5.1 Per-token KL, not per-sequence KL
+
+The KL penalty $\beta \cdot \mathrm{KL}(\pi_\theta \,\Vert\, \pi_\text{SFT})$ is implemented as a **per-token** reward subtraction during PPO sampling:
+
+$$
+r_t = -\beta \cdot \log \frac{\pi_\theta(y_t \mid x, y_{<t})}{\pi_\text{SFT}(y_t \mid x, y_{<t})} + \begin{cases} r_\phi(x, y) & \text{if } t = T \text{ (end of sequence)} \\ 0 & \text{otherwise} \end{cases}.
+$$
+
+The reward model fires *once*, at the end of the completion. The KL penalty fires *every token*. PPO's advantage estimator (GAE) treats this as a per-token reward sequence.
+
+The mathematical justification: $\mathrm{KL}(\pi_\theta \,\Vert\, \pi_\text{SFT})$ for a full sequence equals $\sum_t \mathrm{KL}$ at the token level, by the chain rule for KL on autoregressive distributions. Per-token implementation is the operationally efficient way to apply the same penalty.
+
+### 5.2 Value-function initialised from reward model
+
+The critic $V_\psi$ is initialised from the *reward model* $r_\phi$, not from the policy. The reward model is already "scoring" $(x, y)$ pairs; with an output-head adjustment, it's a natural starting point for the value function. Plus it's frozen so doesn't take additional pretraining cost.
+
+### 5.3 Mixing pretraining gradients
+
+Ouyang et al. mix the PPO gradient with a small amount of pretraining gradient (next-token prediction on the original pretraining corpus). This prevents **catastrophic forgetting**: PPO can drift the policy away from general competence in pursuit of reward, especially on the long tail of capabilities not covered by the reward model. The PPL-mixing trick ("PPO-ptx") keeps the model anchored to its pretraining distribution.
+
+### 5.4 The reward isn't trusted past a point
+
+The KL penalty's role is partly to prevent **reward over-optimisation** ([9.14](/session/ch9-alignment/9.14-reward-hacking)). Empirically, if you push PPO too hard against $r_\phi$, the policy drifts off-distribution and the *true* reward (human preference) degrades — even as $r_\phi$ score keeps rising. The KL penalty bounds this; early stopping on a held-out preference set is a second safeguard.
+
+---
+
+## 6. Compute and data budget for production RLHF
+
+Rough order of magnitude for a 70B-class production model:
+
+| Stage | Compute | Data | Time |
+|---|---|---|---|
+| Stage 1 (SFT) | $\sim 1\%$ of pretraining | $\sim 100$K demonstrations | ~$1$–$3$ days |
+| Stage 2 (RM) | $\sim 0.5\%$ of pretraining | $\sim 500$K preference pairs | ~$1$ day |
+| Stage 3 (PPO) | $\sim 5$–$15\%$ of pretraining | $\sim 100$K prompts, $\times 10$ rollouts each | ~$1$–$2$ weeks |
+
+The dominant cost is stage 3's PPO, partly because of sampling (long completions on a large model) and partly because of the four-model memory footprint. Total RLHF compute is $\sim 10\%$ of pretraining; total data effort is the bulk of "post-training" labelling cost.
+
+These numbers move around in production — Anthropic, OpenAI, DeepMind, Meta each have their own recipes, and competitive details aren't public — but the orders of magnitude are stable across published descriptions.
+
+---
+
+## 7. Why this recipe persists in production despite DPO
+
+DPO ([9.10](/session/ch9-alignment/9.10-dpo)) skips the reward model and PPO entirely, training directly on preferences. It works. So why does PPO-RLHF still dominate frontier production?
+
+Three reasons:
+
+**(a) The reward model is a reusable asset.** A trained $r_\phi$ can be used for many things: PPO, Best-of-N inference-time selection ([9.15](/session/ch9-alignment/9.15-inference-time-alignment)), evaluation, dataset curation. DPO is a *one-shot* training step that doesn't give you the reward model for free.
+
+**(b) PPO can exceed the preference data's quality.** PPO optimises against the reward model's *predictions* on novel completions, not just the preference data itself. With a good reward model that generalises, PPO can find completions strictly better than any in the training preferences. DPO is bounded by the preference data's quality (with some interpolation).
+
+**(c) Production teams have invested in PPO infrastructure.** Multi-year investments in RLHF training stacks are not abandoned overnight. Even where DPO is competitive, the marginal cost of switching is non-trivial.
+
+So in 2024–2026: DPO and Iterative DPO ([9.11](/session/ch9-alignment/9.11-iterative-dpo)) are competitive with PPO at smaller scales and often used for open-source models (LLaMA-3-Instruct, Mistral-Instruct). At frontier closed-model scale (Claude, GPT-4, Gemini), PPO-based RLHF remains the dominant choice, often combined with RLAIF / Constitutional AI ([9.13](/session/ch9-alignment/9.13-rlaif-constitutional)) for the preference labels.
+
+<Aside type="history">
+**InstructGPT (2022) is the watershed.** Before InstructGPT, language models were "pretrained next-token predictors"; after, they were "instruction-following assistants." The architectural shift was nothing — same Transformer skeleton from Chapter 6. The shift was *in the training pipeline*: pretraining + SFT + RLHF. ChatGPT launched in November 2022, three months after the InstructGPT paper; Claude in March 2023; GPT-4 in March 2023. The race that followed was fundamentally about who could implement this recipe at scale, with what data quality, and with what reward models.
+</Aside>
+
+---
+
+## 8. What we keep going forward
+
+Three things:
+
+1. **RLHF is three stages: SFT → RM → PPO.** Each stage has a clear role: capability primer, preference model, policy optimisation.
+2. **Four models live in memory during PPO.** Policy, critic, frozen reference (SFT), frozen reward model. The four-model overhead is the structural reason GRPO and DPO exist.
+3. **InstructGPT's recipe persists in production.** DPO is competitive at smaller scales; at frontier scale, PPO-RLHF with reward models still dominates.
+
+[Next session](/session/ch9-alignment/9.9-kl-penalty) zooms in on the **KL penalty** — the seemingly-arbitrary $-\beta \cdot \mathrm{KL}(\pi_\theta \,\Vert\, \pi_\text{ref})$ term — and shows it's the load-bearing safety mechanism against reward hacking and mode collapse.
+
+<SelfTest>
+
+**(a)** Draw the RLHF pipeline. Identify the four models that exist in memory during stage 3 (PPO). Which are trainable? Which are frozen?
+
+**(b)** SFT requires $\sim 10$K–$100$K demonstrations; preference labelling requires $\sim 100$K–$1$M pairs. Argue why preference labelling is more cost-effective per data point.
+
+**(c)** The reward model is initialised from $\pi_\text{SFT}$. Why? What changes about the model architecture between $\pi_\text{SFT}$ and $r_\phi$?
+
+**(d)** Read InstructGPT (Ouyang et al. 2022) §3.5. Identify the "PPO-ptx" mixing — what is it, and why is it included?
+
+**(e)** Why does the KL penalty in stage 3 use $\pi_\text{SFT}$ as the reference rather than the original pretrained base? Argue from the perspective of "what does each model know?"
+
+</SelfTest>

@@ -1,0 +1,200 @@
+---
+title: "9.12 — Process Reward Models (PRMs)"
+chapter: 9
+order: 12
+estimatedMinutes: 20
+goal: "Distinguish outcome rewards (only at the end of a trajectory) from process rewards (at each reasoning step). State why process rewards improve reasoning training, place them in the math/code reasoning literature, and identify their role in o1/R1-style training."
+prerequisites: ["ch9-alignment/9.7-grpo", "ch9-alignment/9.8-rlhf-end-to-end"]
+---
+
+## 1. Why this session exists
+
+In RLHF as we've described it ([9.8](/session/ch9-alignment/9.8-rlhf-end-to-end)), the reward $r(x, y)$ is a *single scalar* applied to the *whole completion*. The reward model reads the prompt $x$ and the full response $y$ and outputs one number. For chat-style alignment ("was this answer helpful?"), this is fine.
+
+For **multi-step reasoning** — math problems, code generation, multi-step planning — outcome-only rewards are coarse. A 20-step derivation that arrives at the wrong answer gets a single "wrong" signal, even though 19 of the 20 steps may have been correct. The policy can't distinguish "made one small slip" from "completely confused." Conversely, a derivation with a correct answer but a logical error in the middle (one that happens to cancel out) gets a positive signal, reinforcing the wrong reasoning.
+
+**Process Reward Models (PRMs)** address this. Instead of a single reward per completion, evaluate *each reasoning step* individually and aggregate. The result is a dense, per-step signal: "this step is correct, this step is wrong, this step is unverifiable." The policy can be trained — via PPO with per-step rewards, or GRPO with step-level advantages — to favour completions with correct intermediate steps.
+
+This session: the outcome-vs-process distinction, the canonical PRM paper (Lightman et al. 2023, *"Let's Verify Step by Step"*), how PRMs are trained, and their role in o1/R1-style reasoning models.
+
+---
+
+## 2. Outcome rewards vs process rewards
+
+A **trajectory** in LLM reasoning is the sequence of "steps" the model generates: typically intermediate sentences in a chain-of-thought, intermediate lines in a code block, intermediate equations in a math derivation.
+
+### 2.1 Outcome reward model (ORM)
+
+An ORM scores the *final answer* only:
+
+$$
+r_\text{ORM}(x, y) = \begin{cases} 1 & \text{if final answer is correct} \\ 0 & \text{otherwise} \end{cases}
+$$
+
+(For real ORMs, the output is a continuous probability $\in [0, 1]$, but the pattern is the same: one scalar at the end.)
+
+Pros: cheap to compute (just check the final answer); requires only outcome labels.
+Cons: zero signal about intermediate reasoning; high-variance gradient (most rollouts are "wrong" → 0).
+
+### 2.2 Process reward model (PRM)
+
+A PRM scores *each reasoning step* of $y = (s_1, s_2, \dots, s_K)$:
+
+$$
+r_\text{PRM}(x, s_1, \dots, s_k) \in [0, 1] \text{ for each } k.
+$$
+
+The score for step $k$ reflects whether step $k$ is a *correct continuation* of the reasoning so far. This gives $K$ per-step scores per trajectory, dramatically denser than the single ORM output.
+
+Pros: dense per-step signal; the policy can learn which intermediate moves are good. Captures partial credit.
+Cons: expensive to label (need step-level annotations); requires defining what a "step" is.
+
+The PRM is itself a neural network — typically an LLM with a classification head trained on step-labelled data.
+
+---
+
+## 3. Lightman et al.: "Let's Verify Step by Step"
+
+**Lightman, Kosaraju, Burda, et al., 2023, *Let's Verify Step by Step*** ([arXiv:2305.20050](https://arxiv.org/abs/2305.20050)). The foundational paper for PRMs in LLM reasoning.
+
+### 3.1 The data
+
+The authors collected the **PRM800K** dataset: 800,000 step-level human annotations on math problem solutions from GPT-4 and OpenAI's chain-of-thought models. For each solution, every step is labelled as one of:
+
+- **positive**: correct, helpful step.
+- **negative**: incorrect step.
+- **neutral**: not wrong, but doesn't advance the solution.
+
+The annotation guidelines (paper §3) take seriously the distinction between "correct" and "useful" — a true but irrelevant equation, for example, is neutral.
+
+### 3.2 The PRM
+
+Train an LLM (initialised from a strong base) to predict, for any partial solution $x, s_1, \dots, s_k$, the probability that step $s_k$ is positive. The training loss is the standard binary cross-entropy on the labelled steps.
+
+Output: a scalar in $[0, 1]$ at every step boundary of a candidate solution.
+
+### 3.3 The result
+
+Using the PRM as a reward function for inference-time selection (Best-of-N — pick the N-best by aggregate PRM score), Lightman et al. show that PRM-selected solutions outperform ORM-selected solutions on MATH (their target benchmark) by a substantial margin — at the same N, PRM Best-of-N is consistently more accurate.
+
+The headline finding: **dense step-level supervision is strictly more useful than outcome-only supervision**, for both selection (inference time) and training (RL with PRM rewards).
+
+---
+
+## 4. How a PRM is used
+
+Three modes.
+
+### 4.1 Inference-time selection (Best-of-N)
+
+The simplest. Sample $N$ candidate solutions from $\pi_\theta$. Score each with the PRM (typically: aggregate score = minimum step score, or product of step probabilities). Pick the highest-scoring as the final answer.
+
+This is "use the PRM as a selector." No training needed; the PRM augments inference.
+
+### 4.2 PRM-guided beam search
+
+A bit more sophisticated: at each step, sample several candidate next-steps; score each with the PRM; keep the top few; continue. This is beam search with PRM scores as the selection metric, biased toward solutions that *every step* of the way look good.
+
+Used by some o1-style inference systems.
+
+### 4.3 PRM as the reward in RL
+
+The most powerful: train the policy with PPO or GRPO using the PRM's per-step score as the reward signal. The advantage estimator now has *per-step rewards*, which makes the value function (PPO) and the policy gradient denser.
+
+Per-step reward $r_t = r_\text{PRM}(x, s_1, \dots, s_k)$ for the step containing token $t$, with appropriate temporal credit assignment.
+
+This requires (a) a trained PRM and (b) a definition of what a "step" is. For math chain-of-thought, steps are often "lines" or "equations"; for code, they might be "function definitions" or "statements." The choice is task-dependent.
+
+Empirically, PRM-trained policies outperform ORM-trained policies on reasoning benchmarks at the same RL compute budget. The denser signal accelerates learning.
+
+---
+
+## 5. PRMs and o1 / R1
+
+The **OpenAI o1** family (2024) is the most-known production application of process rewards. While OpenAI has not published details, the o1 system card and public statements indicate:
+
+- Training uses a large RL phase with reasoning trajectories.
+- The reward signal is **partly outcome-based** (correct final answer?) and **partly process-based** (correct intermediate steps?).
+- The model is trained to generate long chains of thought ("thinking tokens") that improve test-time accuracy.
+
+**DeepSeek-R1** ([2025, arXiv:2501.12948](https://arxiv.org/abs/2501.12948)) — the open analogue — provides more detail:
+
+- RL training via GRPO ([9.7](/session/ch9-alignment/9.7-grpo)).
+- Reward: a mixture of outcome correctness (verifier-based for math/code) and step-level rewards (from a PRM).
+- The chain of thought is *trained to emerge* — the model learns to spend more tokens thinking before answering, rewarded by the dense PRM signal.
+
+The R1 paper specifically notes: "process reward modeling at scale faces critical challenges in practice." Their solution mixes PRM signals with outcome signals and uses GRPO's group-relative normalisation to stabilise training.
+
+The pattern: **PRMs unlock reasoning-RL** — pure outcome rewards are too sparse for the model to learn complex multi-step chains, but PRMs provide enough density to bootstrap the reasoning behaviour. Once the model produces useful chains of thought, the chains themselves can be evaluated (both per step and at the end) to drive further improvement.
+
+---
+
+## 6. Challenges with PRMs
+
+Three practical issues.
+
+### 6.1 Step boundary definition
+
+What counts as a "step"? For math chain-of-thought, lines and equations are natural. For code, statements or function definitions. For dialogue, conversational turns. For open-ended reasoning, less clear — sometimes a step is a paragraph, sometimes a sentence.
+
+PRM training requires consistent step definitions; PRM application at inference requires the same definition. Mismatches degrade the signal.
+
+DeepSeek-R1 reports using a "newline + indentation cues" heuristic to segment chain-of-thought into steps. Lightman et al. use the original chain-of-thought formatting boundaries from the GPT-4 outputs they annotated.
+
+### 6.2 PRM data collection
+
+Step-labelling is expensive. PRM800K took an order of magnitude more annotator-time than a comparable outcome-only dataset. **Synthetic PRM data** — using a strong model to *generate* step-level labels for a smaller human-curated set — is the standard scaling trick.
+
+Three sources of synthetic PRM data:
+
+- **LLM-as-judge** (RLAIF-style, [9.13](/session/ch9-alignment/9.13-rlaif-constitutional)): prompt a stronger LLM to evaluate each step.
+- **Outcome-conditioned** ([Wang et al., 2024](https://arxiv.org/abs/2312.08935), "Math-Shepherd"): for solutions known to be correct, label all steps as positive; for solutions known to be incorrect, use binary search to find the first incorrect step. Cheap and works well for math.
+- **Self-consistency-based**: sample many completions of a problem from the same starting point. Steps that often lead to correct final answers are positive; steps that often lead to incorrect are negative.
+
+### 6.3 Reward hacking on PRMs
+
+The same reward-hacking issue as ORMs ([9.14](/session/ch9-alignment/9.14-reward-hacking)) — but worse, because PRMs offer many more "axes" along which the policy can exploit. If the PRM is biased toward verbose steps, the policy generates verbose reasoning. If it favours specific formatting, the policy adopts that formatting.
+
+The standard fix: KL penalty (as in [9.9](/session/ch9-alignment/9.9-kl-penalty)) + early stopping + held-out outcome evaluation. The held-out outcome evaluation is critical: PRMs train *intermediate* signal, but you ultimately care about *final answers*. Track final-answer accuracy on a held-out set; stop training when it stops improving.
+
+---
+
+## 7. Connecting to the broader picture
+
+PRMs sit at the intersection of three trends in 2024–2026 LLM training:
+
+1. **The shift to reasoning models.** o1, R1, Claude 3.7-thinking, Gemini-2.5-thinking. Models that generate long chains of thought before answering. The dense PRM signal makes this trainable.
+2. **Inference-time scaling.** Spend more inference FLOPs on harder problems. Best-of-N with PRM selection is the simplest form; PRM-guided search is the more sophisticated form (full treatment in Cap 10.7).
+3. **Automated evaluation.** PRMs are themselves models that *judge* model outputs. As LLMs improve, the PRMs improve, which improves the training signal, which improves the LLMs. A self-reinforcing loop that has driven much of the rapid reasoning-capability progress since 2024.
+
+The trajectory is unmistakable: **PRMs (and their successors) are how 2026 LLMs learn to reason.** The architecture (decoder-only Transformer) and the training recipe (pretraining + alignment) are stable; the *signal* driving the alignment phase has shifted from sparse outcomes to dense per-step process rewards.
+
+<Aside type="note">
+**A subtler point: PRMs don't always help.** Some 2024 papers ([Skywork-OR1](https://arxiv.org/abs/2410.14116), and others) report that for sufficiently large models on sufficiently easy problems, ORM and PRM training give comparable results. The PRM's benefit is most visible on *hard* problems where the model's outcome-reward gradient is too sparse to make progress. For easier domains, an ORM with enough samples works fine. Practitioners should run an ablation before committing to PRM-based training; the data-collection cost is non-trivial.
+</Aside>
+
+---
+
+## 8. What we keep going forward
+
+Three things:
+
+1. **Process rewards are dense; outcome rewards are sparse.** PRMs assign a per-step score; ORMs only score the final answer. The per-step density is what unlocks long-chain reasoning.
+2. **PRMs are themselves LLMs.** Trained on step-level annotations, predicting "is this step correct?" Inference-time use: Best-of-N or guided search. Training-time use: per-step reward signal for PPO/GRPO.
+3. **PRMs underpin reasoning models.** o1, R1, and the broader "thinking model" trend rely on dense per-step signal during RL training. Step boundaries, synthetic labelling, and KL-stabilisation are the practical challenges.
+
+[Next session](/session/ch9-alignment/9.13-rlaif-constitutional) covers **RLAIF and Constitutional AI** — using AI-generated preferences (and AI-generated principles) to replace human labels at scale. The trend that makes large preference budgets affordable.
+
+<SelfTest>
+
+**(a)** State the outcome reward $r_\text{ORM}$ and the process reward $r_\text{PRM}$ in formal notation. How do they differ in signal density per training example?
+
+**(b)** Lightman et al. report that PRM Best-of-N beats ORM Best-of-N on MATH. Argue, in 2-3 sentences, why dense per-step supervision is strictly more useful than outcome-only supervision *for selection*.
+
+**(c)** State the three sources of synthetic PRM data from §6.2. Pick one and explain its mechanism in 2-3 sentences.
+
+**(d)** Read [Lightman et al., 2023](https://arxiv.org/abs/2305.20050) §3.1. Identify their step-annotation guidelines: what counts as positive, negative, neutral?
+
+**(e)** DeepSeek-R1 trains with GRPO and uses *both* outcome and process rewards. Argue why this mixture is better than either alone. (Hint: think about what each signal catches that the other misses.)
+
+</SelfTest>
