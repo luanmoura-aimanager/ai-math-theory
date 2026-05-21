@@ -11,7 +11,7 @@ prerequisites: ["ch7-training-language-models/7.8-data-parallelism"]
 
 Pure DP ([7.8](/session/ch7-training-language-models/7.8-data-parallelism)) is exact and simple but stores a full copy of the model + Adam state on every device — $\sim 20 N$ bytes per parameter. At 7B+ parameters this overflows a single H100 (80 GB). TP and PP ([7.9](/session/ch7-training-language-models/7.9-tensor-pipeline-parallelism)) shard the *computation* and are essential for very large models, but they come with substantial communication overhead and complexity.
 
-**ZeRO** ([Rajbhandari et al., 2020, *ZeRO: Memory Optimizations Toward Training Trillion Parameter Models*](https://arxiv.org/abs/1910.02054)) — and its PyTorch-native rebranding **FSDP (Fully Sharded Data Parallel)** — sit between pure DP and TP/PP: keep the data-parallel structure (replicate the *batch shards* across devices, train synchronously), but **shard the model state across the same DP ranks**. Each device holds $1/D$ of the parameters, $1/D$ of the gradients, $1/D$ of the optimiser state. At forward/backward time, the device temporarily *gathers* the parameters of the current sub-layer from all other devices, runs the computation, and discards the gathered tensors.
+**ZeRO** ([Rajbhandari et al., 2020<FN n={1} />, *ZeRO: Memory Optimizations Toward Training Trillion Parameter Models*](https://arxiv.org/abs/1910.02054)) — and its PyTorch-native rebranding **FSDP (Fully Sharded Data Parallel)** — sit between pure DP and TP/PP: keep the data-parallel structure (replicate the *batch shards* across devices, train synchronously), but **shard the model state across the same DP ranks**. Each device holds $1/D$ of the parameters, $1/D$ of the gradients, $1/D$ of the optimiser state. At forward/backward time, the device temporarily *gathers* the parameters of the current sub-layer from all other devices, runs the computation, and discards the gathered tensors.
 
 The result: memory drops by ~$D$, with only a modest increase in communication. For LLaMA-7B on 32 H100s, FSDP cuts non-activation memory from 140 GB per device to ~5 GB. **FSDP/ZeRO-3 is the default for 7B–70B-class training in 2024–2026**, and the foundation on which TP and PP layer for the largest models.
 
@@ -215,13 +215,13 @@ For 7B-class on a 32-H100 cluster, **FSDP alone is enough**, and TP/PP are unnec
 
 ## 8. The CPU-offload variant
 
-A further memory trick: offload the *Adam optimiser state* to CPU memory (which is far cheaper and more abundant than GPU memory). DeepSpeed's **ZeRO-Offload** ([Ren et al., 2021, arXiv:2101.06840](https://arxiv.org/abs/2101.06840)) and PyTorch FSDP's `cpu_offload=True` option do exactly this.
+A further memory trick: offload the *Adam optimiser state* to CPU memory (which is far cheaper and more abundant than GPU memory). DeepSpeed's **ZeRO-Offload** ([Ren et al., 2021<FN n={2} />, arXiv:2101.06840](https://arxiv.org/abs/2101.06840)) and PyTorch FSDP's `cpu_offload=True` option do exactly this.
 
 The trade-off: GPU memory drops by another $12 N / D$ bytes per device (the local optimiser state moves to CPU). The cost: every optimiser step sends gradients to CPU and pulls updated weights back over PCIe (~$50$ GB/s, much slower than NVLink). For a 7B model at $D = 32$, this is $\sim 100$ ms per step extra — acceptable when the alternative is OOM.
 
 ZeRO-Offload is the right *last-resort* option when even FSDP/ZeRO-3 doesn't quite fit. It's commonly used to train 13B–30B models on consumer-grade hardware (a single RTX 4090 with 24 GB + CPU offload can train 13B-class models with patience).
 
-A more aggressive variant, **ZeRO-Infinity** (Rajbhandari et al., 2021), additionally offloads parameters to NVMe storage. Lets you train trillion-parameter models on small clusters at the cost of substantial throughput loss. Used in research; rarely in production.
+A more aggressive variant, **ZeRO-Infinity** (Rajbhandari et al., 2021)<FN n={3} />, additionally offloads parameters to NVMe storage. Lets you train trillion-parameter models on small clusters at the cost of substantial throughput loss. Used in research; rarely in production.
 
 ---
 
@@ -250,3 +250,15 @@ Three things:
 **(e)** Read the PyTorch FSDP doc for `ShardingStrategy`. State the difference between `FULL_SHARD`, `SHARD_GRAD_OP`, `HYBRID_SHARD`, and `NO_SHARD`. Which corresponds to ZeRO-3? ZeRO-2? Pure DP? Why might `HYBRID_SHARD` be useful in a hierarchical (intra-node + inter-node) cluster?
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Rajbhandari, S., Rasley, J., Ruwase, O., & He, Y.** (2020). "ZeRO: Memory optimizations toward training trillion parameter models". [arXiv:1910.02054](https://arxiv.org/abs/1910.02054) — Three-stage memory sharding (ZeRO-1/2/3 / FSDP) (7.10).
+  </FNItem>
+  <FNItem n={2}>
+    **Ren, J., Rajbhandari, S., Aminabadi, R. Y., et al.** (2021). "ZeRO-Offload: Democratizing billion-scale model training". [arXiv:2101.06840](https://arxiv.org/abs/2101.06840) — Offloading Adam state to CPU memory (7.10 §8).
+  </FNItem>
+  <FNItem n={3}>
+    **Rajbhandari, S., Ruwase, O., Rasley, J., Smith, S., & He, Y.** (2021). "ZeRO-Infinity: Breaking the GPU memory wall for extreme scale deep learning". [arXiv:2104.07857](https://arxiv.org/abs/2104.07857) — NVMe offload extending ZeRO (7.10 §8).
+  </FNItem>
+</Footnotes>

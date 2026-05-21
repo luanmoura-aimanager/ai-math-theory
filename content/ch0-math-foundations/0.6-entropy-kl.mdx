@@ -27,7 +27,7 @@ Three sanity checks:
 
 Base of the log sets the units: base 2 gives *bits*, base $e$ gives
 *nats*. In ML we use natural log throughout (gradient-friendly); the
-formulas are identical up to a constant factor.
+formulas are identical up to a constant factor.<FN n={1} />
 
 ## 2. Entropy
 
@@ -181,3 +181,9 @@ outcomes.
    $\mathrm{KL}(p\,\|\,q)$.
 3. Sanity check: $H[p, q] - H[p] = \mathrm{KL}(p\,\|\,q)$.
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Cover, T. M., & Thomas, J. A.** (2006). *Elements of Information Theory* (2nd ed.). Wiley. — Used in 0.6 (entropy, KL divergence) and 0.7 (cross-entropy as MLE).
+  </FNItem>
+</Footnotes>

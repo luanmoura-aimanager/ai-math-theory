@@ -17,9 +17,9 @@ $$
 \nabla_\theta J(\theta) = \mathbb{E}_{\tau \sim \pi_\theta} \bigl[ r(\tau)\, \nabla_\theta \log \pi_\theta(\tau) \bigr],
 $$
 
-and its simplest implementation, **REINFORCE** (Williams, 1992). The theorem says: to increase expected reward, take the gradient of "log probability of generated trajectories, weighted by their reward." Trajectories with higher reward get a positive gradient on their log probability; those with lower reward get a negative one. Over many samples, the policy shifts toward high-reward regions.
+and its simplest implementation, **REINFORCE** (Williams, 1992)<FN n={1} />. The theorem says: to increase expected reward, take the gradient of "log probability of generated trajectories, weighted by their reward." Trajectories with higher reward get a positive gradient on their log probability; those with lower reward get a negative one. Over many samples, the policy shifts toward high-reward regions.
 
-This session derives the policy gradient theorem from first principles (it's a one-line application of the log-derivative trick), casts LLM fine-tuning as an RL problem with this structure, writes the REINFORCE algorithm explicitly, and then names the high-variance failure mode that motivates everything after it: PPO (§9.6), GRPO (§9.7), and the variance-reduction baselines and clipping tricks that make RL on LLMs actually work.
+This session derives the policy gradient theorem from first principles (it's a one-line application of the log-derivative trick), casts LLM fine-tuning as an RL problem with this structure, writes the REINFORCE algorithm explicitly, and then names the high-variance failure mode that motivates everything after it: PPO (§9.6), GRPO (§9.7), and the variance-reduction baselines and clipping tricks that make RL on LLMs actually work.<FN n={2} />
 
 ---
 
@@ -252,3 +252,12 @@ The next session derives PPO's clipped surrogate objective — the workhorse alg
 **(f)** Argue the connection between REINFORCE and SFT of §4.1. When does REINFORCE reduce to "SFT on self-generated trajectories"?
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Williams, R. J.** (1992). "Simple statistical gradient-following algorithms for connectionist reinforcement learning". *Machine Learning*, 8, 229–256. — Original REINFORCE (9.5).
+  </FNItem>
+  <FNItem n={2}>
+    **Sutton, R. S., & Barto, A. G.** (2018). *Reinforcement Learning: An Introduction* (2nd ed.). MIT Press. Chapter 13. — Policy-gradient methods, baselines (9.5).
+  </FNItem>
+</Footnotes>

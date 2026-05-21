@@ -19,7 +19,7 @@ This session derives the construction, counts the savings, and places GQA / MQA 
 
 ## 2. The design space: from MHA to MQA
 
-Standard multi-head attention (MHA, [6.4](/session/ch6-attention-transformer/6.4-multi-head-attention)) has $h$ query heads, $h$ key heads, and $h$ value heads — one of each per head index $\ell \in \{1, \dots, h\}$. Multi-query attention (MQA, Shazeer 2019, [arXiv:1911.02150](https://arxiv.org/abs/1911.02150)) shares **one** K head and **one** V head across all $h$ query heads. Grouped-query attention (GQA, Ainslie et al. 2023, [arXiv:2305.13245](https://arxiv.org/abs/2305.13245)) generalises: partition the $h$ query heads into $g$ groups of $h/g$ heads each, and use **one** K and **one** V projection per group, shared across the queries in that group.
+Standard multi-head attention (MHA, [6.4](/session/ch6-attention-transformer/6.4-multi-head-attention)) has $h$ query heads, $h$ key heads, and $h$ value heads — one of each per head index $\ell \in \{1, \dots, h\}$. Multi-query attention (MQA, Shazeer 2019<FN n={2} />, [arXiv:1911.02150](https://arxiv.org/abs/1911.02150)) shares **one** K head and **one** V head across all $h$ query heads. Grouped-query attention (GQA, Ainslie et al. 2023, [arXiv:2305.13245](https://arxiv.org/abs/2305.13245)) generalises: partition the $h$ query heads into $g$ groups of $h/g$ heads each, and use **one** K and **one** V projection per group, shared across the queries in that group.
 
 Parameterise by the number of *KV groups* $g \in \{1, 2, \dots, h\}$:
 
@@ -124,7 +124,7 @@ For MQA, $g/h = 1/h$, so decode-step KV bandwidth drops by $h\times$. Combined w
 
 The harder question: how much quality do we lose by tying K, V across query heads?
 
-Ainslie et al. (2023) measured this empirically by *uptraining* MHA checkpoints into GQA and MQA. The recipe:
+Ainslie et al. (2023)<FN n={1} /> measured this empirically by *uptraining* MHA checkpoints into GQA and MQA. The recipe:
 
 1. Take an existing MHA-trained checkpoint with $h$ K and V heads.
 2. **Mean-pool** the $h$ K-heads down to $g$ K-heads (and same for V): each group's K is the average of the $h/g$ original K's it absorbs.
@@ -205,3 +205,12 @@ GQA is the first of three KV-cache treatments in Chapter 8. The next, SwiGLU (§
 **(f)** State, in two sentences each, the difference between GQA and MLA as KV-cache shrinkers. (You may peek ahead at §8.5's session goal; we will derive MLA in detail there.)
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Ainslie, J., Lee-Thorp, J., de Jong, M., et al.** (2023). "GQA: Training generalized multi-query transformer models from multi-head checkpoints". [arXiv:2305.13245](https://arxiv.org/abs/2305.13245) — Grouped-query attention; the modern default in LLaMA-2-70B, LLaMA-3, Mistral, Qwen (6.14 §5.1; full treatment Cap 8.3).
+  </FNItem>
+  <FNItem n={2}>
+    **Shazeer, N.** (2019). "Fast transformer decoding: One write-head is all you need" (MQA). [arXiv:1911.02150](https://arxiv.org/abs/1911.02150) — Multi-query attention (8.3).
+  </FNItem>
+</Footnotes>

@@ -16,7 +16,7 @@ prerequisites: ["ch2-mlps-backprop/2.6-backprop-recursion"]
 
 ## 1. Why this session exists
 
-Dropout (Srivastava et al., 2014) is the regulariser that broke the late-2000s deadlock on deep MLPs and got Hinton's group AlexNet (2012). The trick: during training, randomly zero out a fraction $p$ of activations at each layer. At test time, use all of them but rescale.
+Dropout (Srivastava et al., 2014)<FN n={1} /> is the regulariser that broke the late-2000s deadlock on deep MLPs and got Hinton's group AlexNet (2012). The trick: during training, randomly zero out a fraction $p$ of activations at each layer. At test time, use all of them but rescale.
 
 Two things have to be derived: (a) the exact forward and backward passes, and (b) the test-time scaling, which is what makes the trained ensemble of sub-networks reduce to a single deterministic model. We also explain *why* dropout works: it implicitly trains an exponential ensemble of subnetworks, and at inference time we approximate the geometric mean of their predictions.
 
@@ -156,3 +156,9 @@ Two subtle points:
 **(d)** Why is dropout often *not* applied to LayerNorm or BatchNorm parameters? In one or two sentences, explain what would go wrong if you dropped LN weights.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Srivastava, N., Hinton, G., Krizhevsky, A., Sutskever, I., & Salakhutdinov, R.** (2014). "Dropout: A simple way to prevent neural networks from overfitting". *JMLR*, 15, 1929–1958. — Dropout (Appendix 3.B).
+  </FNItem>
+</Footnotes>

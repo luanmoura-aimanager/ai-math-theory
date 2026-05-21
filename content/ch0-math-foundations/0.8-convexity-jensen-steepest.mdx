@@ -20,7 +20,7 @@ Two questions decide whether that problem is well-behaved:
 1. **Is every local minimum a global minimum?** That is decided by *convexity*.
 2. **Why does moving along $-\nabla L$ help at all?** That is decided by a geometric fact we'll prove in §6: the gradient is the direction of *steepest ascent*.
 
-Along the way we pick up **Jensen's inequality**, the workhorse behind entropy bounds, the ELBO we'll derive in Chapter 9, and several AM–GM-style tricks that will reappear without warning.
+Along the way we pick up **Jensen's<FN n={2} /> inequality**, the workhorse behind entropy bounds, the ELBO we'll derive in Chapter 9, and several AM–GM-style tricks that will reappear without warning.<FN n={1} />
 
 ---
 
@@ -287,3 +287,12 @@ Three takeaways to carry into the rest of the course.
 **(d)** Suppose $f, g : C \to \mathbb{R}$ are both convex on a convex set $C$, and $\alpha, \beta \ge 0$. Prove that $\alpha f + \beta g$ is convex. (This is the property that lets us add an L2 regulariser $\lambda \lVert \theta \rVert^2$ to any convex loss and stay convex.)
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Boyd, S., & Vandenberghe, L.** (2004). *Convex Optimization.* Cambridge University Press. — Used in 0.8 (convex functions, Jensen, first/second-order conditions). [stanford.edu/~boyd/cvxbook](https://web.stanford.edu/~boyd/cvxbook/)
+  </FNItem>
+  <FNItem n={2}>
+    **Jensen, J. L. W. V.** (1906). "Sur les fonctions convexes et les inégalités entre les valeurs moyennes". *Acta Math.*, 30, 175–193. — Jensen's inequality (0.8).
+  </FNItem>
+</Footnotes>

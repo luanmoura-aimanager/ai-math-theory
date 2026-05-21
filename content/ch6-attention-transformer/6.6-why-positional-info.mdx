@@ -89,7 +89,7 @@ The function $t \mapsto p_t$ is either a fixed sinusoidal pattern (AIAYN — see
 
 **Cons.** *Absolute.* The model learns that "position 50 is different from position 5" but does not naturally express *relative* position ("5 positions before me"). Generalising beyond the training context length is brittle: sinusoidal extrapolates with degraded quality, learned does not extrapolate at all.
 
-### 4.2 Relative positional encoding (Shaw et al., 2018; T5)
+### 4.2 Relative positional encoding (Shaw et al., 2018; T5)<FN n={1} />
 
 Add a *learned bias* to the attention scores that depends on $i - j$ (the relative position of query and key):
 
@@ -97,7 +97,7 @@ $$
 S_{ij} = \frac{q_i^\top k_j}{\sqrt{d_k}} + b_{i - j}.
 $$
 
-The bias $b_{i - j}$ is a function of the *signed offset only*, not of the absolute positions $i, j$. T5 (Raffel et al., 2020) uses this with bucketed offsets; Shaw et al. (2018) use full per-offset parameters.
+The bias $b_{i - j}$ is a function of the *signed offset only*, not of the absolute positions $i, j$. T5 (Raffel et al., 2020)<FN n={2} /> uses this with bucketed offsets; Shaw et al. (2018) use full per-offset parameters.
 
 **Pros.** Naturally relative. Extrapolates more gracefully than absolute. Generalises well when fine-tuning on longer contexts.
 
@@ -158,3 +158,12 @@ Two facts to take into 6.7:
 **(e)** Sketch why RoPE has zero learnable parameters dedicated to position, while still encoding position. (Hint: the rotation angles are fixed functions of $t$, not learned.) What does this imply about how RoPE's positional information interacts with the embedding matrix?
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Shaw, P., Uszkoreit, J., & Vaswani, A.** (2018). "Self-attention with relative position representations". *NAACL*. [arXiv:1803.02155](https://arxiv.org/abs/1803.02155) — First relative positional encoding (6.6 §4.2).
+  </FNItem>
+  <FNItem n={2}>
+    **Raffel, C., Shazeer, N., Roberts, A., et al.** (2020). "Exploring the limits of transfer learning with a unified text-to-text transformer" (T5). *JMLR*. [arXiv:1910.10683](https://arxiv.org/abs/1910.10683) — Bucketed relative positional bias (6.6 §4.2).
+  </FNItem>
+</Footnotes>

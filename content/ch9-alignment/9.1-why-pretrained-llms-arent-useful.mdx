@@ -49,7 +49,7 @@ The base model is, mathematically, doing exactly what its loss told it to do. Th
 
 ## 3. What "useful" decomposes into
 
-The InstructGPT paper (Ouyang et al., 2022, [arXiv:2203.02155](https://arxiv.org/abs/2203.02155)) named three desiderata that "useful" decomposes into. These three are the standard reference framing that every modern alignment paper inherits:
+The InstructGPT paper (Ouyang et al., 2022, [arXiv:2203.02155](https://arxiv.org/abs/2203.02155))<FN n={1} /> named three desiderata that "useful" decomposes into. These three are the standard reference framing that every modern alignment paper inherits:
 
 - **Helpful.** Given an instruction, produce a response that *advances the user's actual goal*. Helpfulness requires (i) reading the instruction as an instruction (not as a string to continue), (ii) inferring the user's intent, and (iii) producing output that serves that intent.
 - **Honest.** Do not make up facts, do not pretend to know what the model does not know, and acknowledge uncertainty when appropriate. Honesty is partly an epistemic property of the model's outputs and partly a calibration property of its claimed confidence.
@@ -143,3 +143,9 @@ After Chapter 9, Chapter 10 covers inference and decoding (greedy/beam, temperat
 **(f)** Distinguish "alignment" as used in Chapter 9 from (i) AI-safety-in-the-existential-sense and (ii) "just train on a better corpus." Give a one-paragraph argument for why (ii) cannot close the gap that Chapter 9 is closing.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Ouyang, L., Wu, J., Jiang, X., et al.** (2022). "Training language models to follow instructions with human feedback" (InstructGPT). [arXiv:2203.02155](https://arxiv.org/abs/2203.02155) — Canonical SFT + RM + PPO pipeline (9.1, 9.2, 9.8); per-token KL implementation (9.9); PPO-ptx mixing (9.8 §5.3).
+  </FNItem>
+</Footnotes>

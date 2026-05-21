@@ -11,7 +11,7 @@ prerequisites: ["ch9-alignment/9.3-reward-modeling-preference-data", "ch0-math-f
 
 §9.3 ended with preference data $\mathcal{D}_\text{pref} = \{(x_i, y_c^i, y_r^i)\}$. To use this data for fine-tuning, we need a *scalar* function $r(x, y)$ that scores responses by predicted preferability — a reward model. The preference data does not directly give us such a function (it gives binary "$y_c$ beats $y_r$" labels), so we have to *fit* a reward model that is consistent with the observed preferences.
 
-The standard fit is via the **Bradley-Terry model** (Bradley & Terry, 1952, "Rank analysis of incomplete block designs"). The model assumes a latent quality score $r(x, y)$ for each response and predicts the preference probability as a logistic function of the score difference:
+The standard fit is via the **Bradley-Terry model** (Bradley & Terry, 1952<FN n={1} />, "Rank analysis of incomplete block designs"). The model assumes a latent quality score $r(x, y)$ for each response and predicts the preference probability as a logistic function of the score difference:
 
 $$
 p(y_c \succ y_r \mid x) = \sigma\bigl(r(x, y_c) - r(x, y_r)\bigr).
@@ -47,7 +47,7 @@ A natural question: why a logistic of differences rather than some other functio
 
 **Scale invariance of differences.** Adding a constant $c$ to all $r(x, \cdot)$ leaves $r(x, y_c) - r(x, y_r)$ unchanged. So the preference probability depends only on *differences* in reward, not on absolute reward values. This is the right structural property — preferences are relative judgments.
 
-**Independence of irrelevant alternatives.** Suppose the labeller's choice among $\{y_a, y_b, y_c\}$ is consistent with pairwise preferences (the labeller's choice between any two is the same when a third option is added). Then there is a (unique up to additive constant) function $r$ such that the labeller's choice probability satisfies the Bradley-Terry form. This is the *Luce choice axiom* (Luce, 1959) — a foundational result in decision theory.
+**Independence of irrelevant alternatives.** Suppose the labeller's choice among $\{y_a, y_b, y_c\}$ is consistent with pairwise preferences (the labeller's choice between any two is the same when a third option is added). Then there is a (unique up to additive constant) function $r$ such that the labeller's choice probability satisfies the Bradley-Terry form. This is the *Luce choice axiom* (Luce, 1959)<FN n={2} /> — a foundational result in decision theory.
 
 **Maximum entropy.** The Bradley-Terry distribution is the *maximum entropy* distribution over pairwise outcomes consistent with the constraint "the expected preference depends only on the reward difference." Maximum-entropy reasoning provides a principled "default" choice of functional form when only certain moments are constrained.
 
@@ -204,3 +204,12 @@ Next: §9.5 introduces policy gradient and REINFORCE — the basic RL machinery 
 **(f)** Suppose your reward model's calibration analysis (note in §5) reveals it over-estimates confidence. State one consequence for PPO training. State one mitigation.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Bradley, R. A., & Terry, M. E.** (1952). "Rank analysis of incomplete block designs: I. The method of paired comparisons". *Biometrika*, 39, 324–345. — Bradley-Terry pairwise-preference model (9.4).
+  </FNItem>
+  <FNItem n={2}>
+    **Luce, R. D.** (1959). *Individual Choice Behavior: A Theoretical Analysis.* Wiley. — Plackett-Luce; generalisation to multi-way comparisons (9.4 §6).
+  </FNItem>
+</Footnotes>

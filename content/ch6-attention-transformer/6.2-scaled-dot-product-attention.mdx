@@ -15,7 +15,7 @@ $$
 \text{attn}(q,\, K,\, V) = \sum_{i = 1}^{m} \alpha_i\, v_i, \qquad \alpha_i = \frac{\exp(s(q, k_i))}{\sum_j \exp(s(q, k_j))},
 $$
 
-with the similarity function $s(q, k)$ left unspecified. This session picks the function that every Transformer uses — the **scaled dot product** — and writes the operation in batched matrix form. Picking the similarity is not arbitrary: the choice has a direct consequence on whether the network trains at all, and the $\sqrt{d_k}$ scaling factor is the single most important hyperparameter-free piece of the design.
+with the similarity function $s(q, k)$ left unspecified. This session picks the function that every Transformer uses — the **scaled dot product** — and writes the operation in batched matrix form. Picking the similarity is not arbitrary: the choice has a direct consequence on whether the network trains at all, and the $\sqrt{d_k}$ scaling factor is the single most important hyperparameter-free piece of the design.<FN ns={[1, 2, 4, 5]} />
 
 ---
 
@@ -39,7 +39,7 @@ This is the workhorse operation GPUs are tuned for.
 
 3. **Statistically well-behaved at standard initialisation.** If $q$ and $k$ have i.i.d. zero-mean unit-variance coordinates, the dot product has a controlled distribution — variance $d_k$, mean $0$. This is the property that the $\sqrt{d_k}$ scaling exploits.
 
-Other choices exist — additive attention (Bahdanau et al., 2014) uses $s(q, k) = w^\top \tanh(W_q q + W_k k)$; bilinear attention uses $s(q, k) = q^\top W k$ — and the original "neural attention" paper (Bahdanau et al., 2014) used additive. *Attention Is All You Need* picked the dot product and added the $\sqrt{d_k}$ scaling for the reason in §4 below; this is the choice the entire LLM family has inherited.
+Other choices exist — additive attention (Bahdanau et al., 2014)<FN n={3} /> uses $s(q, k) = w^\top \tanh(W_q q + W_k k)$; bilinear attention uses $s(q, k) = q^\top W k$ — and the original "neural attention" paper (Bahdanau et al., 2014) used additive. *Attention Is All You Need* picked the dot product and added the $\sqrt{d_k}$ scaling for the reason in §4 below; this is the choice the entire LLM family has inherited.
 
 ---
 
@@ -171,4 +171,31 @@ Every architectural choice in the rest of Chapter 6 is a refinement of this sing
 
 **(e)** Compute the total FLOPs and the score-matrix memory for a self-attention layer with $T = 4096, d = 4096, h = 32, d_k = d_v = 128$. Compare with a single attention head ($h = 1, d_k = 4096$) of the same total $d$. Which one is cheaper in compute? Which uses less score-matrix memory?
 
-</SelfTest>
+</SelfTest><FN ns={[6, 7, 8]} />
+
+<Footnotes>
+  <FNItem n={1}>
+    **Prince, S. J. D.** (2023). *Understanding Deep Learning,* §12 (Sequence-to-Sequence Models) and §13 (Transformers). MIT Press. — Attention as soft lookup (6.1), scaled dot-product attention (6.2), multi-head attention (6.4).
+  </FNItem>
+  <FNItem n={2}>
+    **Vaswani, A., Shazeer, N., Parmar, N., et al.** (2017). "Attention is all you need". *NeurIPS*. [arXiv:1706.03762](https://arxiv.org/abs/1706.03762) — The Transformer paper. Scaled dot-product attention (6.2), multi-head attention (6.4), encoder–decoder cross-attention (6.3), sinusoidal positional encoding (Appendix 6.A), the FFN sub-layer (6.8), post-LN block diagram (6.10), full architecture read (6.11).
+  </FNItem>
+  <FNItem n={3}>
+    **Bahdanau, D., Cho, K., & Bengio, Y.** (2014). "Neural machine translation by jointly learning to align and translate". [arXiv:1409.0473](https://arxiv.org/abs/1409.0473) — First "neural attention" paper; additive attention as a precursor to scaled dot-product (6.1, 6.2).
+  </FNItem>
+  <FNItem n={4}>
+    **Luong, M.-T., Pham, H., & Manning, C. D.** (2015). "Effective approaches to attention-based neural machine translation". *EMNLP*. [arXiv:1508.04025](https://arxiv.org/abs/1508.04025) — Dot-product attention variants (6.2).
+  </FNItem>
+  <FNItem n={5}>
+    **3Blue1Brown.** "But what is a GPT? Visual intro to Transformers" and "Attention in transformers, step-by-step". [3blue1brown.com](https://www.3blue1brown.com/) — Visual introduction to attention (6.1, 6.2).
+  </FNItem>
+  <FNItem n={6}>
+    **Dettmers, T., Lewis, M., Belkada, Y., & Zettlemoyer, L.** (2022). "LLM.int8(): 8-bit matrix multiplication for transformers at scale". [arXiv:2208.07339](https://arxiv.org/abs/2208.07339) — Outlier-aware quantisation; structural activation outliers (7.4 §6.2; full treatment Cap 10.6).
+  </FNItem>
+  <FNItem n={7}>
+    **Wang, P., Li, L., Shao, Z., et al.** (2024). "Math-Shepherd: Verify and reinforce LLMs step-by-step without human annotations". [arXiv:2312.08935](https://arxiv.org/abs/2312.08935) — Outcome-conditioned synthetic PRM labels (9.12 §6.2).
+  </FNItem>
+  <FNItem n={8}>
+    **Snell, C., Lee, J., Xu, K., & Kumar, A.** (2024). "Scaling LLM test-time compute optimally can be more effective than scaling model parameters". [arXiv:2408.03314](https://arxiv.org/abs/2408.03314) — Inference-time scaling laws (9.15 §6.2).
+  </FNItem>
+</Footnotes>

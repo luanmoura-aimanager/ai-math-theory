@@ -15,7 +15,7 @@ If you can predict the loss before spending the money, you can plan training run
 
 Two papers define the canonical picture:
 
-- **Kaplan, McCandlish, Henighan, Brown, et al., 2020, *Scaling Laws for Neural Language Models*** ([arXiv:2001.08361](https://arxiv.org/abs/2001.08361)) — this session. Derives the basic power laws and recommended scaling rules. Argued for ~7 parameters per token of training data (we'll see why this was wrong).
+- **Kaplan, McCandlish, Henighan<FN n={3} />, Brown, et al., 2020<FN n={2} />, *Scaling Laws for Neural Language Models*** ([arXiv:2001.08361](https://arxiv.org/abs/2001.08361)) — this session. Derives the basic power laws and recommended scaling rules. Argued for ~7 parameters per token of training data (we'll see why this was wrong).
 - **Hoffmann, Borgeaud, et al., 2022, *Training Compute-Optimal Large Language Models* (Chinchilla)** — [next session](/session/ch7-training-language-models/7.12-chinchilla). Re-ran the analysis with more rigorous methodology and corrected Kaplan to ~20 tokens per parameter. Production LLMs from 2022 onward use the Chinchilla regime — but Kaplan's *framework* is the right one to learn first.
 
 This session: the three power laws, the joint formula, the irreducible-loss term, and the critical-batch-size model.
@@ -153,7 +153,7 @@ A central practical question: **how big should the batch be**? We met this in [7
 
 Loosely: the **critical batch size** $B^*$ is the batch above which doubling the batch no longer halves the number of optimiser steps to a given loss. Below $B^*$, big batches save steps; above $B^*$, big batches just average redundant gradients.
 
-Formally, McCandlish et al. (2018) define $B^*$ as the batch size at which the (noise-equivalent) per-step *variance* of the gradient equals the per-step *systematic gradient*:
+Formally, McCandlish et al. (2018)<FN n={1} /> define $B^*$ as the batch size at which the (noise-equivalent) per-step *variance* of the gradient equals the per-step *systematic gradient*:
 
 $$
 B^* = \frac{\text{tr}(\Sigma)}{\|\nabla \mathcal{L}\|^2},
@@ -241,3 +241,15 @@ Three things:
 **(e)** Argue why the empirical exponents being small ($\alpha_N \approx 0.076$) is what makes the scaling laws *useful*: small exponents mean smooth extrapolation, but also that you need enormous scale changes to meaningfully reduce loss. (Hint: think about why GPT-4 is so much more expensive than GPT-3.)
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **McCandlish, S., Kaplan, J., Amodei, D., et al.** (2018). "An empirical model of large-batch training". [arXiv:1812.06162](https://arxiv.org/abs/1812.06162) — Critical batch size (7.8 §6, 7.11 §5).
+  </FNItem>
+  <FNItem n={2}>
+    **Kaplan, J., McCandlish, S., Henighan, T., et al.** (2020). "Scaling laws for neural language models". [arXiv:2001.08361](https://arxiv.org/abs/2001.08361) — Power-law scaling of loss in $N, D, C$; the framework still in use (7.11).
+  </FNItem>
+  <FNItem n={3}>
+    **Henighan, T., Kaplan, J., Katz, M., et al.** (2020). "Scaling laws for autoregressive generative modeling". [arXiv:2010.14701](https://arxiv.org/abs/2010.14701) — Extension to images, video, code modalities (7.11).
+  </FNItem>
+</Footnotes>

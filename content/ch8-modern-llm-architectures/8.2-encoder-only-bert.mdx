@@ -9,7 +9,7 @@ prerequisites: ["ch8-modern-llm-architectures/8.1-decoder-only", "ch5-sequence-m
 
 ## 1. Why this session exists
 
-Encoder-only Transformers — BERT (Devlin et al., 2018, [arXiv:1810.04805](https://arxiv.org/abs/1810.04805)) and its descendants — were the dominant pretraining architecture from 2018 until GPT-3 (2020) re-centered the field on decoder-only generation. The post-GPT-3 view that encoder-only was a wrong turn is *partially* right: for *generation*, decoder-only is empirically the winner ([8.1 §4](/session/ch8-modern-llm-architectures/8.1-decoder-only)). For *embeddings, retrieval, and classification*, encoder-only remains the default in 2026: every state-of-the-art text embedder (E5, BGE, GTE, Mistral-Embed variants based on causal LMs notwithstanding) starts from a BERT-style bidirectional encoder.
+Encoder-only Transformers — BERT (Devlin et al., 2018, [arXiv:1810.04805](https://arxiv.org/abs/1810.04805))<FN n={1} /> and its descendants — were the dominant pretraining architecture from 2018 until GPT-3 (2020) re-centered the field on decoder-only generation. The post-GPT-3 view that encoder-only was a wrong turn is *partially* right: for *generation*, decoder-only is empirically the winner ([8.1 §4](/session/ch8-modern-llm-architectures/8.1-decoder-only)). For *embeddings, retrieval, and classification*, encoder-only remains the default in 2026: every state-of-the-art text embedder (E5, BGE, GTE, Mistral-Embed variants based on causal LMs notwithstanding) starts from a BERT-style bidirectional encoder.
 
 This session is brief on purpose. We pin down (a) the masked-language-modeling (MLM) objective, (b) bidirectional attention, (c) why the architecture is genuinely better than decoder-only for *encoding* tasks, and (d) why it lost for generation. The architectural details of the Transformer block are unchanged from Chapter 6; only the attention mask, the head, and the objective differ from §8.1.
 
@@ -41,7 +41,7 @@ $$
 
 where $\hat t_i$ is the original (pre-masking) token at position $i$. The conditioning is on the *entire unmasked context* — left *and* right of position $i$.
 
-That is it. Same Transformer block, no causal mask, MLM loss instead of next-token CE. BERT's original paper added a second loss (Next Sentence Prediction, NSP), which was shown by RoBERTa (Liu et al., 2019, [arXiv:1907.11692](https://arxiv.org/abs/1907.11692)) to be unnecessary; modern encoder-only models drop it.
+That is it. Same Transformer block, no causal mask, MLM loss instead of next-token CE. BERT's original paper added a second loss (Next Sentence Prediction, NSP), which was shown by RoBERTa (Liu et al., 2019, [arXiv:1907.11692](https://arxiv.org/abs/1907.11692))<FN n={2} /> to be unnecessary; modern encoder-only models drop it.
 
 ### 2.1 The masking recipe, exactly
 
@@ -74,7 +74,7 @@ The encoder-only line did not die after GPT-3; it specialised. Two domains where
 
 State of the art in 2026 mixes encoder-only foundations with contrastive fine-tuning:
 
-- **E5** (Wang et al., 2022, [arXiv:2212.03533](https://arxiv.org/abs/2212.03533)) and **E5-Mistral** (2024) — bidirectional encoder pretrained with web-scraped query-passage pairs.
+- **E5** (Wang et al., 2022, [arXiv:2212.03533](https://arxiv.org/abs/2212.03533))<FN n={4} /> and **E5-Mistral** (2024) — bidirectional encoder pretrained with web-scraped query-passage pairs.
 - **BGE** (BAAI General Embedding, 2023) — RoBERTa-style bidirectional encoder fine-tuned with hard-negative mining; dominant on the MTEB benchmark.
 - **GTE** (Alibaba, 2023) — similar recipe at scale.
 - **Cohere Embed v3**, **OpenAI text-embedding-3**, **Voyage** — closed-source descendants of the BERT lineage.
@@ -95,7 +95,7 @@ In 2026, retrieval-augmented generation (RAG) pipelines almost always use a *dua
 
 ## 5. ELECTRA: a denser MLM signal
 
-One descendant of BERT worth naming because it fixes the signal-density problem of §3. ELECTRA (Clark et al., 2020, [arXiv:2003.10555](https://arxiv.org/abs/2003.10555)) replaces MLM with **replaced-token detection**:
+One descendant of BERT worth naming because it fixes the signal-density problem of §3. ELECTRA (Clark et al., 2020, [arXiv:2003.10555](https://arxiv.org/abs/2003.10555))<FN n={3} /> replaces MLM with **replaced-token detection**:
 
 1. A small *generator* network (a tiny MLM) proposes replacement tokens for masked positions.
 2. The *discriminator* (the model we keep) reads the full sequence and predicts, *for every position*, whether the token there is original or replaced.
@@ -139,6 +139,24 @@ The rest of Chapter 8 covers decoder-only refinements; we will not return to enc
 
 **(d)** Modern retrieval-augmented generation uses an encoder-only embedder *and* a decoder-only generator. Sketch the data flow. Why does it not unify into a single architecture?
 
-**(e)** Mark one statement as true or false and justify: *"At very large scale, encoder-only MLM eventually overtakes decoder-only causal LM on zero-shot generative benchmarks."* Cite Wang et al. (2022).
+**(e)** Mark one statement as true or false and justify: *"At very large scale, encoder-only MLM eventually overtakes decoder-only causal LM on zero-shot generative benchmarks."* Cite Wang et al. (2022)<FN n={5} />.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Devlin, J., Chang, M.-W., Lee, K., & Toutanova, K.** (2018). "BERT: Pre-training of deep bidirectional transformers for language understanding". *NAACL*. [arXiv:1810.04805](https://arxiv.org/abs/1810.04805) — BERT, masked language modeling (8.2).
+  </FNItem>
+  <FNItem n={2}>
+    **Liu, Y., Ott, M., Goyal, N., et al.** (2019). "RoBERTa: A robustly optimized BERT pretraining approach". [arXiv:1907.11692](https://arxiv.org/abs/1907.11692) — Drops NSP, longer training (8.2).
+  </FNItem>
+  <FNItem n={3}>
+    **Clark, K., Luong, M.-T., Le, Q. V., & Manning, C. D.** (2020). "ELECTRA: Pre-training text encoders as discriminators rather than generators". [arXiv:2003.10555](https://arxiv.org/abs/2003.10555) — Replaced-token-detection objective; denser signal than MLM (8.2 §5).
+  </FNItem>
+  <FNItem n={4}>
+    **Wang, L., Yang, N., Huang, X., et al.** (2022). "Text embeddings by weakly-supervised contrastive pre-training" (E5). [arXiv:2212.03533](https://arxiv.org/abs/2212.03533) — Bidirectional-encoder embedder pretraining (8.2 §4).
+  </FNItem>
+  <FNItem n={5}>
+    **Wang, T., Roberts, A., Hesslow, D., et al.** (2022). "What language model architecture and pretraining objective work best for zero-shot generalization?". [arXiv:2204.05832](https://arxiv.org/abs/2204.05832) — Decoder-only-causal vs encoder-only-MLM vs encoder-decoder-span comparison (8.1 §4, 8.2 §3).
+  </FNItem>
+</Footnotes>

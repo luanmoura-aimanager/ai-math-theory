@@ -47,7 +47,7 @@ Mode collapse destroys the model's *generative diversity*. The pretrained base c
 
 The KL penalty resists collapse because $\mathrm{KL}(\pi_\theta \,\Vert\, \pi_\text{ref})$ explodes if $\pi_\theta$ becomes degenerate (a delta) when $\pi_\text{ref}$ has spread mass. The penalty fights collapse and preserves the diversity of $\pi_\text{ref}$.
 
-Both failure modes are *practical observations*, not theoretical guarantees. InstructGPT (Ouyang et al. 2022) §3.5 documents both; every subsequent RLHF paper that ablates the KL term reproduces them.
+Both failure modes are *practical observations*, not theoretical guarantees. InstructGPT (Ouyang et al. 2022)<FN n={1} /> §3.5 documents both; every subsequent RLHF paper that ablates the KL term reproduces them.
 
 ---
 
@@ -130,7 +130,7 @@ $$
 \max_\theta \mathbb{E}\big[r(x, y)\big] \quad \text{subject to} \quad \mathrm{KL}\!\big(\pi_\theta \,\Vert\, \pi_\text{ref}\big) \leq \delta,
 $$
 
-with $\beta$ the Lagrange multiplier. TRPO (Schulman et al., 2015) implements this constraint directly via a trust-region search; PPO with KL penalty approximates it with the dual form. The "KL penalty" is the *soft* version of the "trust region" idea — penalise instead of constrain.
+with $\beta$ the Lagrange multiplier. TRPO (Schulman et al., 2015)<FN n={2} /> implements this constraint directly via a trust-region search; PPO with KL penalty approximates it with the dual form. The "KL penalty" is the *soft* version of the "trust region" idea — penalise instead of constrain.
 
 This makes the KL penalty mathematically natural: it is the Lagrangian formulation of "don't move the policy too far from the reference in one step."
 
@@ -203,3 +203,12 @@ Three things:
 **(e)** Show that the KL-penalised reward $\tilde r = r - \beta \cdot \mathrm{KL}$ is the Lagrangian of the constrained problem $\max \mathbb{E}[r]$ subject to $\mathrm{KL} \leq \delta$. State the relationship between $\beta$ and $\delta$.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Ouyang, L., Wu, J., Jiang, X., et al.** (2022). "Training language models to follow instructions with human feedback" (InstructGPT). [arXiv:2203.02155](https://arxiv.org/abs/2203.02155) — Canonical SFT + RM + PPO pipeline (9.1, 9.2, 9.8); per-token KL implementation (9.9); PPO-ptx mixing (9.8 §5.3).
+  </FNItem>
+  <FNItem n={2}>
+    **Schulman, J., Levine, S., Abbeel, P., Jordan, M., & Moritz, P.** (2015). "Trust region policy optimization" (TRPO). [arXiv:1502.05477](https://arxiv.org/abs/1502.05477) — Constrained policy update; the precursor PPO simplifies (9.6, 9.9 §4.3).
+  </FNItem>
+</Footnotes>

@@ -111,7 +111,7 @@ The bytes-per-token of the KV cache is $4 L d$ in fp16 — exactly the cache siz
 
 ### 5.1 GQA: Grouped-Query Attention
 
-**Ainslie, Shazeer, et al., 2023, *GQA: Training Generalized Multi-Query Transformer Models from Multi-Head Checkpoints*** ([arXiv:2305.13245](https://arxiv.org/abs/2305.13245)). Idea: keep $h$ *query* heads, but share $K, V$ across groups. With $g$ groups, you have $h/g$ K-heads and V-heads:
+**Ainslie, Shazeer, et al., 2023<FN n={2} />, *GQA: Training Generalized Multi-Query Transformer Models from Multi-Head Checkpoints*** ([arXiv:2305.13245](https://arxiv.org/abs/2305.13245)). Idea: keep $h$ *query* heads, but share $K, V$ across groups. With $g$ groups, you have $h/g$ K-heads and V-heads:
 
 $$
 \text{cache shrink factor} = \frac{g}{h}.
@@ -119,13 +119,13 @@ $$
 
 For LLaMA-70B with $h = 64, g = 8$: cache is reduced by $8 / 64 = 1/8$. The 86 GB cache at 32k context drops to $\approx 11$ GB.
 
-GQA is the dominant variant in modern open LLMs (LLaMA-2-70B, LLaMA-3, Mistral, Qwen). The extreme case $g = 1$ — every head shares one set of K, V — is **MQA** (Multi-Query Attention, Shazeer 2019). MQA cuts the cache to $1 / h$ but loses some quality; GQA's "small $g$" recovers most of MHA's quality at a small fraction of the cache.
+GQA is the dominant variant in modern open LLMs (LLaMA-2-70B, LLaMA-3, Mistral, Qwen). The extreme case $g = 1$ — every head shares one set of K, V — is **MQA** (Multi-Query Attention, Shazeer 2019)<FN n={1} />. MQA cuts the cache to $1 / h$ but loses some quality; GQA's "small $g$" recovers most of MHA's quality at a small fraction of the cache.
 
 Full treatment in Cap 8.3; the right place to learn it is *after* this session, because the motivation is purely the cache size.
 
 ### 5.2 MLA: Multi-head Latent Attention
 
-**DeepSeek-V2** (DeepSeek-AI, 2024, [arXiv:2405.04434](https://arxiv.org/abs/2405.04434)). A further compression: instead of storing $K, V$ directly, store a *latent* $c_t \in \mathbb{R}^{d_c}$ with $d_c \ll d$ per token; reconstruct $K, V$ via learned projections at attention time. The cache reduces from $2 L d$ per token to $L d_c$ per token, a $\sim 10\times$ shrink at iso-quality.
+**DeepSeek-V2** (DeepSeek-AI, 2024, [arXiv:2405.04434](https://arxiv.org/abs/2405.04434))<FN n={3} />. A further compression: instead of storing $K, V$ directly, store a *latent* $c_t \in \mathbb{R}^{d_c}$ with $d_c \ll d$ per token; reconstruct $K, V$ via learned projections at attention time. The cache reduces from $2 L d$ per token to $L d_c$ per token, a $\sim 10\times$ shrink at iso-quality.
 
 MLA powers DeepSeek-V2, V3, and R1. We will derive it in Cap 8.5; place it mentally as "the next step beyond GQA when the cache is still the bottleneck."
 
@@ -143,9 +143,9 @@ If the model uses sliding-window attention ([6.13 §2](/session/ch6-attention-tr
 
 Two further optimisations specific to *serving* LLMs to many users:
 
-**PagedAttention** (Kwon et al., 2023, *Efficient Memory Management for Large Language Model Serving with PagedAttention*, [arXiv:2309.06180](https://arxiv.org/abs/2309.06180)). Standard inference allocates the KV cache as one contiguous chunk per request — wasteful when requests have different lengths (you pre-allocate for the max). PagedAttention divides the cache into fixed-size "pages" (e.g., 16 tokens each) and a per-request page table, like an OS virtual-memory subsystem. Memory fragmentation drops by ~10×, allowing 2–4× more concurrent requests on the same hardware. This is the foundation of **vLLM** and most modern LLM-serving stacks. Full treatment in Cap 10.8.
+**PagedAttention** (Kwon et al., 2023<FN n={4} />, *Efficient Memory Management for Large Language Model Serving with PagedAttention*, [arXiv:2309.06180](https://arxiv.org/abs/2309.06180)). Standard inference allocates the KV cache as one contiguous chunk per request — wasteful when requests have different lengths (you pre-allocate for the max). PagedAttention divides the cache into fixed-size "pages" (e.g., 16 tokens each) and a per-request page table, like an OS virtual-memory subsystem. Memory fragmentation drops by ~10×, allowing 2–4× more concurrent requests on the same hardware. This is the foundation of **vLLM** and most modern LLM-serving stacks. Full treatment in Cap 10.8.
 
-**Continuous batching** (Yu et al., 2022, *Orca*). Group requests with different ages into the same batch dynamically — when one request finishes, immediately add a new one without waiting for the whole batch to complete. Doubles throughput on real workloads. Also Cap 10.8.
+**Continuous batching** (Yu et al., 2022, *Orca*)<FN n={5} />. Group requests with different ages into the same batch dynamically — when one request finishes, immediately add a new one without waiting for the whole batch to complete. Doubles throughput on real workloads. Also Cap 10.8.
 
 Both rely on the KV cache existing as a separable per-request memory unit. The KV cache *is* the per-request state; everything else (model weights, activations during prefill) is shared.
 
@@ -174,3 +174,21 @@ Three things to remember:
 **(e)** A request to a vLLM server has a 2k prompt and asks for 200 generated tokens. State (i) the prefill compute, (ii) the per-step generation compute, (iii) the total generated tokens' attention compute. Express each in terms of $d$ and $L$. Which dominates the total latency?
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Shazeer, N.** (2019). "Fast transformer decoding: One write-head is all you need" (Multi-Query Attention). [arXiv:1911.02150](https://arxiv.org/abs/1911.02150) — MQA: share K, V across heads to shrink the KV cache (6.14 §5.1).
+  </FNItem>
+  <FNItem n={2}>
+    **Ainslie, J., Lee-Thorp, J., de Jong, M., et al.** (2023). "GQA: Training generalized multi-query transformer models from multi-head checkpoints". [arXiv:2305.13245](https://arxiv.org/abs/2305.13245) — Grouped-query attention; the modern default in LLaMA-2-70B, LLaMA-3, Mistral, Qwen (6.14 §5.1; full treatment Cap 8.3).
+  </FNItem>
+  <FNItem n={3}>
+    **DeepSeek-AI** (2024). "DeepSeek-V2: A strong, economical, and efficient mixture-of-experts language model" (MLA). [arXiv:2405.04434](https://arxiv.org/abs/2405.04434) — Multi-head latent attention; low-rank K, V compression (6.14 §5.2; full treatment Cap 8.5).
+  </FNItem>
+  <FNItem n={4}>
+    **Kwon, W., Li, Z., Zhuang, S., et al.** (2023). "Efficient memory management for large language model serving with PagedAttention" (vLLM). [arXiv:2309.06180](https://arxiv.org/abs/2309.06180) — OS-style paging for the KV cache (6.14 §6; full treatment Cap 10.8).
+  </FNItem>
+  <FNItem n={5}>
+    **Yu, G.-I., Jeong, J. S., Kim, G.-W., Kim, S., & Chun, B.-G.** (2022). "Orca: A distributed serving system for transformer-based generative models". *OSDI*. — Continuous batching (6.14 §6).
+  </FNItem>
+</Footnotes>

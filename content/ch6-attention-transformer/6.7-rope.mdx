@@ -97,7 +97,7 @@ The full dot product is therefore a sum of $d/2$ "relative-position responses" a
 
 ## 4. The frequency schedule $\theta_i = 10000^{-2i/d}$
 
-The construction so far works for any choice of $\theta_i$. The choice in the RoPE paper (Su et al., 2021) mimics the sinusoidal positional encoding of AIAYN:
+The construction so far works for any choice of $\theta_i$. The choice in the RoPE paper (Su et al., 2021)<FN n={1} /> mimics the sinusoidal positional encoding of AIAYN:
 
 $$
 \boxed{\ \theta_i = b^{-2i/d}, \qquad b = 10000,\ i = 0, 1, \dots, d/2 - 1. \ }
@@ -217,3 +217,9 @@ We have now specified every part of the attention sub-layer: similarity (6.2), w
 **(e)** Sketch why applying RoPE to the *values* (not just $Q, K$) would *break* the relative-position property. (Hint: the values appear in $A V$ without a second rotation; the position rotations would propagate into the output and contaminate the residual stream.)
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Su, J., Lu, Y., Pan, S., et al.** (2021). "RoFormer: Enhanced transformer with rotary position embedding". [arXiv:2104.09864](https://arxiv.org/abs/2104.09864) — Rotary positional embedding (RoPE) (6.7).
+  </FNItem>
+</Footnotes>

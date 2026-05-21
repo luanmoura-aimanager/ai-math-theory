@@ -17,7 +17,7 @@ The fix is **per-parameter adaptive learning rates**: divide each coordinate's s
 
 ## 2. AdaGrad
 
-Duchi et al. (2011). For each parameter coordinate $i$, keep a running sum of squared gradients
+Duchi et al. (2011)<FN n={1} />. For each parameter coordinate $i$, keep a running sum of squared gradients
 
 $$
 G_t^{(i)} = \sum_{k=1}^t \bigl(g_k^{(i)}\bigr)^2,
@@ -41,13 +41,13 @@ The sum $G_t^{(i)}$ is **monotonically non-decreasing**: every step it picks up 
 
 For convex problems this is provably optimal (AdaGrad attains the optimal online regret bound for adaptive methods, see Duchi et al.). For deep nets, where you might need thousands of epochs and the optimal step size *changes* through training, AdaGrad shuts itself off before reaching a good solution. By the end of training, $\sqrt{G_t}$ is so large that no step makes meaningful progress, even when the loss landscape is begging for more movement.
 
-This is the bug. The fix is to forget the distant past.
+This is the bug. The fix is to forget the distant past.<FN ns={[4, 5, 6]} />
 
 ---
 
 ## 4. RMSProp
 
-Hinton (Coursera, 2012 — never formally published; the canonical reference is the lecture slides). Replace the cumulative sum with an exponential moving average:
+Hinton (Coursera, 2012<FN n={2} /> — never formally published; the canonical reference is the lecture slides). Replace the cumulative sum with an exponential moving average:
 
 $$
 \boxed{\
@@ -80,7 +80,7 @@ For AdaGrad, $d_t^{(i)} = \sqrt{G_t^{(i)} + \varepsilon}$. For RMSProp, $d_t^{(i
 
 Choosing $D_t$ correctly can dramatically reduce the effective condition number $\kappa(D_t^{-1} H)$ — where $H$ is the Hessian — and therefore speed up convergence (compare with the $\sqrt{\kappa}$ analysis of momentum in 3.3). A "perfect" $D_t = \sqrt{\operatorname{diag}(H)}$ would diagonalise the per-coordinate scaling; what RMSProp uses is a cheap proxy: $\sqrt{\operatorname{diag}(\mathbb{E}[g g^\top])}$, the diagonal of the *gradient covariance*. For convex quadratics with diagonal $H$, this proxy is exactly right (because the gradient covariance is proportional to $H$); for deep nets it is approximate but useful.
 
-This is also the answer to the common question "why $\sqrt{v}$ and not $v$?" — preconditioning a gradient step needs a *length scale* ($d_t \propto$ standard deviation of gradient, not variance), and $\sqrt{v_t}$ supplies it.
+This is also the answer to the common question "why $\sqrt{v}$ and not $v$?" — preconditioning a gradient step needs a *length scale* ($d_t \propto$ standard deviation of gradient, not variance), and $\sqrt{v_t}$ supplies it.<FN n={3} />
 
 ---
 
@@ -129,3 +129,24 @@ RMSProp was the workhorse adaptive optimiser from 2012 until Adam's paper in 201
 **(d)** A "centred" version of RMSProp (used in some RL papers) tracks both the first moment $m_t$ (EMA of $g$) and second moment $v_t$ (EMA of $g^2$) and uses $\sqrt{v_t - m_t^2 + \varepsilon}$ as the scale (i.e. the standard deviation, not the second moment). Explain in one sentence why this is the "more statistically correct" scale, and in one sentence why most implementations don't bother.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Duchi, J., Hazan, E., & Singer, Y.** (2011). "Adaptive subgradient methods for online learning and stochastic optimization". *JMLR*, 12, 2121–2159. — AdaGrad (3.4).
+  </FNItem>
+  <FNItem n={2}>
+    **Hinton, G.** (2012). "Lecture 6e: rmsprop — divide the gradient by a running average of its recent magnitude". *Coursera: Neural Networks for Machine Learning.* — RMSProp; never published as a paper, the slides are the canonical reference (3.4).
+  </FNItem>
+  <FNItem n={3}>
+    **Bishop, C. M.** (2006). *Pattern Recognition and Machine Learning,* §3.4 and §5.5. — L2 as Gaussian prior / MAP (Appendix 3.A).
+  </FNItem>
+  <FNItem n={4}>
+    **Wenzek, G., Lachaux, M.-A., Conneau, A., et al.** (2020). "CCNet: Extracting high quality monolingual datasets from web crawl data". [arXiv:1911.00359](https://arxiv.org/abs/1911.00359) — Classifier-based filtering pipeline (7.1 §3.4).
+  </FNItem>
+  <FNItem n={5}>
+    **Gage, P.** (1994). "A new algorithm for data compression". *C Users Journal*, 12(2), 23–38. — The original byte-pair encoding compression algorithm (7.2 §3.4).
+  </FNItem>
+  <FNItem n={6}>
+    **Narayanan, D., Shoeybi, M., Casper, J., et al.** (2021). "Efficient large-scale language model training on GPU clusters using Megatron-LM". [arXiv:2104.04473](https://arxiv.org/abs/2104.04473) — Interleaved pipeline + TP × PP × DP composition (7.9 §3.4).
+  </FNItem>
+</Footnotes>

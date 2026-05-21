@@ -23,7 +23,7 @@ Range $(0, 1)$. Symmetric around $z = 0$ in the sense $1 - \sigma(z) = \sigma(-z
 
 **Saturation.** $\sigma'(z) \in (0,\, 1/4]$ with maximum at $z = 0$. For $|z|$ large, $\sigma'(z) \to 0$ exponentially. **This is the vanishing-gradient problem.** Multiply $L$ saturated $\sigma'$s and the gradient signal at the input shrinks by $(1/4)^L$ in the worst case — a depth-10 sigmoid net loses 6 orders of magnitude.
 
-**Where it appears.** Output layer of binary classifiers (paired with BCE in 1.2). Almost never used as a hidden activation in modern networks.
+**Where it appears.** Output layer of binary classifiers (paired with BCE in 1.2). Almost never used as a hidden activation in modern networks.<FN n={5} />
 
 ---
 
@@ -49,7 +49,7 @@ $$
 
 (Subgradient $[0, 1]$ at $z = 0$; see 0.9. Frameworks pick $0$ by convention.)
 
-**No saturation on the positive side.** $\operatorname{ReLU}'(z) = 1$ whenever $z > 0$, so gradient signal flows through without attenuation. This is the single biggest reason ReLU enabled training of very deep networks (Krizhevsky et al., 2012 onwards).
+**No saturation on the positive side.** $\operatorname{ReLU}'(z) = 1$ whenever $z > 0$, so gradient signal flows through without attenuation. This is the single biggest reason ReLU enabled training of very deep networks (Krizhevsky et al., 2012 onwards)<FN n={1} />.
 
 **Dying-ReLU pathology.** A unit with $z < 0$ on every training example has $\operatorname{ReLU}'(z) = 0$ on every example and never receives a gradient — it is **dead** and stays dead. Bad initialisation or excessive learning rate can kill a substantial fraction of a layer's units.
 
@@ -97,7 +97,7 @@ $$
 \operatorname{SiLU}(z) = z \cdot \sigma(z), \qquad \operatorname{SiLU}'(z) = \sigma(z) + z\, \sigma(z)\bigl(1 - \sigma(z)\bigr).
 $$
 
-Smooth, non-monotonic (small dip near $z \approx -1.28$, like GELU). Discovered by Ramachandran et al. (2017) through neural-architecture search; equivalent to the Swish activation of the same paper.
+Smooth, non-monotonic (small dip near $z \approx -1.28$, like GELU). Discovered by Ramachandran et al. (2017)<FN n={3} /> through neural-architecture search; equivalent to the Swish activation of the same paper.
 
 **Where it appears.** Many recent LLMs (Llama, Mistral, …) use SiLU in their feed-forward sub-blocks, often in the gated variant called **SwiGLU**.
 
@@ -111,7 +111,7 @@ $$
 \operatorname{SwiGLU}(x) = \operatorname{SiLU}(W_1 x) \odot (W_2 x).
 $$
 
-This doubles the parameter count of the FFN block but consistently outperforms ungated versions (Shazeer 2020). We'll meet SwiGLU again in Chapter 8 when surveying modern LLM architectures.
+This doubles the parameter count of the FFN block but consistently outperforms ungated versions (Shazeer 2020)<FN n={4} />. We'll meet SwiGLU again in Chapter 8 when surveying modern LLM architectures.
 
 ---
 
@@ -127,7 +127,7 @@ A short heuristic.
 - **Hidden layers, recurrent net.** Tanh and sigmoid (legacy LSTM/GRU choices).
 
 <Aside type="history">
-The standard 2019-era toolkit was sigmoid + ReLU + leaky ReLU + softmax. The course adds GELU (Hendrycks & Gimpel, 2016) and SwiGLU (Shazeer, 2020) because they are the dominant choices in modern Transformer LMs. The math is otherwise unchanged; backprop in this chapter is written generically as "given $g'(z)$", so the choice of activation just plugs in a different derivative formula.
+The standard 2019-era toolkit was sigmoid + ReLU + leaky ReLU + softmax. The course adds GELU (Hendrycks & Gimpel, 2016)<FN n={2} /> and SwiGLU (Shazeer, 2020) because they are the dominant choices in modern Transformer LMs. The math is otherwise unchanged; backprop in this chapter is written generically as "given $g'(z)$", so the choice of activation just plugs in a different derivative formula.
 </Aside>
 
 ---
@@ -152,3 +152,21 @@ The standard 2019-era toolkit was sigmoid + ReLU + leaky ReLU + softmax. The cou
 **(d)** For GELU, verify $\operatorname{GELU}(z) \to z$ as $z \to +\infty$ and $\operatorname{GELU}(z) \to 0$ exponentially fast as $z \to -\infty$. Roughly where is the minimum of $\operatorname{GELU}$ on $\mathbb{R}$?
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Krizhevsky, A., Sutskever, I., & Hinton, G. E.** (2012). "ImageNet classification with deep convolutional neural networks". *NeurIPS*. — AlexNet; popularised ReLU at scale (2.3).
+  </FNItem>
+  <FNItem n={2}>
+    **Hendrycks, D., & Gimpel, K.** (2016). "Gaussian Error Linear Units (GELUs)". [arXiv:1606.08415](https://arxiv.org/abs/1606.08415) — GELU activation (2.3).
+  </FNItem>
+  <FNItem n={3}>
+    **Ramachandran, P., Zoph, B., & Le, Q. V.** (2017). "Searching for activation functions". [arXiv:1710.05941](https://arxiv.org/abs/1710.05941) — Swish / SiLU (2.3).
+  </FNItem>
+  <FNItem n={4}>
+    **Shazeer, N.** (2020). "GLU variants improve Transformer". [arXiv:2002.05202](https://arxiv.org/abs/2002.05202) — SwiGLU, GeGLU (2.3, will reappear in Cap 8).
+  </FNItem>
+  <FNItem n={5}>
+    **Cobbe, K., Kosaraju, V., Bavarian, M., et al.** (2021). "Training verifiers to solve math word problems" (GSM8K + verifiers). [arXiv:2110.14168](https://arxiv.org/abs/2110.14168) — Verifier-based Best-of-N (9.15 §2.3).
+  </FNItem>
+</Footnotes>

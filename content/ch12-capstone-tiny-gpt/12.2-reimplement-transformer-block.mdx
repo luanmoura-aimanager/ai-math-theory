@@ -17,7 +17,7 @@ The rules:
 2. Output: a Python file `tiny_gpt.py` that implements `class TinyGPT(nn.Module)` with the same input/output signature as nanoGPT's `GPT` class (token IDs in, logits out).
 3. Verification: at the end of the session, your model should be droppable into nanoGPT's `train.py` and train to comparable loss in comparable time.
 
-If you can do this, you understand the architecture. If you can't — review Chapter 6, then try again. *Do not skip this exercise.*
+If you can do this, you understand the architecture. If you can't — review Chapter 6, then try again. *Do not skip this exercise.*<FN n={1} />
 
 ---
 
@@ -297,3 +297,9 @@ Three things.
 **(f)** Verify your implementation trains to val loss $\sim 1.5$ in $\sim 5000$ steps. If not, identify and fix the bug *without* peeking at `nanoGPT/model.py`.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Karpathy, A.** (2022–). [nanoGPT.](https://github.com/karpathy/nanoGPT) The canonical pedagogical reference Transformer implementation (12.1, 12.2).
+  </FNItem>
+</Footnotes>

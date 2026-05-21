@@ -149,7 +149,7 @@ SFT is *small* relative to pretraining — $10$k–$1$M examples vs the trillion
 
 The intuition is "stay close to the pretrained weights." The base model has a vast amount of stored knowledge and capability; SFT data is comparatively narrow. Aggressive optimisation would erase the stored knowledge in favour of fitting the SFT data, which is *worse* than the pretrained model on most queries.
 
-A useful diagnostic: the KL divergence between the SFT model's output distribution and the base model's, $\mathbb{E}_x [\text{KL}(\pi_\text{SFT}(\cdot \mid x) \| \pi_\text{base}(\cdot \mid x))]$. After conventional SFT, this is a few nats per token. After aggressive (too-many-epoch, too-high-LR) SFT, it can be tens of nats — which signals the model has changed its distribution drastically and likely lost capability on out-of-distribution queries. We will see this same drift-monitoring idea show up explicitly as the KL penalty in RLHF (§9.9).
+A useful diagnostic: the KL divergence between the SFT model's output distribution and the base model's, $\mathbb{E}_x [\text{KL}(\pi_\text{SFT}(\cdot \mid x) \| \pi_\text{base}(\cdot \mid x))]$. After conventional SFT, this is a few nats per token. After aggressive (too-many-epoch, too-high-LR) SFT, it can be tens of nats — which signals the model has changed its distribution drastically and likely lost capability on out-of-distribution queries. We will see this same drift-monitoring idea show up explicitly as the KL penalty in RLHF (§9.9).<FN n={1} />
 
 ---
 
@@ -216,3 +216,9 @@ The next session begins the preference-based machinery: how to collect preferenc
 **(f)** A practitioner reports "my SFT model sometimes writes the next user turn instead of stopping at end-of-response." Diagnose the most likely bug, citing §2's loss-masking requirement and §3's chat-template handling.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Ouyang, L., Wu, J., Jiang, X., et al.** (2022). "Training language models to follow instructions with human feedback" (InstructGPT). [arXiv:2203.02155](https://arxiv.org/abs/2203.02155) — Canonical SFT + RM + PPO pipeline (9.1, 9.2, 9.8); per-token KL implementation (9.9); PPO-ptx mixing (9.8 §5.3).
+  </FNItem>
+</Footnotes>

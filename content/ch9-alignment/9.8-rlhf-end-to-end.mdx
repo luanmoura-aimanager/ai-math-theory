@@ -228,8 +228,14 @@ Three things:
 
 **(c)** The reward model is initialised from $\pi_\text{SFT}$. Why? What changes about the model architecture between $\pi_\text{SFT}$ and $r_\phi$?
 
-**(d)** Read InstructGPT (Ouyang et al. 2022) §3.5. Identify the "PPO-ptx" mixing — what is it, and why is it included?
+**(d)** Read InstructGPT (Ouyang et al. 2022)<FN n={1} /> §3.5. Identify the "PPO-ptx" mixing — what is it, and why is it included?
 
 **(e)** Why does the KL penalty in stage 3 use $\pi_\text{SFT}$ as the reference rather than the original pretrained base? Argue from the perspective of "what does each model know?"
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Ouyang, L., Wu, J., Jiang, X., et al.** (2022). "Training language models to follow instructions with human feedback" (InstructGPT). [arXiv:2203.02155](https://arxiv.org/abs/2203.02155) — Canonical SFT + RM + PPO pipeline (9.1, 9.2, 9.8); per-token KL implementation (9.9); PPO-ptx mixing (9.8 §5.3).
+  </FNItem>
+</Footnotes>

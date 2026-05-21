@@ -17,7 +17,7 @@ $$
 
 which overflows the moment any single logit gets large. We need a small trick (log-sum-exp) and a small amount of floating-point fluency (fp32 vs fp16 vs bf16) to make this work at the scale of a real network.
 
-This is the last session of Chapter 0. After it, every loss we write will use the stable form, and we'll know why training in bf16 became standard.
+This is the last session of Chapter 0. After it, every loss we write will use the stable form, and we'll know why training in bf16 became standard.<FN ns={[1, 2]} />
 
 ---
 
@@ -203,3 +203,12 @@ $$
 Use 0.7 if you'd like, or differentiate the stable form $m + \log \sum_j e^{x_j - m}$ directly and check that the $m$-dependence cancels.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Higham, N. J.** (2002). *Accuracy and Stability of Numerical Algorithms* (2nd ed.). SIAM. — Numerical-stability material in 0.10 (overflow, underflow, log-sum-exp).
+  </FNItem>
+  <FNItem n={2}>
+    **bfloat16 specification.** Wang & Kanwar (2019), "BFloat16: The secret to high performance on Cloud TPUs". [cloud.google.com](https://cloud.google.com/blog/products/ai-machine-learning/bfloat16-the-secret-to-high-performance-on-cloud-tpus) — Used in 0.10.
+  </FNItem>
+</Footnotes>

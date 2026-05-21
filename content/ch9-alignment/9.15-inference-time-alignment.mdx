@@ -68,7 +68,7 @@ A clean alternative when the task allows it: replace the reward model with a **v
 
 Verifiers don't reward-hack (they evaluate exact correctness, not learned preference), and BoN with a verifier is the dominant test-time strategy for reasoning models. DeepSeek-R1 ([2025, arXiv:2501.12948](https://arxiv.org/abs/2501.12948)) and OpenAI o1 both heavily rely on BoN-with-verifier for math and code reasoning evaluation.
 
-The downside: verifiers exist only for tasks with checkable answers. For open-ended chat or writing, you're stuck with reward-model-based BoN and its over-optimisation risk.
+The downside: verifiers exist only for tasks with checkable answers. For open-ended chat or writing, you're stuck with reward-model-based BoN and its over-optimisation risk.<FN n={1} />
 
 ---
 
@@ -181,7 +181,7 @@ This is the dominant test-time strategy for hard-problem benchmarks (AIME, Human
 
 ### 6.2 Inference-time scaling laws
 
-Just as training-time has Kaplan/Chinchilla scaling laws ([7.11](/session/ch7-training-language-models/7.11-scaling-laws-kaplan)–[7.12](/session/ch7-training-language-models/7.12-chinchilla)), inference-time has its own emerging laws. **Snell, Lee, Xu, Kumar, 2024, *Scaling LLM Test-Time Compute Optimally***  ([arXiv:2408.03314](https://arxiv.org/abs/2408.03314)) and related work characterise the quality return per inference FLOP.
+Just as training-time has Kaplan/Chinchilla scaling laws ([7.11](/session/ch7-training-language-models/7.11-scaling-laws-kaplan)–[7.12](/session/ch7-training-language-models/7.12-chinchilla)), inference-time has its own emerging laws. **Snell, Lee, Xu, Kumar, 2024<FN n={2} />, *Scaling LLM Test-Time Compute Optimally***  ([arXiv:2408.03314](https://arxiv.org/abs/2408.03314)) and related work characterise the quality return per inference FLOP.
 
 The headline: for hard problems, inference-time compute can match or exceed training-time compute in marginal capability gain. A smaller model with more inference budget often beats a larger model with less. This is the analytic basis for "reasoning-model" deployments where each query may use $\sim 10$K–$100$K extra tokens of "thinking."
 
@@ -247,3 +247,12 @@ Chapter 9 closes here. Chapter 10 — Inference and decoding opens the inference
 **(e)** A frontier deployment runs DPO-trained policy + BoN at $N = 16$ on hard queries. State (i) the per-query cost vs single-sample inference, (ii) the expected quality gain from §2.1's $\log N$ scaling, (iii) when this is and isn't worth the cost.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Cobbe, K., Kosaraju, V., Bavarian, M., et al.** (2021). "Training verifiers to solve math word problems" (GSM8K + verifiers). [arXiv:2110.14168](https://arxiv.org/abs/2110.14168) — Verifier-based Best-of-N (9.15 §2.3).
+  </FNItem>
+  <FNItem n={2}>
+    **Snell, C., Lee, J., Xu, K., & Kumar, A.** (2024). "Scaling LLM test-time compute optimally can be more effective than scaling model parameters". [arXiv:2408.03314](https://arxiv.org/abs/2408.03314) — Inference-time scaling laws (9.15 §6.2).
+  </FNItem>
+</Footnotes>

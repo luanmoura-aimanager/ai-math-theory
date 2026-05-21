@@ -224,6 +224,119 @@ body {
   line-height: 1.45;
 }
 
+/* ----- References (CS-paper style at the bottom of each session)
+ *
+ * Inline marker — "[3]" — is rendered at full body size so it scans as a
+ * paper-style citation rather than a Chicago superscript. The link
+ * carries the accent colour (terracotta) without an underline so it
+ * doesn't fight with body links; on hover it underlines and we keep the
+ * accessibility focus ring visible via the default outline.
+ *
+ * Bottom block mimics the References section of an ACM/IEEE paper: a
+ * thin hairline rule above, a small caps heading, and a hanging-indent
+ * list with the bracketed numeral painted in the left gutter. We do NOT
+ * use a native <ol> counter — the numeral is drawn explicitly so it
+ * matches the inline marker exactly (e.g. "[12]" with the brackets
+ * visible, not "12.").
+ */
+.mdx-fn-ref a {
+  color: var(--accent);
+  text-decoration: none;
+  font-weight: 500;
+  font-variant-numeric: lining-nums;
+}
+.mdx-fn-ref--multi {
+  color: var(--accent);
+  font-weight: 500;
+  font-variant-numeric: lining-nums;
+}
+.prose-textbook .mdx-fn-ref a {
+  text-decoration: none;
+}
+.mdx-fn-ref a:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.mdx-footnotes {
+  margin-top: 3.2em;
+  font-size: 0.92rem;
+  color: var(--foreground);
+  line-height: 1.55;
+}
+.mdx-footnotes__rule {
+  width: 100%;
+  border: 0;
+  border-top: 1px solid var(--rule);
+  margin: 0 0 1.2em 0;
+}
+.mdx-footnotes__heading {
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0 0 0.9em 0;
+}
+.mdx-footnotes__list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  counter-reset: none;
+}
+.mdx-fn-item {
+  display: grid;
+  grid-template-columns: 2.4em 1fr auto;
+  column-gap: 0.4em;
+  margin: 0.5em 0;
+  color: var(--muted);
+}
+.mdx-fn-item__num {
+  color: var(--accent);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums lining-nums;
+  text-align: right;
+}
+.mdx-fn-item__body {
+  /* Body of the entry — keep authors readable but rest muted. */
+}
+.mdx-fn-item strong {
+  color: var(--foreground);
+  font-weight: 600;
+}
+.mdx-fn-item em {
+  font-style: italic;
+}
+.mdx-fn-item a {
+  color: var(--link);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+}
+.mdx-fn-backref {
+  text-decoration: none;
+  color: var(--muted);
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  align-self: start;
+  padding-left: 0.4em;
+}
+.mdx-fn-item:hover .mdx-fn-backref,
+.mdx-fn-item:target .mdx-fn-backref {
+  opacity: 0.6;
+}
+.mdx-fn-item:target {
+  background: var(--accent-soft);
+  border-radius: 4px;
+  padding: 0.2em 0.4em;
+  margin-left: -0.4em;
+  margin-right: -0.4em;
+}
+/* Smooth scroll + a little headroom when jumping to references / back. */
+html { scroll-behavior: smooth; }
+.mdx-footnotes [id^="fn-"] { scroll-margin-top: 4rem; }
+.mdx-fn-ref [id^="fn-ref-"] { scroll-margin-top: 4rem; }
+
 /* ----- KaTeX overrides ---------------------------------------------------- */
 /*
  * Inline math at 1.04em was too timid against the 17px prose — superscripts

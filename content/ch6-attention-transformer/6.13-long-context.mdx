@@ -14,7 +14,7 @@ prerequisites: ["ch6-attention-transformer/6.12-compute-and-memory", "ch6-attent
 This session surveys three families of techniques that bend the cost curve back. Each attacks a different piece:
 
 1. **Sliding-window attention** (Mistral, Longformer). Restrict each token to a local window of width $w$. Per-token cost drops from $O(T d)$ to $O(w d)$, total to $O(T w d)$. Global reach is recovered through layer-by-layer "information bubbling".
-2. **ALiBi** (Press et al., 2021). Drop *explicit* positional encodings; add a linear bias $-m_h \cdot |i - j|$ inside the softmax. Trains at one length and extrapolates to longer contexts at inference time, *without retraining*.
+2. **ALiBi** (Press et al., 2021)<FN n={1} />. Drop *explicit* positional encodings; add a linear bias $-m_h \cdot |i - j|$ inside the softmax. Trains at one length and extrapolates to longer contexts at inference time, *without retraining*.
 3. **RoPE scaling** (linear, NTK-aware, YaRN). Reuse a RoPE-trained model at much longer context by rescaling its rotational frequencies. The dominant approach in 2024–2026 LLMs that ship with 128k+ context windows.
 
 By session end you should be able to read the long-context section of any 2024–2026 model card (LLaMA-3, Mistral, Gemini, Claude) and identify which combination they use.
@@ -38,7 +38,7 @@ The score matrix $S = Q K^\top / \sqrt{d_k}$ has the same shape as before, but o
 
 A natural concern: if every token only sees the past $w$ tokens, how does information at position $1$ reach position $T \gg w$? Answer: through the **layer stack**.
 
-Each layer is a sliding window of size $w$. After $L$ layers stacked, an output token has an *effective receptive field* of $L \cdot w$. The Longformer paper (Beltagy et al., 2020, [arXiv:2004.05150](https://arxiv.org/abs/2004.05150)) calls this the "Transformer's CNN-like receptive field" — each layer extends the local view, and the composition reaches arbitrary distances given enough layers.
+Each layer is a sliding window of size $w$. After $L$ layers stacked, an output token has an *effective receptive field* of $L \cdot w$. The Longformer paper (Beltagy et al., 2020, [arXiv:2004.05150](https://arxiv.org/abs/2004.05150))<FN n={4} /> calls this the "Transformer's CNN-like receptive field" — each layer extends the local view, and the composition reaches arbitrary distances given enough layers.
 
 For Mistral 7B: $w = 4096, L = 32$. Effective receptive field $= 32 \cdot 4096 = 131072$ — comfortably enough to cover the 32k context the model trains on.
 
@@ -52,7 +52,7 @@ Three commonly-paired ideas:
 
 - **Dilated windows** (Beltagy et al.): at layer $\ell$, use a stride-$s_\ell$ window so that the receptive field grows *multiplicatively* with depth.
 - **Global tokens.** A small set of "always-attended" positions (e.g., \[CLS\], the first $k$ tokens) that every layer attends to in full. Resolves the early-token bottleneck.
-- **Attention sinks** (Xiao et al., 2023, [arXiv:2309.17453](https://arxiv.org/abs/2309.17453)). Always include the first 4 tokens in the window. Empirically, language models concentrate disproportionate attention on these "sink" tokens; including them in any local window prevents the softmax from being starved of well-positioned mass. StreamingLLM uses this to extend context indefinitely with constant memory.
+- **Attention sinks** (Xiao et al., 2023, [arXiv:2309.17453](https://arxiv.org/abs/2309.17453))<FN n={6} />. Always include the first 4 tokens in the window. Empirically, language models concentrate disproportionate attention on these "sink" tokens; including them in any local window prevents the softmax from being starved of well-positioned mass. StreamingLLM uses this to extend context indefinitely with constant memory.
 
 Mistral 7B uses plain sliding window + a few attention sinks. The combination matches full attention on standard benchmarks at significantly lower cost.
 
@@ -70,7 +70,7 @@ $$
 \frac{T w d}{T^2 d} = \frac{w}{T} = \frac{4096}{32768} = \frac{1}{8},
 $$
 
-an 8× reduction. Memory follows: KV-cache *can* be capped at $w$ tokens (rolling buffer), making **constant-memory** streaming generation possible.
+an 8× reduction. Memory follows: KV-cache *can* be capped at $w$ tokens (rolling buffer), making **constant-memory** streaming generation possible.<FN n={5} />
 
 ---
 
@@ -117,7 +117,7 @@ The fix is to **rescale the rotation frequencies** so that the model "sees" the 
 
 ### 4.1 Position interpolation (linear scaling)
 
-**Chen et al., 2023, *Extending Context Window of Large Language Models via Positional Interpolation*** ([arXiv:2306.15595](https://arxiv.org/abs/2306.15595)). Idea: instead of rotating by angle $m \theta_i$ at position $m$, rotate by $\alpha \cdot m \cdot \theta_i$ with $\alpha = T_\text{train} / T_\text{target}$. Equivalently, map positions linearly into the training range:
+**Chen et al., 2023<FN n={2} />, *Extending Context Window of Large Language Models via Positional Interpolation*** ([arXiv:2306.15595](https://arxiv.org/abs/2306.15595)). Idea: instead of rotating by angle $m \theta_i$ at position $m$, rotate by $\alpha \cdot m \cdot \theta_i$ with $\alpha = T_\text{train} / T_\text{target}$. Equivalently, map positions linearly into the training range:
 
 $$
 \boxed{\ \tilde m = m \cdot \frac{T_\text{train}}{T_\text{target}}. \ }
@@ -141,7 +141,7 @@ NTK-aware extends up to about $8 \times$ training length with no fine-tuning at 
 
 ### 4.3 YaRN
 
-**Peng, Quesnelle, Fan, Shippole, 2023, *YaRN: Efficient Context Window Extension of Large Language Models*** ([arXiv:2309.00071](https://arxiv.org/abs/2309.00071)). Refines NTK-aware: instead of one global $\alpha$, apply *different* scalings to different frequency bands. Three regions:
+**Peng, Quesnelle, Fan, Shippole, 2023<FN n={3} />, *YaRN: Efficient Context Window Extension of Large Language Models*** ([arXiv:2309.00071](https://arxiv.org/abs/2309.00071)). Refines NTK-aware: instead of one global $\alpha$, apply *different* scalings to different frequency bands. Three regions:
 
 - **High-frequency pairs.** Already wrap many times within $T_\text{train}$; the model treats them as essentially uniform over $[0, 2\pi]$. Don't rescale.
 - **Mid-frequency pairs.** Partially wrapped. Use NTK-aware scaling.
@@ -204,3 +204,24 @@ Modern frontier LLMs combine RoPE scaling (the dominant choice) with sliding-win
 **(e)** YaRN applies different scalings to different RoPE frequency bands. Explain why, intuitively, high-frequency pairs are safe to leave alone, while low-frequency pairs must be rescaled.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Press, O., Smith, N. A., & Lewis, M.** (2021). "Train short, test long: Attention with linear biases enables input length extrapolation" (ALiBi). [arXiv:2108.12409](https://arxiv.org/abs/2108.12409) — Linear-distance bias inside softmax; length extrapolation (6.13 §3).
+  </FNItem>
+  <FNItem n={2}>
+    **Chen, S., Wong, S., Chen, L., & Tian, Y.** (2023). "Extending context window of large language models via positional interpolation". [arXiv:2306.15595](https://arxiv.org/abs/2306.15595) — Linear interpolation of RoPE frequencies for context extension (6.13 §4.1).
+  </FNItem>
+  <FNItem n={3}>
+    **Peng, B., Quesnelle, J., Fan, H., & Shippole, E.** (2023). "YaRN: Efficient context window extension of large language models". [arXiv:2309.00071](https://arxiv.org/abs/2309.00071) — Piecewise RoPE scaling (NTK-aware + linear-interpolation hybrid) (6.13 §4.3).
+  </FNItem>
+  <FNItem n={4}>
+    **Beltagy, I., Peters, M. E., & Cohan, A.** (2020). "Longformer: The long-document transformer". [arXiv:2004.05150](https://arxiv.org/abs/2004.05150) — Sliding-window + global attention with dilations (6.13 §2).
+  </FNItem>
+  <FNItem n={5}>
+    **Jiang, A. Q., Sablayrolles, A., Mensch, A., et al.** (2023). "Mistral 7B". [arXiv:2310.06825](https://arxiv.org/abs/2310.06825) — Sliding-window attention at scale; pairs with attention sinks (6.13 §2).
+  </FNItem>
+  <FNItem n={6}>
+    **Xiao, G., Tian, Y., Chen, B., Han, S., & Lewis, M.** (2023). "Efficient streaming language models with attention sinks" (StreamingLLM). [arXiv:2309.17453](https://arxiv.org/abs/2309.17453) — Attention sinks for constant-memory streaming (6.13 §2.2).
+  </FNItem>
+</Footnotes>

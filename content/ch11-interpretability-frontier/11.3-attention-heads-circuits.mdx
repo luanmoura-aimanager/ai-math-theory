@@ -13,7 +13,7 @@ prerequisites: ["ch11-interpretability-frontier/11.2-residual-stream"]
 
 The framework is from Elhage et al. (Anthropic, 2021, [*A Mathematical Framework for Transformer Circuits*](https://transformer-circuits.pub/2021/framework/index.html) §2). It is the cleanest possible setting for mech-interp: no MLPs, no inter-layer composition, no MoE, no residual stream chemistry. Just the matrices $W^E, W^Q, W^K, W^V, W^O, W^U$ and the softmax.
 
-By the end of this session you should be able to look at a 1-layer attention-only model and *read off* what each head is computing by inspecting two matrices per head — the QK matrix and the OV matrix — and recognise the bigram, skip-bigram, and copying algorithms.
+By the end of this session you should be able to look at a 1-layer attention-only model and *read off* what each head is computing by inspecting two matrices per head — the QK matrix and the OV matrix — and recognise the bigram, skip-bigram, and copying algorithms.<FN n={2} />
 
 ---
 
@@ -193,7 +193,7 @@ Everything above is for 1-layer attention-only models. The story compounds in de
 
 ### 8.1 K-composition, Q-composition, V-composition
 
-In a 2-layer model, the residual stream after layer 1 contains the embeddings *plus* whatever layer-1 heads wrote. Layer-2 heads read this enriched stream. Three composition modes (Elhage et al., 2021 §4):
+In a 2-layer model, the residual stream after layer 1 contains the embeddings *plus* whatever layer-1 heads wrote. Layer-2 heads read this enriched stream. Three composition modes (Elhage et al., 2021 §4)<FN n={1} />:
 
 - **K-composition.** A layer-2 head's *key* projection reads a layer-1 head's output. The layer-2 head's QK pattern depends on what layer 1 wrote.
 - **Q-composition.** Same, but for *query*.
@@ -238,3 +238,12 @@ Cap 11.4 next: induction heads. The first identified, *general-purpose*, *cross-
 **(f)** K-composition between a layer-1 and a layer-2 head: state what it means structurally and why subspace alignment determines whether composition actually happens.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Elhage, N., Nanda, N., Olsson, C., et al.** (2021). "A mathematical framework for transformer circuits". *Transformer Circuits Thread.* [transformer-circuits.pub](https://transformer-circuits.pub/2021/framework/index.html) — Residual stream, QK/OV decomposition, K/Q/V composition (11.2, 11.3).
+  </FNItem>
+  <FNItem n={2}>
+    **Wang, K., Variengien, A., Conmy, A., et al.** (2023). "Interpretability in the wild: A circuit for indirect object identification in GPT-2 small". [arXiv:2211.00593](https://arxiv.org/abs/2211.00593) — IOI circuit (11.2, 11.3).
+  </FNItem>
+</Footnotes>

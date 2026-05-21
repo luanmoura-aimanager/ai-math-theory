@@ -120,14 +120,14 @@ i.e. the network at initialisation behaves like a chain of **identity maps**: $x
 
 The practical implementation differs by author but is uniformly cheap:
 
-- **ResNet-original (He, 2015).** Initialise the last BatchNorm $\gamma$ in each block to $0$ — so the block output is exactly $x$ at $t = 0$. (Goyal et al., 2017; "Bag of Tricks" Tweaks.)
-- **Fixup (Zhang et al., 2019).** Initialise the *last* convolutional layer of each block to zero; scale the others by a factor depending on depth. Trains 100-layer ResNets without any normalisation.
+- **ResNet-original (He, 2015)<FN n={1} />.** Initialise the last BatchNorm $\gamma$ in each block to $0$ — so the block output is exactly $x$ at $t = 0$. (Goyal et al., 2017; "Bag of Tricks" Tweaks.)
+- **Fixup (Zhang et al., 2019)<FN n={3} />.** Initialise the *last* convolutional layer of each block to zero; scale the others by a factor depending on depth. Trains 100-layer ResNets without any normalisation.
 - **GPT / Pre-LN Transformer.** Standard initialisation (small Gaussian) combined with pre-norm (6.10) already produces near-identity behaviour at start; no special trick is needed.
 
 The lesson is general: **let the deep network start as a shallow one and grow into a deep one**. Residual connections + small initialisation get this for free.
 
 <Aside type="history">
-**He et al., 2015, *Deep Residual Learning for Image Recognition* ([arXiv:1512.03385](https://arxiv.org/abs/1512.03385)).** The original ResNet paper. Two observations: (1) plain 56-layer CNNs trained *worse* than 20-layer ones on ImageNet — a "degradation" problem orthogonal to overfitting, since training error also got worse; (2) inserting identity skip connections every two convolutions completely eliminated the degradation, and 152-layer networks beat the 20-layer ones by a wide margin. ResNet won ILSVRC 2015 and ICCV best paper 2015; the Transformer paper [(Vaswani et al., 2017)](https://arxiv.org/abs/1706.03762) cites it specifically when introducing skip connections in §3.1. Subsequent analyses (Veit, Wilber & Belongie, 2016, *Residual networks behave like ensembles of relatively shallow networks*, [arXiv:1605.06431](https://arxiv.org/abs/1605.06431)) showed that, at inference, a residual network acts as an *implicit ensemble* of paths of varying length — another reason it is so robust.
+**He et al., 2015, *Deep Residual Learning for Image Recognition* ([arXiv:1512.03385](https://arxiv.org/abs/1512.03385)).** The original ResNet paper. Two observations: (1) plain 56-layer CNNs trained *worse* than 20-layer ones on ImageNet — a "degradation" problem orthogonal to overfitting, since training error also got worse; (2) inserting identity skip connections every two convolutions completely eliminated the degradation, and 152-layer networks beat the 20-layer ones by a wide margin. ResNet won ILSVRC 2015 and ICCV best paper 2015; the Transformer paper [(Vaswani et al., 2017)](https://arxiv.org/abs/1706.03762) cites it specifically when introducing skip connections in §3.1. Subsequent analyses (Veit, Wilber & Belongie, 2016<FN n={2} />, *Residual networks behave like ensembles of relatively shallow networks*, [arXiv:1605.06431](https://arxiv.org/abs/1605.06431)) showed that, at inference, a residual network acts as an *implicit ensemble* of paths of varying length — another reason it is so robust.
 </Aside>
 
 ---
@@ -208,3 +208,15 @@ $$
 **(e)** Veit, Wilber & Belongie (2016) argue that a residual network behaves like an "ensemble of shallow networks". Translate this into the $2^L$ expansion of §3.2: how does each subset $S \subseteq \{1, \dots, L\}$ correspond to one ensemble member?
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **He, K., Zhang, X., Ren, S., & Sun, J.** (2015). "Deep residual learning for image recognition" (ResNet). [arXiv:1512.03385](https://arxiv.org/abs/1512.03385) — Identity skip connections; the architectural innovation imported wholesale into the Transformer (6.9).
+  </FNItem>
+  <FNItem n={2}>
+    **Veit, A., Wilber, M. J., & Belongie, S.** (2016). "Residual networks behave like ensembles of relatively shallow networks". [arXiv:1605.06431](https://arxiv.org/abs/1605.06431) — Implicit-ensemble view of residual networks (6.9 Aside).
+  </FNItem>
+  <FNItem n={3}>
+    **Zhang, H., Dauphin, Y. N., & Ma, T.** (2019). "Fixup initialization: Residual learning without normalization". [arXiv:1901.09321](https://arxiv.org/abs/1901.09321) — Identity-initialisation tricks for very deep residual stacks (6.9 §4).
+  </FNItem>
+</Footnotes>

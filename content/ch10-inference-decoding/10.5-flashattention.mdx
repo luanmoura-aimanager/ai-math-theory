@@ -22,7 +22,7 @@ Two problems:
 1. **Memory.** $n \times n$ floats. At $n = 8\text{k}$, $P$ is $64$M entries — $128$ MB in fp16 *per head per layer*. With $16$ heads × $32$ layers × batch $4$, the attention matrices alone occupy $\sim 256$ GB. Larger than any single GPU.
 2. **Memory bandwidth.** Even when $P$ fits, writing it to HBM and reading it back is the dominant cost. The actual matmul FLOPs are *fast*; moving $P$ through the GPU's $\sim 2$ TB/s HBM bandwidth is the wall.
 
-FlashAttention (Dao et al., 2022, [arXiv:2205.14135](https://arxiv.org/abs/2205.14135); FlashAttention-2: Dao, 2023, [arXiv:2307.08691](https://arxiv.org/abs/2307.08691); FlashAttention-3: Shah et al., 2024, [arXiv:2407.08608](https://arxiv.org/abs/2407.08608)) reformulates the attention computation to *never materialise* $S$ or $P$ in HBM. Instead, it tiles the computation in on-chip SRAM, using an *online softmax* that updates a running maximum and sum as it streams through key/value blocks.
+FlashAttention (Dao et al., 2022, [arXiv:2205.14135](https://arxiv.org/abs/2205.14135)<FN n={1} />; FlashAttention-2: Dao, 2023, [arXiv:2307.08691](https://arxiv.org/abs/2307.08691); FlashAttention-3: Shah et al., 2024, [arXiv:2407.08608](https://arxiv.org/abs/2407.08608)) reformulates the attention computation to *never materialise* $S$ or $P$ in HBM. Instead, it tiles the computation in on-chip SRAM, using an *online softmax* that updates a running maximum and sum as it streams through key/value blocks.
 
 The result: exact attention (same numerical output as the standard implementation, up to rounding), $O(n)$ HBM memory, and $2$–$4\times$ wall-clock speedup on H100 / A100. By 2026, every production inference and training stack uses FlashAttention as the default attention kernel.
 
@@ -167,7 +167,7 @@ The activation memory of standard attention training scales as $\Theta(n^2)$ (th
 
 The original FlashAttention had two known inefficiencies on modern GPUs: low GPU occupancy (one program per attention head, with not enough threads to fill the SM) and non-matmul overhead (rescaling, exp, comparisons).
 
-**FlashAttention-2** (Dao, 2023, [arXiv:2307.08691](https://arxiv.org/abs/2307.08691)) fixes both:
+**FlashAttention-2** (Dao, 2023, [arXiv:2307.08691](https://arxiv.org/abs/2307.08691))<FN n={2} /> fixes both:
 
 - Loop order swapped — outer over $Q$, inner over $K, V$. Each $Q^{(i)}$ block now produces its final output before moving on, eliminating the running-update overhead per outer iteration.
 - Parallelisation across the sequence dimension as well as batch and heads, to better fill the SM.
@@ -175,7 +175,7 @@ The original FlashAttention had two known inefficiencies on modern GPUs: low GPU
 
 Result: $\sim 2\times$ throughput vs. FlashAttention-1 on A100; $\sim 50$–$70\%$ of theoretical peak FLOPs.
 
-**FlashAttention-3** (Shah et al., 2024, [arXiv:2407.08608](https://arxiv.org/abs/2407.08608)) targets H100. Adds asynchronous warp specialisation (some warps load while others compute), low-precision (fp8) intermediates, and fine-grained pipelining of the GEMM and softmax steps. Reaches $\sim 75\%$ of H100 peak — roughly $740$ TFLOP/s in fp16, $1.2$ PFLOP/s in fp8.
+**FlashAttention-3** (Shah et al., 2024, [arXiv:2407.08608](https://arxiv.org/abs/2407.08608))<FN n={3} /> targets H100. Adds asynchronous warp specialisation (some warps load while others compute), low-precision (fp8) intermediates, and fine-grained pipelining of the GEMM and softmax steps. Reaches $\sim 75\%$ of H100 peak — roughly $740$ TFLOP/s in fp16, $1.2$ PFLOP/s in fp8.
 
 ---
 
@@ -231,3 +231,15 @@ Cap 10.6 next: *quantisation*. Reduce the precision of weights and activations f
 **(f)** FlashAttention's activation-memory benefit during training: state the activation memory of standard attention vs. FlashAttention. Why does long-context training depend on this?
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Dao, T., Fu, D. Y., Ermon, S., Rudra, A., & Ré, C.** (2022). "FlashAttention: Fast and memory-efficient exact attention with IO-awareness". [arXiv:2205.14135](https://arxiv.org/abs/2205.14135) — Tiled attention kernel; in-SRAM softmax (7.7 §7.1; full treatment Cap 10.5).
+  </FNItem>
+  <FNItem n={2}>
+    **Dao, T.** (2023). "FlashAttention-2: Faster attention with better parallelism and work partitioning". [arXiv:2307.08691](https://arxiv.org/abs/2307.08691) — FlashAttention-2 (10.5).
+  </FNItem>
+  <FNItem n={3}>
+    **Shah, J., Bikshandi, G., Zhang, Y., et al.** (2024). "FlashAttention-3: Fast and accurate attention with asynchrony and low-precision". [arXiv:2407.08608](https://arxiv.org/abs/2407.08608) — FlashAttention-3 on H100 (10.5).
+  </FNItem>
+</Footnotes>

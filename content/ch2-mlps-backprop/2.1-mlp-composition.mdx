@@ -11,7 +11,7 @@ prerequisites: ["ch1-linear-models-perceptron/1.6-xor-depth"]
 
 Chapter 1 built single-layer models. Chapter 2 builds **multilayer** models — every neural network in this course will be an instance of the structure we write down here. The whole engine is one diagram and one composition: stack affine maps and pointwise nonlinearities, alternating, and you have an MLP.
 
-The hard part isn't the definition; it's notation. We're going to fix a single, consistent notation now and use it for the rest of the course.
+The hard part isn't the definition; it's notation. We're going to fix a single, consistent notation now and use it for the rest of the course.<FN n={1} />
 
 ---
 
@@ -58,7 +58,7 @@ $$
 \boxed{\ f(x) \;=\; g^{(L)}\!\Bigl(W^{(L)}\, g^{(L-1)}\!\bigl(W^{(L-1)} \cdots g^{(1)}(W^{(1)} x + b^{(1)}) \cdots + b^{(L-1)}\bigr) + b^{(L)}\Bigr).\ }
 $$
 
-Read it out loud once. Every neural network in this course — convolutional, recurrent, Transformer — is structurally this composition, with extra structure imposed on each $W^{(\ell)}$ (sparsity, weight-sharing, attention).
+Read it out loud once. Every neural network in this course — convolutional, recurrent, Transformer — is structurally this composition, with extra structure imposed on each $W^{(\ell)}$ (sparsity, weight-sharing, attention).<FN n={2} />
 
 ---
 
@@ -127,3 +127,12 @@ Three takeaways from the composition view.
 **(d)** A common mistake: applying the activation $g$ after the *output* of the last layer for a regression task. Why is that wrong, and what is the correct convention for regression heads?
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Wang, S., & Kanwar, P.** (2019). "BFloat16: The secret to high performance on Cloud TPUs". Google Cloud blog. [cloud.google.com](https://cloud.google.com/blog/products/ai-machine-learning/bfloat16-the-secret-to-high-performance-on-cloud-tpus) — bf16 design rationale (7.4 §2.1).
+  </FNItem>
+  <FNItem n={2}>
+    **Radford, A., Wu, J., Child, R., et al.** (2019). "Language models are unsupervised multitask learners" (GPT-2). OpenAI technical report. — Pre-LN block, modified init, reversible tokenization referenced by GPT-3 §2.1 (7.14 §3.1).
+  </FNItem>
+</Footnotes>

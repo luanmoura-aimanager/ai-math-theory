@@ -13,7 +13,7 @@ The original AIAYN Transformer used **sinusoidal** PE ([Appendix 6.A](/session/c
 
 Modern LLMs since 2022 have moved to RoPE ([6.7](/session/ch6-attention-transformer/6.7-rope)) for the reasons covered there. Learned PE survives mostly in **nanoGPT** (the reference implementation we walked through in 6.16), in BERT and its descendants, and in any pre-2022 codebase you may run into.
 
-This appendix is short. It defines the construction, lists pros and cons, and finishes the survey of "where did the PE go" started in 6.6.
+This appendix is short. It defines the construction, lists pros and cons, and finishes the survey of "where did the PE go" started in 6.6.<FN ns={[1, 2]} />
 
 ---
 
@@ -123,3 +123,12 @@ This finishes the survey of positional encodings begun in [6.6](/session/ch6-att
 **(e)** What was the principal component analysis of trained $W_\text{pos}$ rows expected to reveal — and what did it actually reveal? (Hint: see §3 of this appendix.)
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Radford, A., Narasimhan, K., Salimans, T., & Sutskever, I.** (2018). "Improving language understanding by generative pre-training" (GPT-1). OpenAI technical report. — Decoder-only Transformer with causal self-attention (6.3, 6.5); first use of learned PE (Appendix 6.B).
+  </FNItem>
+  <FNItem n={2}>
+    **Radford, A., Wu, J., Child, R., et al.** (2019). "Language models are unsupervised multitask learners" (GPT-2). OpenAI technical report. — Learned absolute positional encoding (Appendix 6.B), pre-LN variant (6.10), the architectural skeleton of every modern decoder-only LLM (6.11).
+  </FNItem>
+</Footnotes>

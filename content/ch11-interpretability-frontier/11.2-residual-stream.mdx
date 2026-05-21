@@ -22,7 +22,7 @@ Two layers, one block. Residual connections everywhere. This is the right *engin
 
 For interpretability, the right picture is rotated 90°. Instead of "the block transforms $h$ to $h_\text{out}$", we say: **every block reads from a single shared vector $h$ — the residual stream — and writes a (potentially) different vector into it.** The Transformer's computation is a sequence of additive writes to one running register, with each attention head and MLP contributing one term.
 
-This is the **residual stream view**, due to Elhage et al. (Anthropic, 2021, *A Mathematical Framework for Transformer Circuits*, [transformer-circuits.pub](https://transformer-circuits.pub/2021/framework/index.html)). It is the foundation of every mech-interp paper that follows.
+This is the **residual stream view**, due to Elhage et al. (Anthropic, 2021<FN n={1} />, *A Mathematical Framework for Transformer Circuits*, [transformer-circuits.pub](https://transformer-circuits.pub/2021/framework/index.html)). It is the foundation of every mech-interp paper that follows.
 
 By the end of this session you should be comfortable writing the model output as
 
@@ -187,7 +187,7 @@ Examples:
 - A "this-prompt-is-asking-for-code" direction.
 - A "Golden Gate Bridge" direction in Claude 3 Sonnet.
 
-Features can be added, subtracted, projected, ablated. Their existence is the *linear-representation hypothesis*: meaningful concepts in trained Transformers are represented as approximately-linear directions in activation space, not as nonlinear combinations of neurons. Strong empirical support (Park et al., 2023, [arXiv:2311.03658](https://arxiv.org/abs/2311.03658)) — but not absolute (some concepts appear to require nonlinear readouts).
+Features can be added, subtracted, projected, ablated. Their existence is the *linear-representation hypothesis*: meaningful concepts in trained Transformers are represented as approximately-linear directions in activation space, not as nonlinear combinations of neurons. Strong empirical support (Park et al., 2023, [arXiv:2311.03658](https://arxiv.org/abs/2311.03658))<FN n={3} /> — but not absolute (some concepts appear to require nonlinear readouts).
 
 A trained Transformer's residual stream is therefore best thought of as a *feature vector space* where the dimensions (the basis) don't generally align with neurons — features live as oblique directions, and the activation magnitudes are the feature *values*. Cap 11.5 develops this carefully via the superposition story.
 
@@ -205,7 +205,7 @@ A few practical consequences for the rest of Chapter 11.
 
 To say "circuit $C$ implements behaviour $B$" means: a small set of attention heads and MLP neurons, with specific QK/OV/reader/writer structure, are causally responsible for $B$ on the relevant inputs. The circuit can be drawn as a DAG with edges through the residual stream.
 
-The IOI circuit (Wang et al., 2023) — for solving "John gave the ball to Mary; Mary handed it back to ___" — is the canonical worked example: $\sim 26$ heads across $\sim 7$ layers, with specific roles (name-mover, duplicate-token detector, induction, S-inhibition). Each role is identified by its QK pattern, OV behaviour, and causal ablation effect.
+The IOI circuit (Wang et al., 2023)<FN n={2} /> — for solving "John gave the ball to Mary; Mary handed it back to ___" — is the canonical worked example: $\sim 26$ heads across $\sim 7$ layers, with specific roles (name-mover, duplicate-token detector, induction, S-inhibition). Each role is identified by its QK pattern, OV behaviour, and causal ablation effect.
 
 ### 7.2 Ablation and patching
 
@@ -249,3 +249,15 @@ Cap 11.3 next: with the residual-stream language in hand, we analyse attention h
 **(f)** A team claims "head $(15, 4)$ writes information about the subject of the sentence into the residual stream." Sketch two causal interventions you'd run to test this claim.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Elhage, N., Nanda, N., Olsson, C., et al.** (2021). "A mathematical framework for transformer circuits". *Transformer Circuits Thread.* [transformer-circuits.pub](https://transformer-circuits.pub/2021/framework/index.html) — Residual stream, QK/OV decomposition, K/Q/V composition (11.2, 11.3).
+  </FNItem>
+  <FNItem n={2}>
+    **Wang, K., Variengien, A., Conmy, A., et al.** (2023). "Interpretability in the wild: A circuit for indirect object identification in GPT-2 small". [arXiv:2211.00593](https://arxiv.org/abs/2211.00593) — IOI circuit (11.2, 11.3).
+  </FNItem>
+  <FNItem n={3}>
+    **Park, K., Choe, Y. J., & Veitch, V.** (2023). "The linear representation hypothesis and the geometry of large language models". [arXiv:2311.03658](https://arxiv.org/abs/2311.03658) — Linear-representation hypothesis (11.2, 11.5).
+  </FNItem>
+</Footnotes>

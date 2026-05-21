@@ -11,7 +11,7 @@ prerequisites: ["ch3-optimization-regularization/3.5-adam"]
 
 If you read Adam optimiser configs in real LLM code (GPT-NeoX, LLaMA, Mistral, nanoGPT), you almost never see `Adam(weight_decay=...)`. You see `AdamW(weight_decay=...)`. The difference is one line of the update, and it matters enough that every serious modern training run uses the W variant.
 
-This session pins down *why*. The short version: in plain SGD, "add an L2 penalty to the loss" and "shrink weights toward zero each step" are the same thing. In Adam they are not, because of the per-parameter scaling $1/\sqrt{\hat v_t}$. Loshchilov & Hutter (2017, *Decoupled Weight Decay Regularization*) noticed this and fixed it by re-coupling the shrinkage in the *parameter* update rather than in the *gradient*.
+This session pins down *why*. The short version: in plain SGD, "add an L2 penalty to the loss" and "shrink weights toward zero each step" are the same thing. In Adam they are not, because of the per-parameter scaling $1/\sqrt{\hat v_t}$. Loshchilov & Hutter (2017, *Decoupled Weight Decay Regularization*) noticed this and fixed it by re-coupling the shrinkage in the *parameter* update rather than in the *gradient*.<FN ns={[2, 3, 4]} />
 
 ---
 
@@ -58,7 +58,7 @@ The shrinkage of $\theta$ is *not* a clean $(1 - \alpha \lambda)\,\theta$ anymor
 That is the wrong direction. The whole point of weight decay is to keep weights small; "shrink less the parameters that already have big gradients" defeats the regulariser.
 
 <Aside type="warning">
-This is the subtle bug Loshchilov & Hutter pointed out. Calling `Adam(weight_decay=...)` in early versions of PyTorch (and Keras' `kernel_regularizer=l2(...)`) implemented Adam-with-L2, *not* what most people meant by weight decay. Models silently regularised differently across coordinates. AdamW is the explicit fix.
+This is the subtle bug Loshchilov<FN n={1} /> & Hutter pointed out. Calling `Adam(weight_decay=...)` in early versions of PyTorch (and Keras' `kernel_regularizer=l2(...)`) implemented Adam-with-L2, *not* what most people meant by weight decay. Models silently regularised differently across coordinates. AdamW is the explicit fix.
 </Aside>
 
 ---
@@ -162,3 +162,18 @@ This snippet (or a near-clone of it) lives in every modern LLM training script.
 **(d)** Modify the Adam pseudocode from 3.5 §7 to become AdamW. How many lines change? Show the diff.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Loshchilov, I., & Hutter, F.** (2019). "Decoupled weight decay regularization". *ICLR*. [arXiv:1711.05101](https://arxiv.org/abs/1711.05101) — AdamW (3.6).
+  </FNItem>
+  <FNItem n={2}>
+    **Chen, X., Liang, C., Huang, D., et al.** (2023). "Symbolic discovery of optimization algorithms" (Lion). [arXiv:2302.06675](https://arxiv.org/abs/2302.06675) — Lion (3.6 aside).
+  </FNItem>
+  <FNItem n={3}>
+    **Liu, H., Li, Z., Hall, D., et al.** (2023). "Sophia: A scalable stochastic second-order optimizer for language model pre-training". [arXiv:2305.14342](https://arxiv.org/abs/2305.14342) — Sophia (3.6 aside).
+  </FNItem>
+  <FNItem n={4}>
+    **Jordan, K., et al.** (2024). "Muon: An optimizer for hidden layers in neural networks". [keller-jordan.github.io](https://kellerjordan.github.io/posts/muon/) — Muon (3.6 aside).
+  </FNItem>
+</Footnotes>

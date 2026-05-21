@@ -15,7 +15,7 @@ A naive picture: each interpretable feature aligns with one *neuron* (one basis 
 
 Empirically, this naive picture fails. Most neurons in trained Transformers are **polysemantic** — they fire on multiple unrelated stimuli, mixing several features into one neuron. There are far more *concepts* the network represents than there are neurons to allocate them to.
 
-The Anthropic paper *Toy Models of Superposition* (Elhage et al., 2022, [transformer-circuits.pub](https://transformer-circuits.pub/2022/toy_model/index.html)) gave the theoretical explanation: **superposition**. Networks pack $k \gg d$ features into $d$-dimensional spaces by representing each feature as a *direction* (not an axis), exploiting feature *sparsity* to keep interference manageable.
+The Anthropic paper *Toy Models of Superposition* (Elhage et al., 2022<FN n={1} />, [transformer-circuits.pub](https://transformer-circuits.pub/2022/toy_model/index.html)) gave the theoretical explanation: **superposition**. Networks pack $k \gg d$ features into $d$-dimensional spaces by representing each feature as a *direction* (not an axis), exploiting feature *sparsity* to keep interference manageable.
 
 Superposition is the *structural reason* mech-interp at scale is hard. It is also the precondition for Cap 11.6 (sparse autoencoders), which provide a tool to *recover* the features from a superposed representation.
 
@@ -69,7 +69,7 @@ This is exactly the predicted consequence of superposition: features don't align
 
 Train probes for $k > d$ distinct concepts on activations of dimension $d$. Many probes achieve high accuracy. If the concepts were stored axis-aligned, only $d$ probes could fit; the fact that more do implies non-axis-aligned (oblique) directions.
 
-This is the linear-representation-hypothesis check at scale (Park et al., 2023, [arXiv:2311.03658](https://arxiv.org/abs/2311.03658)): concepts are *linear directions*, the dimensions of the space don't bound the number of representable concepts.
+This is the linear-representation-hypothesis check at scale (Park et al., 2023, [arXiv:2311.03658](https://arxiv.org/abs/2311.03658))<FN n={2} />: concepts are *linear directions*, the dimensions of the space don't bound the number of representable concepts.
 
 ### 3.3 Sparse autoencoders recover more features than neurons
 
@@ -192,3 +192,12 @@ Cap 11.6 next: sparse autoencoders. The engineering response to superposition.
 **(f)** A 70B model has $\sim 10$M MLP neurons but appears to represent $\gg 10$M distinct features (per SAE analyses). What does this tell us about the level of superposition in modern frontier models?
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Elhage, N., Hume, T., Olsson, C., et al.** (2022). "Toy models of superposition". *Transformer Circuits Thread.* [transformer-circuits.pub](https://transformer-circuits.pub/2022/toy_model/index.html) — Superposition theory (11.5).
+  </FNItem>
+  <FNItem n={2}>
+    **Park, K., Choe, Y. J., & Veitch, V.** (2023). "The linear representation hypothesis and the geometry of large language models". [arXiv:2311.03658](https://arxiv.org/abs/2311.03658) — Linear-representation hypothesis (11.2, 11.5).
+  </FNItem>
+</Footnotes>

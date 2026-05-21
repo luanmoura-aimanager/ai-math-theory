@@ -54,7 +54,7 @@ Two regimes:
 - For large $t$ ($\beta^t \approx 0$), the total weight tends to $1$: $v_t$ is a proper convex combination of past $g_k$'s.
 - For small $t$ (early in training), the total weight $1 - \beta^t$ is *less than* $1$, and $v_t$ is biased toward zero.
 
-This second observation is the entire reason for the correction in §5.
+This second observation is the entire reason for the correction in §5.<FN n={1} />
 
 ---
 
@@ -163,3 +163,9 @@ Both follow the same EMA pattern. The bias correction is the same line of algebr
 **(d)** A practitioner uses $\beta = 0.99$ and trains for only $T = 50$ steps. Without bias correction, by what factor is the EMA at the final step smaller than the true mean of the gradients (assuming stationary $g$)?
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Patarasuk, P., & Yuan, X.** (2009). "Bandwidth optimal all-reduce algorithms for clusters of workstations". *J. Parallel and Distributed Computing*. [sciencedirect.com](https://www.sciencedirect.com/science/article/pii/S0743731508001767) — Ring all-reduce algorithm (7.8 §3.2).
+  </FNItem>
+</Footnotes>

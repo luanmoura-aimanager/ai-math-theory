@@ -11,7 +11,7 @@ prerequisites: ["ch4-cnn-bridge/4.1-discrete-convolution", "ch2-mlps-backprop/2.
 
 Backprop through convolution is a famously satisfying calculation: the gradient of a convolution with respect to its weights is *itself* a convolution, and the gradient with respect to its input is also a convolution (with the kernel flipped). This is the structural reason CNNs can be trained efficiently — every step in both directions uses the same primitive that is already heavily optimised for the forward pass.
 
-We derive the result for a 1D, single-channel, stride-1, no-padding convolution, then state the multi-channel generalisation.
+We derive the result for a 1D, single-channel, stride-1, no-padding convolution, then state the multi-channel generalisation.<FN n={1} />
 
 ---
 
@@ -138,3 +138,9 @@ We will not need stride/dilation backward formulas for the main path in Chapters
 **(d)** Show that the bias gradient $\partial L / \partial b^{c'} = \sum_{i, j} \partial L / \partial z^{c'}[i, j]$ follows from $z^{c'}[i, j] = b^{c'} + (\cdots)$ by direct differentiation. Why doesn't the bias have a "convolutional structure"?
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Dumoulin, V., & Visin, F.** (2016). "A guide to convolution arithmetic for deep learning". [arXiv:1603.07285](https://arxiv.org/abs/1603.07285) — Definitive reference for padding, stride, dilation, and transposed convolutions (Appendices 4.A, 4.C).
+  </FNItem>
+</Footnotes>

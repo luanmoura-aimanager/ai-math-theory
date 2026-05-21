@@ -45,7 +45,7 @@ This is consistent with mechanistic-interpretability findings on pure Transforme
 
 A pure-attention model at $T = 256k$ context spends most of its decode-step bandwidth reading the KV cache. With $1/8$ attention layers, Jamba's cache is $\sim 8\times$ smaller. At iso-throughput targets, Jamba serves $\sim 3\times$ more concurrent users per device than an equivalent dense Transformer.
 
-The cache reduction is the operational headline; the quality preservation is the structural headline. Both matter for adoption.
+The cache reduction is the operational headline; the quality preservation is the structural headline. Both matter for adoption.<FN n={1} />
 
 ---
 
@@ -75,13 +75,13 @@ This is a stronger property than Jamba's: Jamba's attention layers still have fu
 
 A natural worry: sliding-window attention can only attend to the last $2048$ tokens; how does the model retain information from earlier? Samba's answer: the Mamba layers' state *does* carry information from arbitrarily far back (the SSM state is updated by every past token, just with exponential decay). So long-range information flows through the Mamba state; short-range exact retrieval flows through the windowed attention. The two are complementary.
 
-A 1M-context Transformer with sliding-window-only attention would lose all information outside the window. A 1M-context pure-Mamba model would have lossy long-range recall. The hybrid recovers both.
+A 1M-context Transformer with sliding-window-only attention would lose all information outside the window. A 1M-context pure-Mamba model would have lossy long-range recall. The hybrid recovers both.<FN n={2} />
 
 ---
 
 ## 4. MoE-Mamba and other variants
 
-MoE-Mamba (Pióro et al., 2024) is the orthogonal combination: replace the gated MLP in a Mamba block with an MoE router-plus-experts. Activated parameters stay small (one or two experts per token); total parameters scale with $E$. The architecture is *Mamba-only* (no attention) but MoE-sparsified.
+MoE-Mamba (Pióro et al., 2024)<FN n={3} /> is the orthogonal combination: replace the gated MLP in a Mamba block with an MoE router-plus-experts. Activated parameters stay small (one or two experts per token); total parameters scale with $E$. The architecture is *Mamba-only* (no attention) but MoE-sparsified.
 
 The paper reports that MoE-Mamba matches dense Mamba at iso-activated-FLOPs with substantially more total parameters, recovering the same total-vs-activated arithmetic that MoE provides for Transformers. It does *not* address the exact-retrieval gap of pure Mamba; for that, you would need to combine the MoE-Mamba block with attention layers, giving a triple-hybrid (Mamba + MoE + occasional attention). At least one industrial training run has been reported using this configuration; it is not yet in a publicly-released frontier model.
 
@@ -91,7 +91,7 @@ Other 2024–2026 hybrid designs that have appeared:
 - **Zamba** (Zyphra, 2024): a *shared* attention block applied at every layer, alongside Mamba blocks. Reduces attention parameters by sharing weights.
 - **Griffin** (DeepMind, 2024): hybrid of recurrent linear attention (a Mamba-flavoured operator) and local attention.
 
-The space is exploratory; no single hybrid design has emerged as the consensus default the way GQA-$8$ has on the attention side. The general principle — combine attention with an efficient recurrent operator at some ratio between $1$/$8$ (Jamba) and $1$/$2$ (Samba) — is the stable observation.
+The space is exploratory; no single hybrid design has emerged as the consensus default the way GQA-$8$ has on the attention side. The general principle — combine attention with an efficient recurrent operator at some ratio between $1$/$8$ (Jamba) and $1$/$2$ (Samba) — is the stable observation.<FN ns={[4, 5, 6]} />
 
 ---
 
@@ -140,3 +140,24 @@ Chapter 8's main path closes here. We have covered the 2026 frontier decoder-onl
 **(e)** As of 2026, is there a consensus hybrid design analogous to "GQA-$8$ is the default attention sharing"? Why or why not?
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Lieber, O., Lenz, B., Bata, H., et al.** (2024). "Jamba: A hybrid Transformer-Mamba language model". [arXiv:2403.19887](https://arxiv.org/abs/2403.19887) — 1 attention layer per 8; MoE in alternating layers (8.8 §2).
+  </FNItem>
+  <FNItem n={2}>
+    **Ren, L., Liu, Y., Lu, Y., et al.** (2024). "Samba: Simple hybrid state space models for efficient unlimited context language modeling". [arXiv:2406.07522](https://arxiv.org/abs/2406.07522) — Mamba + sliding-window attention; constant-cache long-context (8.8 §3).
+  </FNItem>
+  <FNItem n={3}>
+    **Pióro, M., Ciebiera, K., Krol, K., et al.** (2024). "MoE-Mamba: Efficient selective state space models with mixture of experts". [arXiv:2401.04081](https://arxiv.org/abs/2401.04081) — MoE FFN in Mamba blocks (8.8 §4).
+  </FNItem>
+  <FNItem n={4}>
+    **Dong, X., Fu, Y., Diao, S., et al.** (2024). "Hymba: A hybrid-head architecture for small language models" (NVIDIA). [arXiv:2411.13676](https://arxiv.org/abs/2411.13676) — Parallel attention + SSM in the same block (8.8 §4).
+  </FNItem>
+  <FNItem n={5}>
+    **Glorioso, P., Anthony, Q., Tokpanov, Y., et al.** (2024). "Zamba: A compact 7B SSM hybrid model" (Zyphra). [arXiv:2405.16712](https://arxiv.org/abs/2405.16712) — Shared attention block across Mamba layers (8.8 §4).
+  </FNItem>
+  <FNItem n={6}>
+    **De, S., Smith, S. L., Fernando, A., et al.** (2024). "Griffin: Mixing gated linear recurrences with local attention for efficient language models" (DeepMind). [arXiv:2402.19427](https://arxiv.org/abs/2402.19427) — Recurrent linear attention + local attention hybrid (8.8 §4).
+  </FNItem>
+</Footnotes>

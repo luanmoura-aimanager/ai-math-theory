@@ -9,7 +9,7 @@ prerequisites: ["ch3-optimization-regularization/3.2-ema-bias-correction", "ch3-
 
 ## 1. Why this session exists
 
-Adam (Kingma & Ba, 2014) is the optimiser you will see in 95% of deep-learning code written since 2015 — every GPT, every BERT, every diffusion model. It is also the most assembled optimiser in this chapter: a clean stack of the three ideas we just built. Once you see it this way, the paper's equations stop looking like magic and become inevitable.
+Adam (Kingma & Ba, 2014)<FN n={1} /> is the optimiser you will see in 95% of deep-learning code written since 2015 — every GPT, every BERT, every diffusion model. It is also the most assembled optimiser in this chapter: a clean stack of the three ideas we just built. Once you see it this way, the paper's equations stop looking like magic and become inevitable.
 
 The recipe:
 
@@ -172,3 +172,9 @@ Adam was published by Kingma & Ba (2014) — see [arXiv:1412.6980](https://arxiv
 **(d)** A common "Adam pathology" is huge gradients during the first few steps (e.g., from a poorly-initialised classifier head). Argue that the per-coordinate bound $\le 1$ makes Adam *immune* to gradient explosions in a way that plain SGD is not.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Kingma, D. P., & Ba, J.** (2014). "Adam: A method for stochastic optimization". [arXiv:1412.6980](https://arxiv.org/abs/1412.6980) — Adam optimiser (3.5).
+  </FNItem>
+</Footnotes>

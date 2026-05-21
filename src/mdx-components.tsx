@@ -3,6 +3,7 @@ import type { MDXComponents } from "mdx/types";
 import { Aside } from "@/components/mdx/Aside";
 import { SelfTest } from "@/components/mdx/SelfTest";
 import { Figure } from "@/components/mdx/Figure";
+import { FN, FNItem, Footnotes } from "@/components/mdx/Footnotes";
 
 export function useMDXComponents(components: MDXComponents): MDXComponents {
   return {
@@ -10,5 +11,8 @@ export function useMDXComponents(components: MDXComponents): MDXComponents {
     Aside,
     SelfTest,
     Figure,
+    FN,
+    FNItem,
+    Footnotes,
   };
 }

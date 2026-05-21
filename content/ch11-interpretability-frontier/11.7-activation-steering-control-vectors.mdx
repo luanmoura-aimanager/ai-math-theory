@@ -13,7 +13,7 @@ Cap 11.6 ended with the SAE: a tool for recovering interpretable feature directi
 
 The answer turns out to be *yes, often dramatically*. **Activation steering** — adding a scalar multiple of a feature vector to the residual stream during inference — works as a direct control knob over identified features. The most famous demonstration is **Golden Gate Claude**: Anthropic took the SAE feature for "Golden Gate Bridge" found in Claude 3 Sonnet, multiplied it by a positive scalar, and added it to the residual stream during every forward pass. The resulting model believes it *is* the Golden Gate Bridge and weaves it into every response.
 
-This session derives the technique, places it in the activation-steering literature (Turner et al. 2023 and predecessors), and contrasts it with training-time alignment (RLHF, DPO).
+This session derives the technique, places it in the activation-steering literature (Turner et al. 2023 and predecessors)<FN n={2} />, and contrasts it with training-time alignment (RLHF, DPO).
 
 ---
 
@@ -57,11 +57,11 @@ The space of techniques.
 
 The cleanest source: a feature recovered by an SAE (Cap 11.6). Each SAE decoder column $W_d[:, i] \in \mathbb{R}^{d_\text{model}}$ *is* a feature direction with a known interpretation. Steering with $\alpha W_d[:, i]$ amplifies (or suppresses) that feature in the model's residual stream.
 
-Templeton et al.'s Golden Gate Claude was the canonical demo. The feature was an SAE decoder column found by their interpretability pipeline; steering it with a large positive $\alpha$ produced the Golden-Gate-obsessed behaviour.
+Templeton<FN n={1} /> et al.'s Golden Gate Claude was the canonical demo. The feature was an SAE decoder column found by their interpretability pipeline; steering it with a large positive $\alpha$ produced the Golden-Gate-obsessed behaviour.
 
 ### 3.2 Contrastive activations (CAA)
 
-An older, simpler technique (Rimsky et al., 2023, [arXiv:2312.06681](https://arxiv.org/abs/2312.06681)): no SAE needed.
+An older, simpler technique (Rimsky et al., 2023, [arXiv:2312.06681](https://arxiv.org/abs/2312.06681))<FN n={3} />: no SAE needed.
 
 1. Collect pairs of contrasting prompts (e.g., refusal vs. non-refusal of the same harmful request).
 2. Run the model on both, record residual-stream activations at the chosen layer.
@@ -227,3 +227,15 @@ Cap 11.8 next: the *emergent abilities* debate. Are capability jumps real or mea
 **(f)** A team wants to use steering for *safety*: detect harmful intent by monitoring a "harmful-intent" feature's activation. List two practical challenges that complicate this.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Templeton, A., Conerly, T., Marcus, J., et al.** (2024). "Scaling monosemanticity: Extracting interpretable features from Claude 3 Sonnet". *Transformer Circuits Thread.* [transformer-circuits.pub](https://transformer-circuits.pub/2024/scaling-monosemanticity/index.html) — Frontier-scale SAEs; Golden Gate Claude (11.6, 11.7).
+  </FNItem>
+  <FNItem n={2}>
+    **Turner, A., Thiergart, L., Udell, D., et al.** (2023). "Activation addition: Steering language models without optimization". [arXiv:2308.10248](https://arxiv.org/abs/2308.10248) — Activation steering (11.7).
+  </FNItem>
+  <FNItem n={3}>
+    **Rimsky, N., Gabrieli, N., Schulz, J., et al.** (2023). "Steering Llama 2 via contrastive activation addition". [arXiv:2312.06681](https://arxiv.org/abs/2312.06681) — CAA / contrastive steering (11.7). *Note:* the first author has since published under the name Panickssery, N.
+  </FNItem>
+</Footnotes>

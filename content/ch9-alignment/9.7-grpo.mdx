@@ -14,11 +14,11 @@ PPO ([9.6](/session/ch9-alignment/9.6-ppo)) is the workhorse of RLHF, but it car
 - **A value-function critic** $V_\phi(x)$ — usually a second LLM-sized network (or an extra head on the policy) that estimates the expected reward of a prompt. Trained jointly with the policy via a value-loss term. In LLM RLHF, the critic doubles the memory and adds a non-trivial training cost.
 - **Generalised Advantage Estimation (GAE)** — a weighted sum of temporal-difference errors used to compute the advantage $A_t$. Sensible for multi-step control, but LLM trajectories are *one shot* (generate the whole response, get one reward at the end), so most of GAE's machinery is overkill.
 
-**Shao, Wang, Zhu, et al., 2024, *DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models*** ([arXiv:2402.03300](https://arxiv.org/abs/2402.03300)) introduced **Group Relative Policy Optimization (GRPO)**: drop the critic entirely; compute the advantage by sampling $K$ completions per prompt and normalising rewards *within the group*. Same clipped surrogate as PPO, no value head, half the memory.
+**Shao, Wang, Zhu, et al., 2024<FN n={2} />, *DeepSeekMath: Pushing the Limits of Mathematical Reasoning in Open Language Models*** ([arXiv:2402.03300](https://arxiv.org/abs/2402.03300)) introduced **Group Relative Policy Optimization (GRPO)**: drop the critic entirely; compute the advantage by sampling $K$ completions per prompt and normalising rewards *within the group*. Same clipped surrogate as PPO, no value head, half the memory.
 
 GRPO is the algorithm behind **DeepSeek-Math**, **DeepSeek-V2-Math**, and **DeepSeek-R1** ([2025, arXiv:2501.12948](https://arxiv.org/abs/2501.12948)) — the reasoning models that prompted the "o1-style" inference-time-scaling era. Beyond DeepSeek, GRPO has been adopted broadly for reasoning-RL since 2024: it's simpler, more memory-efficient, and (empirically) at least competitive with PPO at reasoning tasks.
 
-This session: the GRPO advantage estimator, the loss function, the relationship to PPO, and the practical recipe.
+This session: the GRPO advantage estimator, the loss function, the relationship to PPO, and the practical recipe.<FN n={1} />
 
 ---
 
@@ -225,3 +225,12 @@ Three things:
 **(e)** Read [Shao et al., 2024](https://arxiv.org/abs/2402.03300) §4. Identify the empirical comparison between GRPO and PPO on math reasoning. What is the magnitude of the GRPO improvement, and at what cost?
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **DeepSeek-AI** (2025). "DeepSeek-R1: Incentivizing reasoning capability in LLMs via reinforcement learning". [arXiv:2501.12948](https://arxiv.org/abs/2501.12948) — R1 architecture inherits V3's MLA + MoE (referenced in 8.5; primary citation in Cap 9.7).
+  </FNItem>
+  <FNItem n={2}>
+    **Shao, Z., Wang, P., Zhu, Q., et al.** (2024). "DeepSeekMath: Pushing the limits of mathematical reasoning in open language models". [arXiv:2402.03300](https://arxiv.org/abs/2402.03300) — Group Relative Policy Optimization (GRPO) (9.7).
+  </FNItem>
+</Footnotes>

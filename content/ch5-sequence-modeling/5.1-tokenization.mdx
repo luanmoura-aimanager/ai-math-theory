@@ -17,7 +17,7 @@ Tokenisation is the only part of a modern LLM that is *not* itself a differentia
 - The **token efficiency** — how many tokens it takes to encode a typical sentence — directly determines training and inference cost, because cost scales with sequence length, not character count.
 - The **inductive bias** the tokeniser imposes determines what the model finds easy or hard. A tokeniser that splits numbers into individual digits makes arithmetic easier; one that lumps `12345` into a single token makes it almost impossible.
 
-This session derives **byte-pair encoding (BPE)** — the family of tokenisers used by GPT, LLaMA, Mistral, Claude, and essentially every production LLM since 2019 — and contrasts it with the two natural baselines (word-level and character-level).
+This session derives **byte-pair encoding (BPE)** — the family of tokenisers used by GPT, LLaMA, Mistral, Claude, and essentially every production LLM since 2019 — and contrasts it with the two natural baselines (word-level and character-level).<FN ns={[1, 2, 8]} />
 
 ---
 
@@ -50,7 +50,7 @@ We want a middle road: a vocabulary large enough that common words become single
 
 ## 3. Byte-pair encoding: the algorithm
 
-BPE was originally a 1994 *compression* algorithm (Gage). Sennrich, Haddow, and Birch (2016) repurposed it for neural machine translation, and it became the universal tokeniser for LLMs by 2019.
+BPE was originally a 1994 *compression* algorithm (Gage)<FN n={3} />. Sennrich, Haddow, and Birch (2016)<FN n={4} /> repurposed it for neural machine translation, and it became the universal tokeniser for LLMs by 2019.
 
 ### 3.1 The training algorithm
 
@@ -139,7 +139,7 @@ Encoding the unseen word *"lower"* after these three merges: by characters $\to$
 
 ### 5.1 Byte-level BPE (GPT-2 onward)
 
-If $\mathcal{V}_0$ is the set of 256 bytes (Radford et al., 2019), the tokeniser can represent *any* string of Unicode code points, in any language, with no out-of-vocabulary failure mode — every byte is in the base vocabulary. This is the standard for GPT, LLaMA, Mistral. Vocabularies for these models are typically 32k–128k.
+If $\mathcal{V}_0$ is the set of 256 bytes (Radford et al., 2019)<FN n={7} />, the tokeniser can represent *any* string of Unicode code points, in any language, with no out-of-vocabulary failure mode — every byte is in the base vocabulary. This is the standard for GPT, LLaMA, Mistral. Vocabularies for these models are typically 32k–128k.
 
 ### 5.2 WordPiece (BERT)
 
@@ -155,7 +155,7 @@ OpenAI's production BPE library, used for GPT-3.5/4 and several open weights. Im
 
 <Aside type="note">
 **The tokeniser is part of the model.** A BPE tokeniser is parameterised by its vocabulary and its ordered list of merge rules. Both are fixed-once artefacts that must travel with the model weights — you cannot tokenise a prompt for GPT-4 with the LLaMA tokeniser and get sensible results. Open-weight releases ship the tokeniser alongside the safetensors.
-</Aside>
+</Aside><FN ns={[5, 6, 9, 10, 12]} />
 
 ---
 
@@ -173,7 +173,7 @@ OpenAI's production BPE library, used for GPT-3.5/4 and several open weights. Im
 
 <Aside type="warning">
 **Don't measure prompt length in characters.** Every cost in an LLM (compute, memory, context budget) is measured in *tokens*. Use the model's own tokeniser to count, never a character-based heuristic. The conversion rate depends on the language, the domain, and even the specific tokeniser version.
-</Aside>
+</Aside><FN n={11} />
 
 ---
 
@@ -194,3 +194,42 @@ From this point on, "input to the model" means a sequence of integer token IDs $
 **(e)** A user's prompt is 400 English words and a 200-line Python script. Roughly estimate the token count using English $\approx 0.75$ tokens/word and code $\approx 3$ tokens/line. What does this imply about the cost of pasting a long code snippet versus a long natural-language prompt?
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Jurafsky, D., & Martin, J. H.** (2024). *Speech and Language Processing* (3rd ed., draft). — Canonical reference for tokenisation (5.1), n-grams and smoothing (5.4), and language-modeling fundamentals (5.3). [stanford.edu/~jurafsky/slp3](https://web.stanford.edu/~jurafsky/slp3/)
+  </FNItem>
+  <FNItem n={2}>
+    **Raschka, S.** (2024). *Build a Large Language Model (From Scratch).* Manning. — Chapter 2 on tokenisation (5.1) and the practitioner-level walk-through of BPE.
+  </FNItem>
+  <FNItem n={3}>
+    **Gage, P.** (1994). "A new algorithm for data compression". *The C Users Journal,* 12(2), 23–38. — Original BPE algorithm as a compression scheme (5.1).
+  </FNItem>
+  <FNItem n={4}>
+    **Sennrich, R., Haddow, B., & Birch, A.** (2016). "Neural machine translation of rare words with subword units". *ACL*. [arXiv:1508.07909](https://arxiv.org/abs/1508.07909) — Adapted BPE to neural sequence models; the paper that put BPE on the LLM map (5.1).
+  </FNItem>
+  <FNItem n={5}>
+    **Schuster, M., & Nakajima, K.** (2012). "Japanese and Korean voice search". *ICASSP*. — WordPiece tokeniser (used by BERT) (5.1 §5).
+  </FNItem>
+  <FNItem n={6}>
+    **Kudo, T., & Richardson, J.** (2018). "SentencePiece: A simple and language-independent subword tokenizer and detokenizer for neural text processing". [arXiv:1808.06226](https://arxiv.org/abs/1808.06226) — SentencePiece tokeniser (LLaMA, T5) (5.1 §5).
+  </FNItem>
+  <FNItem n={7}>
+    **Radford, A., Wu, J., Child, R., et al.** (2019). "Language models are unsupervised multitask learners". OpenAI technical report. — GPT-2 and the introduction of byte-level BPE (5.1 §5).
+  </FNItem>
+  <FNItem n={8}>
+    **Manning, C., et al.** *CS224N: Natural Language Processing with Deep Learning.* Stanford. — Lectures on subword tokenisation and language modelling (5.1, 5.3).
+  </FNItem>
+  <FNItem n={9}>
+    **Shazeer, N.** (2019). "Fast transformer decoding: One write-head is all you need" (Multi-Query Attention). [arXiv:1911.02150](https://arxiv.org/abs/1911.02150) — MQA: share K, V across heads to shrink the KV cache (6.14 §5.1).
+  </FNItem>
+  <FNItem n={10}>
+    **Ainslie, J., Lee-Thorp, J., de Jong, M., et al.** (2023). "GQA: Training generalized multi-query transformer models from multi-head checkpoints". [arXiv:2305.13245](https://arxiv.org/abs/2305.13245) — Grouped-query attention; the modern default in LLaMA-2-70B, LLaMA-3, Mistral, Qwen (6.14 §5.1; full treatment Cap 8.3).
+  </FNItem>
+  <FNItem n={11}>
+    **Liu, H., Zaharia, M., & Abbeel, P.** (2023). "Ring Attention with blockwise transformers for near-infinite context". [arXiv:2310.01889](https://arxiv.org/abs/2310.01889) — Context parallelism for 1M+ context training (7.9 §6, 7.13 §5.1).
+  </FNItem>
+  <FNItem n={12}>
+    **Dao, T., & Gu, A.** (2024). "Transformers are SSMs: Generalized models and efficient algorithms through structured state space duality" (Mamba-2). [arXiv:2405.21060](https://arxiv.org/abs/2405.21060) — SSM-attention duality; Mamba-2 architecture (8.7 §5.1).
+  </FNItem>
+</Footnotes>

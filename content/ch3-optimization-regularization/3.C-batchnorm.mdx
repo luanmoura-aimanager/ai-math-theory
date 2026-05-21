@@ -16,7 +16,7 @@ prerequisites: ["ch2-mlps-backprop/2.10-weight-initialization"]
 
 ## 1. Why this session exists
 
-Batch Normalization (Ioffe & Szegedy, 2015) was, with ReLU + He init + Adam, one of the four pillars that made deep networks routinely trainable to 100+ layers around 2015. The idea: normalise each layer's pre-activations to zero mean and unit variance over the current mini-batch, then learn an affine transformation to undo the normalisation if it helps.
+Batch Normalization (Ioffe & Szegedy, 2015)<FN n={1} /> was, with ReLU + He init + Adam, one of the four pillars that made deep networks routinely trainable to 100+ layers around 2015. The idea: normalise each layer's pre-activations to zero mean and unit variance over the current mini-batch, then learn an affine transformation to undo the normalisation if it helps.
 
 This session does the math: the forward pass exactly, the affine, the test-time EMA, and a brief look at the backward pass (which is where many bugs live).
 
@@ -161,3 +161,9 @@ BN is not used in modern Transformers — LayerNorm is. See 3.11 for why.
 **(d)** For a 1D-CNN classifier on spectroscopic data ($B$ samples, $C$ channels, $L$ spectral positions), would BN be applied per spectral coordinate, per channel, or globally? Sketch the operation and the shapes of $\mu_\mathcal{B}, \sigma_\mathcal{B}^2, \gamma, \beta$.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Ioffe, S., & Szegedy, C.** (2015). "Batch normalization: Accelerating deep network training by reducing internal covariate shift". *ICML*. [arXiv:1502.03167](https://arxiv.org/abs/1502.03167) — BatchNorm (Appendix 3.C).
+  </FNItem>
+</Footnotes>

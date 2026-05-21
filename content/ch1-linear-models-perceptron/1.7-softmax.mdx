@@ -14,7 +14,7 @@ The sigmoid (1.2) handled $y \in \{0, 1\}$. For $y \in \{1, \dots, K\}$ we need 
 - The natural multinomial extension of the sigmoid (this session).
 - The MLE of a multinomial-logit observation model (this session).
 - The output head of essentially every modern classifier and language model (Chapters 5–8).
-- The gradient sink with the cleanest backward pass in all of deep learning, $\partial L / \partial z = \hat y - y$, generalising 1.2 — the topic of 1.8.
+- The gradient sink with the cleanest backward pass in all of deep learning, $\partial L / \partial z = \hat y - y$, generalising 1.2 — the topic of 1.8.<FN n={1} />
 
 ---
 
@@ -152,3 +152,9 @@ In practice the model is misspecified (the world is not log-linear in the raw fe
 **(d)** Show that as the inverse temperature $\beta \to \infty$, $\operatorname{softmax}(\beta z)_k \to \mathbb{1}[k = \arg\max_j z_j]$. What is the role of $\beta$ if you instead want to *sample* from the model?
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Bishop, C. M.** (2006). *Pattern Recognition and Machine Learning.* Springer. — Linear regression (1.1), logistic regression (1.2–1.3), softmax (1.7), MAP / Gaussian priors.
+  </FNItem>
+</Footnotes>

@@ -96,7 +96,7 @@ Three reasons, in increasing order of structural depth.
 
 **(b) Causal attention is exactly the inductive bias of generation.** A generative model defines $p_\theta(t_{1:T}) = \prod_t p_\theta(t_t \mid t_{<t})$ — strictly causal. A bidirectional encoder, by construction, lets every position attend to every other; using such a model to *generate* requires either (i) running it as a *prefix-LM* with a triangular mask at decode time (which is exactly equivalent to using a decoder), or (ii) using a separate decoder stack with cross-attention (encoder-decoder). The first reduces to decoder-only with extra training mismatch; the second doubles the parameter count.
 
-**(c) Scaling-law observation.** Wang et al. (2022, "What language model architecture and pretraining objective work best for zero-shot generalization?", arXiv:2204.05832) ran the systematic study: at fixed compute, decoder-only with causal LM beats encoder-only with MLM and beats encoder-decoder with span corruption on zero-shot generative tasks. Encoder-decoder closes the gap with *multitask finetuning*, but decoder-only is the winner under the GPT-3 recipe of "pretrain on next-token prediction, then prompt." Empirically: every frontier generative LLM since 2020 is decoder-only.
+**(c) Scaling-law observation.** Wang et al. (2022<FN n={1} />, "What language model architecture and pretraining objective work best for zero-shot generalization?", arXiv:2204.05832) ran the systematic study: at fixed compute, decoder-only with causal LM beats encoder-only with MLM and beats encoder-decoder with span corruption on zero-shot generative tasks. Encoder-decoder closes the gap with *multitask finetuning*, but decoder-only is the winner under the GPT-3 recipe of "pretrain on next-token prediction, then prompt." Empirically: every frontier generative LLM since 2020 is decoder-only.
 
 <Aside type="history">
 **The post-BERT generation gap.** From late 2018 (BERT release) through early 2020 (GPT-3 release), the consensus was that encoder-only models were "better than" decoder-only models for *understanding* and that decoders were a separate, less-studied lineage. GPT-2 (2019) was widely seen as a curiosity. The GPT-3 paper inverted the consensus by showing that *enough* decoder-only LM pretraining produces in-context learning, and the encoder-only line was relegated to embeddings and retrieval (where it still dominates — see §8.2). The lesson, in retrospect, is that the choice of pretraining objective dominates the choice of architecture: next-token prediction at scale is what produces generative capability, and the architecture is the one that supports it cleanly.
@@ -221,3 +221,9 @@ The next two sessions name the two alternatives the field considered and dropped
 **(f)** Sketch the 2026 block diagram of §6 in your own notation. For each sub-module listed in the table, name the session in Chapter 6, 7, or 8 where that choice is justified.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Wang, T., Roberts, A., Hesslow, D., et al.** (2022). "What language model architecture and pretraining objective work best for zero-shot generalization?". [arXiv:2204.05832](https://arxiv.org/abs/2204.05832) — Decoder-only-causal vs encoder-only-MLM vs encoder-decoder-span comparison (8.1 §4, 8.2 §3).
+  </FNItem>
+</Footnotes>

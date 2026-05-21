@@ -333,7 +333,7 @@ After reading the file, the punchline is: **the entire GPT-2-class model fits in
 Read the file once with this table open. Read it a second time without the table. By the third pass you should be able to write the four classes from memory.
 
 <Aside type="note">
-**Karpathy's "Let's build GPT" lecture.** The pair lecture to this code is [Karpathy's YouTube lecture](https://www.youtube.com/watch?v=kCc8FmEb1nY) "Let's build GPT: from scratch, in code, spelled out" (2023). It walks through building a similar model from a blank notebook. Watching it after this session is the strongest possible reinforcement — you'll see Karpathy derive the same equations we have, and arrive at the same code. ~2 hours, worth every minute.
+**Karpathy's<FN n={1} /> "Let's build GPT" lecture.** The pair lecture to this code is [Karpathy's<FN n={2} /> YouTube lecture](https://www.youtube.com/watch?v=kCc8FmEb1nY) "Let's build GPT: from scratch, in code, spelled out" (2023). It walks through building a similar model from a blank notebook. Watching it after this session is the strongest possible reinforcement — you'll see Karpathy derive the same equations we have, and arrive at the same code. ~2 hours, worth every minute.
 </Aside>
 
 ---
@@ -363,3 +363,12 @@ Appendices 6.A and 6.B cover the two **historical** positional encodings — sin
 **(e)** `GPT.generate` does *not* use a KV cache: it re-runs the full forward pass on every new token. Estimate the cost of generating 200 tokens after a 2k prompt (in FLOPs) versus the same generation with a KV cache. Use [6.12](/session/ch6-attention-transformer/6.12-compute-and-memory)'s per-token formula.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Karpathy, A.** "Let's build GPT: from scratch, in code, spelled out". [YouTube](https://www.youtube.com/watch?v=kCc8FmEb1nY); part of the Zero-to-Hero series at [karpathy.ai](https://karpathy.ai/zero-to-hero.html) — Live coding of a Transformer; pairs directly with 6.15–6.16.
+  </FNItem>
+  <FNItem n={2}>
+    **Karpathy, A.** *nanoGPT.* [github.com/karpathy/nanoGPT](https://github.com/karpathy/nanoGPT) — Reference implementation walked through line-by-line in 6.16.
+  </FNItem>
+</Footnotes>

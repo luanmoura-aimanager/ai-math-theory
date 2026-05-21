@@ -17,7 +17,7 @@ But naive batching ("static batching" — collect $B$ requests, run them as one 
 2. **Variable response length.** Even with identical prompts, responses can range from $1$ token (a yes/no) to $30{,}000$ tokens (a reasoning chain — Cap 10.7). When request $i$ finishes early, the GPU continues decoding for the other batch members; the $i$-th slot is *idle*.
 3. **KV cache fragmentation.** Each sequence's KV cache is allocated at maximum context length up-front. Most allocations are mostly wasted (a sequence that uses $200$ tokens still pre-allocates $4{\rm k}$ or $32{\rm k}$ worth of cache).
 
-Continuous batching ([Yu et al., Orca, 2022](https://www.usenix.org/system/files/osdi22-yu.pdf)) fixes (1) and (2). PagedAttention ([Kwon et al., vLLM, 2023, arXiv:2309.06180](https://arxiv.org/abs/2309.06180)) fixes (3). Together, in the open-source vLLM stack and its commercial counterparts (TensorRT-LLM, TGI), they deliver $5$–$24\times$ higher throughput than naive static batching — the largest single optimisation in the LLM serving stack.
+Continuous batching ([Yu et al., Orca, 2022<FN n={2} />](https://www.usenix.org/system/files/osdi22-yu.pdf)) fixes (1) and (2). PagedAttention ([Kwon et al., vLLM, 2023<FN n={1} />, arXiv:2309.06180](https://arxiv.org/abs/2309.06180)) fixes (3). Together, in the open-source vLLM stack and its commercial counterparts (TensorRT-LLM, TGI), they deliver $5$–$24\times$ higher throughput than naive static batching — the largest single optimisation in the LLM serving stack.
 
 This session does both.
 
@@ -232,3 +232,12 @@ Cap 10.9 closes the chapter on *agentic decoding patterns* — self-consistency,
 **(f)** A reasoning model emits responses of $30{\rm k}$ tokens. State two ways this stresses the serving stack compared to a chat model with $500$-token responses.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Kwon, W., Li, Z., Zhuang, S., et al.** (2023). "Efficient memory management for large language model serving with PagedAttention" (vLLM). [arXiv:2309.06180](https://arxiv.org/abs/2309.06180) — OS-style paging for the KV cache (6.14 §6; full treatment Cap 10.8).
+  </FNItem>
+  <FNItem n={2}>
+    **Yu, G.-I., Jeong, J. S., Kim, G.-W., et al.** (2022). "Orca: A distributed serving system for transformer-based generative models". *OSDI 2022*. [usenix.org](https://www.usenix.org/system/files/osdi22-yu.pdf) — Iteration-level scheduling / continuous batching (10.8).
+  </FNItem>
+</Footnotes>

@@ -122,7 +122,7 @@ $$
 The $\hat y (1 - \hat y)$ in the denominator of the first factor cancels exactly with the sigmoid derivative — the same cancellation we'll see again with softmax + cross-entropy in 1.8. **This is the reason we pair sigmoid with BCE** (and softmax with CE): the gradient at the pre-activation has no $\sigma'$ tail to amplify or shrink. Compare with pairing sigmoid + MSE, which leaves a $\sigma' = \sigma(1 - \sigma) \in (0, 1/4]$ multiplier and creates a vanishing-gradient pathology when the model is confident.
 
 <Aside type="note">
-This identity — the gradient of BCE at the pre-activation reducing to $\hat y - y$ — is the classical motivation for pairing sigmoid with BCE rather than MSE. It first appears in this exact form in the early neural-network literature; see Bishop, *PRML* (2006) §4.3.2 for the textbook derivation in the notation closest to ours.
+This identity — the gradient of BCE at the pre-activation reducing to $\hat y - y$ — is the classical motivation for pairing sigmoid with BCE rather than MSE. It first appears in this exact form in the early neural-network literature; see Bishop, *PRML* (2006)<FN n={1} /> §4.3.2 for the textbook derivation in the notation closest to ours.
 </Aside>
 
 ---
@@ -154,3 +154,9 @@ This is the geometric handle we'll formalise in 1.4 (separating hyperplane, marg
 **(d)** Why would pairing sigmoid with squared-error loss $\tfrac{1}{2}(\hat y - y)^2$ be worse? Compute $\partial L / \partial z$ for that pairing and explain when the gradient vanishes.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Bishop, C. M.** (2006). *Pattern Recognition and Machine Learning.* Springer. — Linear regression (1.1), logistic regression (1.2–1.3), softmax (1.7), MAP / Gaussian priors.
+  </FNItem>
+</Footnotes>

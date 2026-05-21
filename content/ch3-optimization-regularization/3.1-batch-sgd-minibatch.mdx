@@ -29,7 +29,7 @@ $$
 \nabla L(\theta) = \frac{1}{N} \sum_{i=1}^N \nabla \ell_i(\theta) =: \frac{1}{N} \sum_{i=1}^N g_i.
 $$
 
-Call $g_i := \nabla \ell_i(\theta)$ the *per-example gradient*. Then $\nabla L = \bar g$, the population mean of the $g_i$'s. Every estimator we write next is some attempt at $\bar g$.
+Call $g_i := \nabla \ell_i(\theta)$ the *per-example gradient*. Then $\nabla L = \bar g$, the population mean of the $g_i$'s. Every estimator we write next is some attempt at $\bar g$.<FN n={3} />
 
 ---
 
@@ -57,7 +57,7 @@ $$
 \hat g^{\text{mb}} = \frac{1}{B} \sum_{i \in \mathcal{B}} g_i.
 $$
 
-Memory and compute scale linearly with $B$; noise scales as $1 / \sqrt{B}$ (we'll prove this in §4). For $B = 32$ to $2048$ on a GPU, mini-batch GD is what every modern trainer actually runs.
+Memory and compute scale linearly with $B$; noise scales as $1 / \sqrt{B}$ (we'll prove this in §4). For $B = 32$ to $2048$ on a GPU, mini-batch GD is what every modern trainer actually runs.<FN ns={[1, 2, 4, 5]} />
 
 ---
 
@@ -156,3 +156,21 @@ The convention we will follow: "training for $T$ steps with batch $B$" is unambi
 **(d)** Empirically, you sometimes see "linear scaling rule": when you multiply batch $B$ by $k$, also multiply learning rate $\alpha$ by $k$. Argue (informally) that this keeps the *per-epoch* parameter trajectory roughly invariant: write the expected change in $\theta$ after one epoch and show it is approximately the same.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Barbaresi, A.** (2021). "Trafilatura: a web scraping library and command-line tool for text discovery and extraction". *ACL System Demonstrations*. [aclanthology.org/2021.acl-demo.15](https://aclanthology.org/2021.acl-demo.15) — Reference HTML→text extractor (7.1 §3.1).
+  </FNItem>
+  <FNItem n={2}>
+    **Child, R., Gray, S., Radford, A., & Sutskever, I.** (2019). "Generating long sequences with sparse transformers". [arXiv:1904.10509](https://arxiv.org/abs/1904.10509) — Sparse Transformer's alternating sparse-dense pattern; used in GPT-3 (7.14 §3.1).
+  </FNItem>
+  <FNItem n={3}>
+    **Radford, A., Wu, J., Child, R., et al.** (2019). "Language models are unsupervised multitask learners" (GPT-2). OpenAI technical report. — Pre-LN block, modified init, reversible tokenization referenced by GPT-3 §2.1 (7.14 §3.1).
+  </FNItem>
+  <FNItem n={4}>
+    **Fedus, W., Zoph, B., & Shazeer, N.** (2021). "Switch Transformer: Scaling to trillion parameter models with simple and efficient sparsity". [arXiv:2101.03961](https://arxiv.org/abs/2101.03961) — Top-1 routing; standard auxiliary loss formulation (8.6 §3.1).
+  </FNItem>
+  <FNItem n={5}>
+    **Gu, A., Goel, K., & Ré, C.** (2022). "Efficiently modeling long sequences with structured state spaces" (S4). [arXiv:2111.00396](https://arxiv.org/abs/2111.00396) — Structured (diagonal-plus-low-rank) $A$ for efficient long-sequence SSM (8.7 §3.1).
+  </FNItem>
+</Footnotes>

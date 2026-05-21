@@ -13,7 +13,7 @@ A single attention head produces *one* attention pattern per query: each query d
 
 **Multi-head attention (MHA)** is the architectural fix: run $h$ copies of the scaled dot-product attention of [6.2](/session/ch6-attention-transformer/6.2-scaled-dot-product-attention) **in parallel**, each on its own subspace of size $d/h$, then concatenate and project. Each head produces its own attention pattern, so the layer outputs $h$ independent mixtures of values per token.
 
-The derivation in §2 is mechanical; the *interpretation* in §4 is what makes the design memorable. The whole construction is one of the cleanest "trivial-looking trick that matters" moves in deep learning history.
+The derivation in §2 is mechanical; the *interpretation* in §4 is what makes the design memorable. The whole construction is one of the cleanest "trivial-looking trick that matters" moves in deep learning history.<FN ns={[2, 3, 4, 6]} />
 
 ---
 
@@ -86,7 +86,7 @@ Empirical work since the original paper has shown that, in trained Transformers,
 
 - Some heads attend to the immediately previous token (a "shift" pattern, useful for n-gram-like statistics).
 - Some attend to syntactic dependencies — e.g. the head of a noun phrase.
-- Some implement **induction heads** (Olsson et al., 2022), which copy a previous occurrence of the current token's "successor" — the building block of in-context learning.
+- Some implement **induction heads** (Olsson et al., 2022)<FN n={5} />, which copy a previous occurrence of the current token's "successor" — the building block of in-context learning.
 - Some attend uniformly (a "do nothing" head).
 - Some attend to a `[BOS]` token as a no-op sink.
 
@@ -147,4 +147,25 @@ We have specified *what* attention computes; the remaining sessions in Part 1 sp
 
 **(e)** For LLaMA 70B ($d = 8192, h = 64, d_h = 128$), compute the parameter count of one MHA sub-layer (4 weight matrices, no biases). Compare with one FFN sub-layer of the same model assuming $d_\text{ff} = 4 d$ (we'll formalise this in 6.8).
 
-</SelfTest>
+</SelfTest><FN n={1} />
+
+<Footnotes>
+  <FNItem n={1}>
+    **Goodfellow, I., Bengio, Y., & Courville, A.** (2016). *Deep Learning.* MIT Press. — General reference for Chapter 2; specifically §6 (deep feed-forward networks), §8 (optimization), §6.4 (UAT). [deeplearningbook.org](https://www.deeplearningbook.org/)
+  </FNItem>
+  <FNItem n={2}>
+    **Prince, S. J. D.** (2023). *Understanding Deep Learning,* §12 (Sequence-to-Sequence Models) and §13 (Transformers). MIT Press. — Attention as soft lookup (6.1), scaled dot-product attention (6.2), multi-head attention (6.4).
+  </FNItem>
+  <FNItem n={3}>
+    **Raschka, S.** (2024). *Build a Large Language Model (From Scratch),* Chapters 3–4. Manning. — Self-attention implementation (6.3, 6.4), causal masking (6.5), pre-norm block (6.10–6.11).
+  </FNItem>
+  <FNItem n={4}>
+    **Vaswani, A., Shazeer, N., Parmar, N., et al.** (2017). "Attention is all you need". *NeurIPS*. [arXiv:1706.03762](https://arxiv.org/abs/1706.03762) — The Transformer paper. Scaled dot-product attention (6.2), multi-head attention (6.4), encoder–decoder cross-attention (6.3), sinusoidal positional encoding (Appendix 6.A), the FFN sub-layer (6.8), post-LN block diagram (6.10), full architecture read (6.11).
+  </FNItem>
+  <FNItem n={5}>
+    **Olsson, C., Elhage, N., Nanda, N., et al.** (2022). "In-context learning and induction heads". Anthropic. [transformer-circuits.pub](https://transformer-circuits.pub/2022/in-context-learning-and-induction-heads/index.html) — Induction heads as the mechanism behind in-context learning (6.4 §4); residual-stream view (6.11 §4).
+  </FNItem>
+  <FNItem n={6}>
+    **Alammar, J.** (2018). "The illustrated Transformer". [jalammar.github.io](https://jalammar.github.io/illustrated-transformer/) — Canonical visual walkthrough (6.4, 6.8).
+  </FNItem>
+</Footnotes>

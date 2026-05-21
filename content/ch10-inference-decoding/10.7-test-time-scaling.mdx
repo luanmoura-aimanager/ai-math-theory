@@ -15,7 +15,7 @@ Starting in mid-2024, a different lever emerged. Spending more compute *at infer
 
 The first public demonstration was OpenAI's **o1** (September 2024); followed by **DeepSeek-R1** ([2025, arXiv:2501.12948](https://arxiv.org/abs/2501.12948)), which is fully open-source and has a published recipe; followed by Anthropic's **Claude 3.7 / Claude 4 with extended thinking** ([2025](https://www.anthropic.com/news/claude-3-7-sonnet)); followed by Google's **Gemini Thinking** ([2025](https://deepmind.google/technologies/gemini/)). All four families build on the same conceptual frame: **train the model to reason before answering** (Chapter 9: SFT on chains-of-thought, then RL with verifiable rewards — GRPO), **then at inference, let it spend tokens on that reasoning**.
 
-This session traces the line from chain-of-thought prompting through STaR to o1/R1, states the inference-time scaling law that justifies the whole approach, and closes with the cost-quality trade-off vs. training-time scaling.
+This session traces the line from chain-of-thought prompting through STaR to o1/R1, states the inference-time scaling law that justifies the whole approach, and closes with the cost-quality trade-off vs. training-time scaling.<FN n={4} />
 
 ---
 
@@ -100,7 +100,7 @@ The model can also choose to "stop thinking" early if it has converged. In pract
 
 ## 5. Inference-time scaling laws
 
-Snell, Lee, Xu, Kumar (2024, [arXiv:2408.03314](https://arxiv.org/abs/2408.03314)) — *Scaling LLM Test-Time Compute Optimally Can Be More Effective than Scaling Model Parameters* — characterised the empirical regularity:
+Snell, Lee, Xu, Kumar (2024<FN n={5} />, [arXiv:2408.03314](https://arxiv.org/abs/2408.03314)) — *Scaling LLM Test-Time Compute Optimally Can Be More Effective than Scaling Model Parameters* — characterised the empirical regularity:
 
 $$
 \boxed{\;\text{accuracy}(C_\text{inf}) \;\approx\; a + b \log C_\text{inf}\;}
@@ -179,7 +179,7 @@ A few open questions as of 2026.
 
 The mechanistic interpretability picture (Chapter 11) is incomplete for reasoning models. The thinking tokens *appear* to do real computation — there's strong empirical evidence that *the contents of the chain causally affect the answer* (ablations show large accuracy drops if you replace the chain with noise of the same length). But the chain is also partly *performative* — the model has been trained to emit reasoning, and some fraction of the chain is the model "showing its work" for the reward model rather than actually computing.
 
-A key question: how much of the chain is genuine computation, and how much is verbal performance? Recent work (Lanham et al., 2023, [arXiv:2307.13702](https://arxiv.org/abs/2307.13702); Turpin et al., 2023, [arXiv:2305.04388](https://arxiv.org/abs/2305.04388)) found that for some models, the *final answer is the same* whether the reasoning chain is correct or replaced with plausible-looking garbage. The reasoning trace is partly post-hoc rationalisation. For o1/R1-family models trained with outcome rewards, this is less true — the chain is more causally relevant — but the question is open at the frontier.
+A key question: how much of the chain is genuine computation, and how much is verbal performance? Recent work (Lanham et al., 2023, [arXiv:2307.13702](https://arxiv.org/abs/2307.13702)<FN n={6} />; Turpin et al., 2023<FN n={7} />, [arXiv:2305.04388](https://arxiv.org/abs/2305.04388)) found that for some models, the *final answer is the same* whether the reasoning chain is correct or replaced with plausible-looking garbage. The reasoning trace is partly post-hoc rationalisation. For o1/R1-family models trained with outcome rewards, this is less true — the chain is more causally relevant — but the question is open at the frontier.
 
 ### 7.2 Are there scaling-law limits?
 
@@ -195,7 +195,7 @@ Reasoning + tool use ([10.9](/session/ch10-inference-decoding/10.9-agentic-decod
 
 Three things.
 
-1. **The CoT-to-reasoning-model line.** Chain-of-thought prompting (Wei 2022) → self-consistency sampling (Wang 2022) → STaR self-bootstrapping (Zelikman 2022) → o1 / R1 with GRPO on verifiable rewards (2024–2025). Each step extended the previous: more reasoning training, more inference compute.
+1. **The CoT-to-reasoning-model line.** Chain-of-thought prompting (Wei 2022)<FN n={1} /> → self-consistency sampling (Wang 2022)<FN n={2} /> → STaR self-bootstrapping (Zelikman 2022)<FN n={3} /> → o1 / R1 with GRPO on verifiable rewards (2024–2025). Each step extended the previous: more reasoning training, more inference compute.
 2. **Inference-time scaling law:** $\text{accuracy} \approx a + b \log C_\text{inf}$. Sequential CoT and parallel BoN are different "spend" mechanisms; sequential wins on compounding-reasoning tasks, parallel wins where a verifier is sharper than the model. For medium-hard tasks, $10\times$ inference compute matches $10\times$ training compute.
 3. **Production reality.** Reasoning models are slow, expensive per query, and require deployment infrastructure that handles long-form generation (continuous batching — Cap 10.8 — is essential). They are also the most important deployment-side capability gain of 2024–2025 and the dominant architecture for hard-reasoning use cases by 2026.
 
@@ -216,3 +216,27 @@ Cap 10.8 next: *continuous batching and PagedAttention*. Reasoning models stress
 **(f)** A team has $10^{25}$ FLOPs to spend. They can either pretrain a $670$B dense model or pretrain a $70$B model and add a GRPO reasoning stage. State two factors that determine which choice is more economical at deployment.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Wei, J., Wang, X., Schuurmans, D., et al.** (2022). "Chain-of-thought prompting elicits reasoning in large language models". [arXiv:2201.11903](https://arxiv.org/abs/2201.11903) — Chain-of-thought (10.7, 10.9).
+  </FNItem>
+  <FNItem n={2}>
+    **Wang, X., Wei, J., Schuurmans, D., et al.** (2022). "Self-consistency improves chain of thought reasoning in language models". [arXiv:2203.11171](https://arxiv.org/abs/2203.11171) — Self-consistency / majority vote over reasoning chains (10.7, 10.9).
+  </FNItem>
+  <FNItem n={3}>
+    **Zelikman, E., Wu, Y., Mu, J., & Goodman, N.** (2022). "STaR: Bootstrapping reasoning with reasoning". [arXiv:2203.14465](https://arxiv.org/abs/2203.14465) — Self-bootstrapping reasoning training (10.7).
+  </FNItem>
+  <FNItem n={4}>
+    **DeepSeek-AI** (2025). "DeepSeek-R1: Incentivizing reasoning capability in LLMs via reinforcement learning". [arXiv:2501.12948](https://arxiv.org/abs/2501.12948) — R1 / R1-Zero reasoning-model recipe (10.7).
+  </FNItem>
+  <FNItem n={5}>
+    **Snell, C., Lee, J., Xu, K., & Kumar, A.** (2024). "Scaling LLM test-time compute optimally can be more effective than scaling model parameters". [arXiv:2408.03314](https://arxiv.org/abs/2408.03314) — Inference-time scaling laws (10.7).
+  </FNItem>
+  <FNItem n={6}>
+    **Lanham, T., Chen, A., Radhakrishnan, A., et al.** (2023). "Measuring faithfulness in chain-of-thought reasoning". [arXiv:2307.13702](https://arxiv.org/abs/2307.13702) — Faithfulness of CoT (10.7, 11.9).
+  </FNItem>
+  <FNItem n={7}>
+    **Turpin, M., Michael, J., Perez, E., & Bowman, S.** (2023). "Language models don't always say what they think". [arXiv:2305.04388](https://arxiv.org/abs/2305.04388) — Performative vs faithful chains (10.7, 11.9).
+  </FNItem>
+</Footnotes>

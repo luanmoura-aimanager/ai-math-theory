@@ -16,7 +16,7 @@ The fix is the **causal mask**: a one-line modification of the score matrix that
 This session does two things:
 
 1. Define the causal mask and write it inside the scaled dot-product formula.
-2. Explain why we add to the *pre-softmax scores* rather than zeroing out *post-softmax weights*.
+2. Explain why we add to the *pre-softmax scores* rather than zeroing out *post-softmax weights*.<FN ns={[1, 2]} />
 
 ---
 
@@ -148,3 +148,12 @@ From this point on, "self-attention in a decoder-only LLM" means this masked for
 **(e)** Construct the additive mask $M$ for a sliding-window attention with window $w = 4$ and sequence length $T = 8$. Confirm that the mask is sparse (most entries are $-\infty$) and that attention cost drops from $O(T^2) = 64$ entries to $O(T w) = 32$ entries.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Raschka, S.** (2024). *Build a Large Language Model (From Scratch),* Chapters 3–4. Manning. — Self-attention implementation (6.3, 6.4), causal masking (6.5), pre-norm block (6.10–6.11).
+  </FNItem>
+  <FNItem n={2}>
+    **Radford, A., Narasimhan, K., Salimans, T., & Sutskever, I.** (2018). "Improving language understanding by generative pre-training" (GPT-1). OpenAI technical report. — Decoder-only Transformer with causal self-attention (6.3, 6.5); first use of learned PE (Appendix 6.B).
+  </FNItem>
+</Footnotes>

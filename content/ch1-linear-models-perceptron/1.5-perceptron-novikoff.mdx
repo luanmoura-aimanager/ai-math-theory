@@ -9,7 +9,7 @@ prerequisites: ["ch1-linear-models-perceptron/1.4-separating-hyperplane"]
 
 ## 1. Why this session exists
 
-The **perceptron** (Rosenblatt, 1958) is the first training algorithm for a linear classifier, predating gradient descent on smooth losses. It is also the first algorithm in this course we can prove a clean convergence theorem about. The proof — due to **Novikoff** (1962) — is a one-page induction using the geometric quantities from 1.4. After we have it, every later statement about neural-network training will be measured against this baseline.
+The **perceptron** (Rosenblatt, 1958)<FN n={1} /> is the first training algorithm for a linear classifier, predating gradient descent on smooth losses. It is also the first algorithm in this course we can prove a clean convergence theorem about. The proof — due to **Novikoff** (1962)<FN n={2} /> — is a one-page induction using the geometric quantities from 1.4. After we have it, every later statement about neural-network training will be measured against this baseline.
 
 ---
 
@@ -183,3 +183,12 @@ Both examples now score $+2 > 0$. Done. Two mistakes total, exactly hitting the 
 **(d)** Modify the rule to weight updates by a learning rate $\alpha > 0$: $w_{k+1} = w_k + \alpha\, y_i\, x_i$. Does Novikoff's bound still hold? Does $\alpha$ appear in the final answer?
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Rosenblatt, F.** (1958). "The perceptron: A probabilistic model for information storage and organization in the brain". *Psychological Review*, 65, 386–408. — Perceptron model (1.5).
+  </FNItem>
+  <FNItem n={2}>
+    **Novikoff, A. B. J.** (1962). "On convergence proofs on perceptrons". *Symposium on the Mathematical Theory of Automata*, 12, 615–622. — Mistake bound for the perceptron (1.5).
+  </FNItem>
+</Footnotes>

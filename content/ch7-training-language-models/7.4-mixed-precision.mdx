@@ -15,7 +15,7 @@ The fix is **mixed precision**: compute *most* of the forward and backward passe
 
 Two flavours dominate:
 
-- **fp16 mixed precision** (NVIDIA Apex AMP, "fp16"). Original Micikevicius et al. (2017) recipe. Needs *loss scaling* — multiply the loss by a large constant before backward, divide gradients back at the end — to prevent activation/gradient underflow.
+- **fp16 mixed precision** (NVIDIA Apex AMP, "fp16"). Original Micikevicius et al. (2017)<FN n={1} /> recipe. Needs *loss scaling* — multiply the loss by a large constant before backward, divide gradients back at the end — to prevent activation/gradient underflow.
 - **bf16 mixed precision** ("bfloat16"). Google's TPU-native format. Same exponent range as fp32; no loss scaling needed. The modern default.
 
 This session derives both, motivates each design choice from the IEEE-754 number-representation bits, and arrives at the mixed-precision recipe that every modern pretraining script uses.
@@ -41,7 +41,7 @@ The key intuition: **fp16 underflows easily, bf16 doesn't**. This single fact dr
 
 ### 2.1 Why bf16 was designed
 
-Google introduced bfloat16 in 2017 ([Wang & Kanwar, 2019, *BFloat16: the secret to high performance on Cloud TPUs*](https://cloud.google.com/blog/products/ai-machine-learning/bfloat16-the-secret-to-high-performance-on-cloud-tpus)) specifically for deep-learning workloads. The observation: in DL training, *dynamic range* matters more than precision. Activation values span many orders of magnitude (small attention logits, large vocabulary logits, tiny gradients deep in the stack), and underflow truncates them to zero — an irrecoverable error. Imprecision, on the other hand, manifests as small noise on each parameter update, which often *helps* generalisation.
+Google introduced bfloat16 in 2017 ([Wang & Kanwar, 2019<FN n={2} />, *BFloat16: the secret to high performance on Cloud TPUs*](https://cloud.google.com/blog/products/ai-machine-learning/bfloat16-the-secret-to-high-performance-on-cloud-tpus)) specifically for deep-learning workloads. The observation: in DL training, *dynamic range* matters more than precision. Activation values span many orders of magnitude (small attention logits, large vocabulary logits, tiny gradients deep in the stack), and underflow truncates them to zero — an irrecoverable error. Imprecision, on the other hand, manifests as small noise on each parameter update, which often *helps* generalisation.
 
 So bf16 made the right trade-off for DL: same exponent as fp32 (no underflow problems), fewer mantissa bits (slightly noisier values, mostly harmless).
 
@@ -209,7 +209,7 @@ Modern frameworks handle these internally; you usually don't see the casts.
 
 ### 6.2 Outlier activations
 
-A single very large activation in a wide tensor can dominate a reduction. Modern Transformers exhibit *systematic* outliers — a handful of channels with activations 10–100× larger than the rest, reproducible across layers. Dettmers et al. (2022, *LLM.int8()*, [arXiv:2208.07339](https://arxiv.org/abs/2208.07339)) characterised this. fp16/bf16 handle it well; pure int8 inference does not — see Cap 10.6.
+A single very large activation in a wide tensor can dominate a reduction. Modern Transformers exhibit *systematic* outliers — a handful of channels with activations 10–100× larger than the rest, reproducible across layers. Dettmers et al. (2022, *LLM.int8()*<FN n={3} />, [arXiv:2208.07339](https://arxiv.org/abs/2208.07339)) characterised this. fp16/bf16 handle it well; pure int8 inference does not — see Cap 10.6.
 
 ### 6.3 Initialization scale
 
@@ -282,3 +282,15 @@ Pitfalls to watch:
 **(e)** Argue why the fp32 master weights are necessary even though bf16 covers the full dynamic range of fp32. (Hint: it's an *accumulation* argument; see §8.)
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Micikevicius, P., Narang, S., Alben, J., et al.** (2017). "Mixed precision training". [arXiv:1710.03740](https://arxiv.org/abs/1710.03740) — fp16 mixed precision with loss scaling (7.4 §3, §4).
+  </FNItem>
+  <FNItem n={2}>
+    **Wang, S., & Kanwar, P.** (2019). "BFloat16: The secret to high performance on Cloud TPUs". Google Cloud blog. [cloud.google.com](https://cloud.google.com/blog/products/ai-machine-learning/bfloat16-the-secret-to-high-performance-on-cloud-tpus) — bf16 design rationale (7.4 §2.1).
+  </FNItem>
+  <FNItem n={3}>
+    **Dettmers, T., Lewis, M., Belkada, Y., & Zettlemoyer, L.** (2022). "LLM.int8(): 8-bit matrix multiplication for transformers at scale". [arXiv:2208.07339](https://arxiv.org/abs/2208.07339) — Outlier-aware quantisation; structural activation outliers (7.4 §6.2; full treatment Cap 10.6).
+  </FNItem>
+</Footnotes>

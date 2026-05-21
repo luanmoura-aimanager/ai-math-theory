@@ -47,7 +47,7 @@ This is the **variance-preservation principle** for forward propagation.
 
 ---
 
-## 3. Xavier / Glorot initialisation (Glorot & Bengio, 2010)
+## 3. Xavier / Glorot initialisation (Glorot & Bengio, 2010)<FN n={1} />
 
 Glorot's full analysis does the same calculation in the backward pass and asks for *both* forward and backward variances to be preserved. Backward through the linear layer (from 2.6),
 
@@ -67,7 +67,7 @@ This was the right choice when the dominant activation was tanh, which has $\tan
 
 ---
 
-## 4. He initialisation (He et al., 2015)
+## 4. He initialisation (He et al., 2015)<FN n={2} />
 
 For ReLU activations the calculation needs one more step. Recall (2.3, 2.9) that $\operatorname{ReLU}'(z) \in \{0, 1\}$ and that for a symmetrically distributed $z$, $\operatorname{ReLU}(z) = 0$ half the time. Plugging this into the variance propagation:
 
@@ -136,3 +136,12 @@ Many older codebases (and CV pipelines from the early 2010s) use the forward-onl
 **(d)** Why don't we just initialise all weights to $0$? (Hint: think about what happens to the symmetry between units in the same layer when every weight is identical and the gradient is also identical.)
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Glorot, X., & Bengio, Y.** (2010). "Understanding the difficulty of training deep feedforward neural networks". *AISTATS*. — Xavier/Glorot initialisation (2.10).
+  </FNItem>
+  <FNItem n={2}>
+    **He, K., Zhang, X., Ren, S., & Sun, J.** (2015). "Delving deep into rectifiers: Surpassing human-level performance on ImageNet classification". *ICCV*. [arXiv:1502.01852](https://arxiv.org/abs/1502.01852) — He / Kaiming initialisation (2.10).
+  </FNItem>
+</Footnotes>

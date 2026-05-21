@@ -13,7 +13,7 @@ Decoding from a $70$B-parameter target model is slow: each token costs one full 
 
 A simple observation: at typical batch sizes, the GPU is idle most of the time. If we could *verify* multiple candidate tokens in one forward pass — and most of them turn out to be the same tokens the target would have produced — we'd amortise the per-step weight-read cost across multiple emitted tokens.
 
-This is **speculative decoding** (Leviathan et al., 2023, [arXiv:2211.17192](https://arxiv.org/abs/2211.17192); also Chen et al., 2023, [arXiv:2302.01318](https://arxiv.org/abs/2302.01318)). The protocol:
+This is **speculative decoding** (Leviathan et al., 2023, [arXiv:2211.17192](https://arxiv.org/abs/2211.17192)<FN n={1} />; also Chen et al., 2023<FN n={2} />, [arXiv:2302.01318](https://arxiv.org/abs/2302.01318)). The protocol:
 
 1. A cheap **draft model** $\pi_\text{draft}$ proposes $k$ tokens autoregressively.
 2. The expensive **target model** $\pi_\text{target}$ runs *one* forward pass on the $k$-token continuation, producing $k$ next-token distributions in parallel.
@@ -196,9 +196,9 @@ The draft model can be:
 
 **(b) A self-distilled draft.** Distil the target down to a $\sim 1\%$-size draft. Highest $\alpha$ but requires the extra training run.
 
-**(c) Medusa heads** (Cai et al., 2024, [arXiv:2401.10774](https://arxiv.org/abs/2401.10774)). Instead of a separate draft model, *attach extra prediction heads* to the target model that predict $y_{t+1}, y_{t+2}, \ldots$ in one pass. Zero extra model weights to load; lower $\alpha$ than a dedicated draft (the heads are shallow) but $c_\text{draft} \approx 0$, so the speedup arithmetic still favours it.
+**(c) Medusa heads** (Cai et al., 2024, [arXiv:2401.10774](https://arxiv.org/abs/2401.10774))<FN n={3} />. Instead of a separate draft model, *attach extra prediction heads* to the target model that predict $y_{t+1}, y_{t+2}, \ldots$ in one pass. Zero extra model weights to load; lower $\alpha$ than a dedicated draft (the heads are shallow) but $c_\text{draft} \approx 0$, so the speedup arithmetic still favours it.
 
-**(d) EAGLE / EAGLE-2** (Li et al., 2024, [arXiv:2401.15077](https://arxiv.org/abs/2401.15077)). A small *autoregressive* draft head conditioned on the target's hidden states. Higher $\alpha$ than Medusa; small constant draft cost. Currently (2026) the best published wall-clock results for general LLM inference.
+**(d) EAGLE / EAGLE-2** (Li et al., 2024, [arXiv:2401.15077](https://arxiv.org/abs/2401.15077))<FN n={4} />. A small *autoregressive* draft head conditioned on the target's hidden states. Higher $\alpha$ than Medusa; small constant draft cost. Currently (2026) the best published wall-clock results for general LLM inference.
 
 **(e) Tree-based / Lookahead decoding.** Generalisations that propose a *tree* of possible continuations and verify the whole tree in parallel, accepting the deepest matching branch. Higher per-round emit at higher per-round verify cost; complex to implement.
 
@@ -275,3 +275,18 @@ Cap 10.5 next: *FlashAttention*. With the KV-cache and speculative-decode mechan
 **(f)** Greedy speculative decoding: state the simplified acceptance rule and why it almost always achieves higher $\alpha$ than $T > 0$ speculative decoding.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Leviathan, Y., Kalman, M., & Matias, Y.** (2023). "Fast inference from transformers via speculative decoding". [arXiv:2211.17192](https://arxiv.org/abs/2211.17192) — Speculative decoding protocol and rejection-sampling correctness (10.4).
+  </FNItem>
+  <FNItem n={2}>
+    **Chen, C., Borgeaud, S., Irving, G., et al.** (2023). "Accelerating large language model decoding with speculative sampling". [arXiv:2302.01318](https://arxiv.org/abs/2302.01318) — Parallel discovery of the same technique (10.4).
+  </FNItem>
+  <FNItem n={3}>
+    **Cai, T., Li, Y., Geng, Z., et al.** (2024). "Medusa: Simple LLM inference acceleration framework with multiple decoding heads". [arXiv:2401.10774](https://arxiv.org/abs/2401.10774) — Medusa head-based drafting (10.4).
+  </FNItem>
+  <FNItem n={4}>
+    **Li, Y., Wei, F., Zhang, C., & Zhang, H.** (2024). "EAGLE: Speculative sampling requires rethinking feature uncertainty". [arXiv:2401.15077](https://arxiv.org/abs/2401.15077) — EAGLE draft architecture (10.4).
+  </FNItem>
+</Footnotes>

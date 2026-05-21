@@ -22,7 +22,7 @@ Section 4.2 showed: with stride-1 convs of kernel $K = 3$, the receptive field g
 - The receptive field is now structured on a *dilation grid*: positions $t$ and $t + d$ interact only if their relative offset is reachable through the dilation pattern. Arbitrary pairs $(t_1, t_2)$ are not freely available.
 - Information that has to travel from position $1$ to position $T$ goes through $\log_2 T$ non-linearities, each of which *loses* information. By the time it arrives, the receptive field is "wide" in name only — see the effective-receptive-field result of Luo et al. (2016), recalled at the end of 4.2.
 
-In a Transformer, by contrast, every layer is a single matrix multiply that mixes all $T$ positions in *one* shot. Depth is then used for *abstraction*, not for *reach*.
+In a Transformer, by contrast, every layer is a single matrix multiply that mixes all $T$ positions in *one* shot. Depth is then used for *abstraction*, not for *reach*.<FN ns={[1, 2]} />
 
 ---
 
@@ -70,7 +70,7 @@ $$
 z[i] = \sum_{j} \alpha_{ij}(x)\, x[j] \qquad \text{(weights $\alpha_{ij}$ computed from $x$ itself)}.
 $$
 
-The conv kernel is a *parameter*. The attention weights are an *activation*. That single change — making the mixing coefficients depend on the input — is the algorithmic shift behind every modern LLM.
+The conv kernel is a *parameter*. The attention weights are an *activation*. That single change — making the mixing coefficients depend on the input — is the algorithmic shift behind every modern LLM.<FN ns={[3, 4, 5, 6]} />
 
 ---
 
@@ -107,3 +107,24 @@ The result of Chapter 4 isn't *"CNNs are bad."* It is the more precise statement
 **(d)** WaveNet stacks $L$ dilated 1D convs with dilations $1, 2, 4, \dots, 2^{L - 1}$. Compute the resulting receptive field. For $T = 1024$, what is the smallest $L$ that lets the model mix every position with every other? Compare with the smallest $L$ for a single attention layer.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **van den Oord, A., Dieleman, S., Zen, H., et al.** (2016). "WaveNet: A generative model for raw audio". [arXiv:1609.03499](https://arxiv.org/abs/1609.03499) — Dilated 1D convolutions for sequences (4.2 Aside, 4.3 §2).
+  </FNItem>
+  <FNItem n={2}>
+    **Bai, S., Kolter, J. Z., & Koltun, V.** (2018). "An empirical evaluation of generic convolutional and recurrent networks for sequence modeling". [arXiv:1803.01271](https://arxiv.org/abs/1803.01271) — Temporal convolutional networks; competitive with RNNs but limited at long range (4.3 §2).
+  </FNItem>
+  <FNItem n={3}>
+    **Peng, B., Quesnelle, J., Fan, H., & Shippole, E.** (2023). "YaRN: Efficient context window extension of large language models". [arXiv:2309.00071](https://arxiv.org/abs/2309.00071) — Piecewise RoPE scaling (NTK-aware + linear-interpolation hybrid) (6.13 §4.3).
+  </FNItem>
+  <FNItem n={4}>
+    **Together AI** (2023). "RedPajama: An open source recipe to reproduce LLaMA training dataset". [together.ai](https://www.together.ai/blog/redpajama) — Open reproduction of LLaMA-1 data (7.1 §4.3).
+  </FNItem>
+  <FNItem n={5}>
+    **Liu, N. F., Lin, K., Hewitt, J., et al.** (2023). "Lost in the middle: How language models use long contexts". [arXiv:2307.03172](https://arxiv.org/abs/2307.03172) — The mid-context performance dip failure mode (7.13 §4.3).
+  </FNItem>
+  <FNItem n={6}>
+    **Schulman, J., Levine, S., Abbeel, P., Jordan, M., & Moritz, P.** (2015). "Trust region policy optimization" (TRPO). [arXiv:1502.05477](https://arxiv.org/abs/1502.05477) — Constrained policy update; the precursor PPO simplifies (9.6, 9.9 §4.3).
+  </FNItem>
+</Footnotes>

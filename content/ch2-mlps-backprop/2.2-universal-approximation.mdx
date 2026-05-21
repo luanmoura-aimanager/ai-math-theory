@@ -9,7 +9,7 @@ prerequisites: ["ch2-mlps-backprop/2.1-mlp-composition"]
 
 ## 1. Why this session exists
 
-XOR (1.6) showed that *one* hidden layer is enough to compute a non-linear-separable Boolean function. The natural question — *how powerful is one hidden layer in general?* — was answered by Cybenko (1989) and Hornik (1991): arbitrarily powerful, in a precise approximation sense. This is the **universal approximation theorem** (UAT).
+XOR (1.6) showed that *one* hidden layer is enough to compute a non-linear-separable Boolean function. The natural question — *how powerful is one hidden layer in general?* — was answered by Cybenko (1989) and Hornik (1991)<FN n={2} />: arbitrarily powerful, in a precise approximation sense. This is the **universal approximation theorem** (UAT).
 
 The theorem is important for what it asserts (existence of an approximator) and *equally* important for what it doesn't assert (efficient training, reasonable size, depth efficiency). This session does both halves.
 
@@ -17,7 +17,7 @@ The theorem is important for what it asserts (existence of an approximator) and 
 
 ## 2. Statement
 
-**Theorem (Cybenko, 1989, sigmoidal case).** Let $\sigma : \mathbb{R} \to [0, 1]$ be a continuous **sigmoidal** function: $\sigma(z) \to 1$ as $z \to +\infty$, $\sigma(z) \to 0$ as $z \to -\infty$. Let $K \subset \mathbb{R}^d$ be compact and $f : K \to \mathbb{R}$ continuous. Then for every $\varepsilon > 0$ there exist $N \in \mathbb{N}$, weights $W \in \mathbb{R}^{N \times d}$, biases $b \in \mathbb{R}^N$, output weights $v \in \mathbb{R}^N$ such that the **one-hidden-layer network**
+**Theorem (Cybenko, 1989, sigmoidal case)<FN n={1} />.** Let $\sigma : \mathbb{R} \to [0, 1]$ be a continuous **sigmoidal** function: $\sigma(z) \to 1$ as $z \to +\infty$, $\sigma(z) \to 0$ as $z \to -\infty$. Let $K \subset \mathbb{R}^d$ be compact and $f : K \to \mathbb{R}$ continuous. Then for every $\varepsilon > 0$ there exist $N \in \mathbb{N}$, weights $W \in \mathbb{R}^{N \times d}$, biases $b \in \mathbb{R}^N$, output weights $v \in \mathbb{R}^N$ such that the **one-hidden-layer network**
 
 $$
 F_N(x) \;=\; \sum_{i=1}^N v_i\, \sigma(W_i^\top x + b_i)
@@ -31,7 +31,7 @@ $$
 
 **Hornik's extension (1991).** Replace "sigmoidal" by "any non-polynomial continuous activation". The theorem still holds. So ReLU, GELU, tanh, swish — all are universal approximators.
 
-In words: with enough hidden units, a *single* hidden layer can approximate *any* continuous function on *any* bounded region to *any* accuracy.
+In words: with enough hidden units, a *single* hidden layer can approximate *any* continuous function on *any* bounded region to *any* accuracy.<FN ns={[5, 6, 7]} />
 
 ---
 
@@ -43,7 +43,7 @@ Four things to internalise.
 
 **(b) The width $N$ is uncontrolled.** The theorem says "for every $\varepsilon$, there exists $N$". It does not bound $N$ in terms of $\varepsilon$ or in terms of the complexity of $f$. For pathological $f$ (high oscillation, sharp transitions) $N$ can be astronomically large. **Universality is not efficiency.**
 
-**(c) It is shallow universality.** UAT is a statement about *one* hidden layer. It doesn't say a deep network is needed or even helpful. The reason we use depth in practice is **not** that shallow nets cannot represent the target — they can — but that deep nets often represent natural targets with *exponentially fewer* parameters. This is a separation result (Telgarsky 2016 and follow-ups), not a universality result.
+**(c) It is shallow universality.** UAT is a statement about *one* hidden layer. It doesn't say a deep network is needed or even helpful. The reason we use depth in practice is **not** that shallow nets cannot represent the target — they can — but that deep nets often represent natural targets with *exponentially fewer* parameters. This is a separation result (Telgarsky 2016 and follow-ups)<FN n={3} />, not a universality result.
 
 **(d) Continuity matters.** UAT covers continuous targets on compact domains. It says nothing about discontinuous functions, unbounded domains, or functions on discrete spaces. The right tool for piecewise-constant or discrete targets is a different theory (decision trees / boosting).
 
@@ -72,7 +72,7 @@ UAT leaves an obvious follow-up question: *for the same approximation accuracy*,
 Yes. Two concrete results.
 
 - **Telgarsky (2016).** There exist functions on $[0, 1]$ that a depth-$L$ ReLU net realises with $\Theta(L)$ units, but any depth-$\mathcal{O}(1)$ net needs $\Omega(2^L)$ units to approximate within $\varepsilon$. Depth can be **exponentially** parameter-efficient.
-- **Eldan & Shamir (2016).** A separation between depth-2 and depth-3 networks in $\mathbb{R}^d$: certain targets require $e^{\Omega(d)}$ hidden units at depth 2 but only polynomial size at depth 3.
+- **Eldan & Shamir (2016)<FN n={4} />.** A separation between depth-2 and depth-3 networks in $\mathbb{R}^d$: certain targets require $e^{\Omega(d)}$ hidden units at depth 2 but only polynomial size at depth 3.
 
 These results say: depth is a *parameter-efficient* knob for representing functions that compose simple pieces. Empirically this matches what we observe — deep nets on hierarchical data (images, text) use orders of magnitude fewer parameters than the shallow equivalents.
 
@@ -116,3 +116,27 @@ UAT tells us the function we want is *in the family*. The rest of the chapter is
 **(d)** Read Telgarsky's separation theorem out loud and translate it into one sentence about the practical advantage of depth.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Cybenko, G.** (1989). "Approximation by superpositions of a sigmoidal function". *Mathematics of Control, Signals, and Systems*, 2(4), 303–314. — UAT for sigmoidal activations (2.2).
+  </FNItem>
+  <FNItem n={2}>
+    **Hornik, K.** (1991). "Approximation capabilities of multilayer feedforward networks". *Neural Networks*, 4(2), 251–257. — UAT for general non-polynomial activations (2.2).
+  </FNItem>
+  <FNItem n={3}>
+    **Telgarsky, M.** (2016). "Benefits of depth in neural networks". *COLT*. [arXiv:1602.04485](https://arxiv.org/abs/1602.04485) — Depth-vs-width separation (2.2).
+  </FNItem>
+  <FNItem n={4}>
+    **Eldan, R., & Shamir, O.** (2016). "The power of depth for feedforward neural networks". *COLT*. [arXiv:1512.03965](https://arxiv.org/abs/1512.03965) — Depth-2 vs depth-3 separation (2.2).
+  </FNItem>
+  <FNItem n={5}>
+    **Xiao, G., Tian, Y., Chen, B., Han, S., & Lewis, M.** (2023). "Efficient streaming language models with attention sinks" (StreamingLLM). [arXiv:2309.17453](https://arxiv.org/abs/2309.17453) — Attention sinks for constant-memory streaming (6.13 §2.2).
+  </FNItem>
+  <FNItem n={6}>
+    **Xie, S. M., Pham, H., Dong, X., et al.** (2023). "DoReMi: Optimizing data mixtures speeds up language model pretraining". [arXiv:2305.10429](https://arxiv.org/abs/2305.10429) — Worst-domain-perplexity optimisation for data mixtures (7.5 §2.2).
+  </FNItem>
+  <FNItem n={7}>
+    **Lee, H., Phatale, S., Mansoor, H., et al.** (2023). "RLAIF: Scaling reinforcement learning from human feedback with AI feedback". [arXiv:2309.00267](https://arxiv.org/abs/2309.00267) — Empirical comparison RLHF vs RLAIF (9.13 §2.2).
+  </FNItem>
+</Footnotes>

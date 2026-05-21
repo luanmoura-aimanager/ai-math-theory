@@ -9,7 +9,7 @@ prerequisites: ["ch7-training-language-models/7.13-long-context-training", "ch7-
 
 ## 1. Why this session exists
 
-Chapter 7 derived modern pretraining from scratch — data, tokenization, precision, parallelism, scaling laws. To anchor it historically, we read the paper that introduced the era: **Brown, Mann, Ryder, et al., 2020, *Language Models are Few-Shot Learners*** ([arXiv:2005.14165](https://arxiv.org/abs/2005.14165)). The GPT-3 paper.
+Chapter 7 derived modern pretraining from scratch — data, tokenization, precision, parallelism, scaling laws. To anchor it historically, we read the paper that introduced the era: **Brown, Mann, Ryder, et al., 2020<FN n={1} />, *Language Models are Few-Shot Learners*** ([arXiv:2005.14165](https://arxiv.org/abs/2005.14165)). The GPT-3 paper.
 
 GPT-3 was the watershed. Before: language models were research artefacts. After: they were $100M-training-budget products that did few-shot in-context learning, code generation, translation, math (poorly), reasoning (poorly), and many other things that previously required task-specific fine-tuned models. The paper documents an architecture that is, by 2026 standards, *the same as today's*; the difference is scale, data, and training discipline.
 
@@ -47,7 +47,7 @@ Decoded: pre-LN block ([6.10](/session/ch6-attention-transformer/6.10-pre-vs-pos
 
 > "...with the exception that we use alternating dense and locally banded sparse attention patterns in the layers of the transformer, similar to the Sparse Transformer."
 
-This is the *one* architectural diff from GPT-2: alternating layers use *sparse* attention patterns (Child et al., 2019, Sparse Transformer) to reduce compute. In retrospect, this didn't catch on — later models (LLaMA, etc.) reverted to dense attention everywhere. Sparse Transformer's "fixed pattern" was supplanted by sliding-window and the FlashAttention efficiency story.
+This is the *one* architectural diff from GPT-2: alternating layers use *sparse* attention patterns (Child et al., 2019, Sparse Transformer)<FN n={2} /> to reduce compute. In retrospect, this didn't catch on — later models (LLaMA, etc.) reverted to dense attention everywhere. Sparse Transformer's "fixed pattern" was supplanted by sliding-window and the FlashAttention efficiency story.
 
 > "To study the dependence of ML performance on model size, we train 8 different sizes of model..."
 
@@ -74,7 +74,7 @@ This table is a *parameter sweep* — same architectural ratios ($d_\text{ff}/d 
 - **$d_h$ is held at 128** for the largest models — a hint at the empirical rule "head dim should be $\sim 128$, scale $h$ to match $d$" that LLaMA and others adopted.
 - **$d_\text{ff} = 4d$** universally, as predicted by [6.8 §3](/session/ch6-attention-transformer/6.8-ffn).
 
-This table is *the* GPT-3 family chart; every later "family" (LLaMA, Mistral, Qwen) follows the same template.
+This table is *the* GPT-3 family chart; every later "family" (LLaMA, Mistral, Qwen) follows the same template.<FN n={3} />
 
 ---
 
@@ -262,3 +262,15 @@ The result is a complete recipe: pick a compute budget, fit a Chinchilla-correct
 **(e)** Close the paper, then write down three statements from §2 that now feel obvious. Cross-reference each with the relevant session in Chapters 6 and 7. (Your three should not be the §9 examples; pick your own.)
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Brown, T. B., Mann, B., Ryder, N., et al.** (2020). "Language models are few-shot learners" (GPT-3). [arXiv:2005.14165](https://arxiv.org/abs/2005.14165) — The 175B-parameter pretrained LM; few-shot prompting at scale (7.14).
+  </FNItem>
+  <FNItem n={2}>
+    **Child, R., Gray, S., Radford, A., & Sutskever, I.** (2019). "Generating long sequences with sparse transformers". [arXiv:1904.10509](https://arxiv.org/abs/1904.10509) — Sparse Transformer's alternating sparse-dense pattern; used in GPT-3 (7.14 §3.1).
+  </FNItem>
+  <FNItem n={3}>
+    **Radford, A., Wu, J., Child, R., et al.** (2019). "Language models are unsupervised multitask learners" (GPT-2). OpenAI technical report. — Pre-LN block, modified init, reversible tokenization referenced by GPT-3 §2.1 (7.14 §3.1).
+  </FNItem>
+</Footnotes>

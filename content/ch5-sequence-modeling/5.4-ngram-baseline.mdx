@@ -17,7 +17,7 @@ Computing one on a toy corpus reveals the three reasons $n$-grams can't be the a
 2. **Parameter explosion.** Storage is $\Theta(V^n)$, useless for $n \ge 3$ at LLM-scale vocabularies.
 3. **Fixed range.** Any dependency longer than $n - 1$ tokens is mathematically inaccessible to the model.
 
-These limits — and how badly they bite — are *exactly* what a neural language model has to overcome.
+These limits — and how badly they bite — are *exactly* what a neural language model has to overcome.<FN ns={[1, 3]} />
 
 ---
 
@@ -171,8 +171,8 @@ This guarantees every bigram gets positive probability, at the cost of a heavy b
 A neural language model, by contrast, generalises through the embedding geometry of [5.2](/session/ch5-sequence-modeling/5.2-embeddings-word2vec): tokens that play similar grammatical or semantic roles get similar embeddings, and the network *interpolates* its predictions across the embedding space. An unseen bigram still receives a meaningful probability because the embeddings of its constituents place them near seen patterns. That single capability — generalisation via continuous representations rather than discrete counting — is the qualitative jump from $n$-grams to neural LMs.
 
 <Aside type="history">
-Bengio et al. (2003), *A Neural Probabilistic Language Model*, was the first paper to articulate this argument and to demonstrate that a feed-forward network with learned word embeddings could outperform a smoothed trigram on perplexity. The architecture (a fixed-window feedforward LM with 30M parameters by 2000s standards) is now a historical footnote, but its central observation — that distributed representations dissolve the curse of dimensionality of $n$-gram models — is the foundation of everything that came after.
-</Aside>
+Bengio et al. (2003)<FN n={2} />, *A Neural Probabilistic Language Model*, was the first paper to articulate this argument and to demonstrate that a feed-forward network with learned word embeddings could outperform a smoothed trigram on perplexity. The architecture (a fixed-window feedforward LM with 30M parameters by 2000s standards) is now a historical footnote, but its central observation — that distributed representations dissolve the curse of dimensionality of $n$-gram models — is the foundation of everything that came after.
+</Aside><FN n={4} />
 
 ---
 
@@ -216,3 +216,18 @@ The $n$-gram baseline gives us a number to beat. Every architecture from Chapter
 **(e)** A trigram language model on a vocabulary of size $V = 50{,}000$ would have how many parameters in principle? How many of those are realistically estimable from a 1 trillion-token corpus, if Heaps' law says the count of distinct trigrams is $\sim (10^{12})^{0.6} \approx 4 \cdot 10^7$? What does this imply about the usefulness of an MLE trigram at LLM scale?
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Jurafsky, D., & Martin, J. H.** (2024). *Speech and Language Processing* (3rd ed., draft). — Canonical reference for tokenisation (5.1), n-grams and smoothing (5.4), and language-modeling fundamentals (5.3). [stanford.edu/~jurafsky/slp3](https://web.stanford.edu/~jurafsky/slp3/)
+  </FNItem>
+  <FNItem n={2}>
+    **Bengio, Y., Ducharme, R., Vincent, P., & Jauvin, C.** (2003). "A neural probabilistic language model". *JMLR,* 3, 1137–1155. — First neural LM with learned word embeddings; the conceptual ancestor of every modern LLM (5.2, 5.4).
+  </FNItem>
+  <FNItem n={3}>
+    **Karpathy, A.** "Neural Networks: Zero to Hero" lecture series, especially *makemore* (Lectures 2–5). [karpathy.ai/zero-to-hero](https://karpathy.ai/zero-to-hero.html) — Worked examples of bigrams, embeddings, and character-level LMs (5.4).
+  </FNItem>
+  <FNItem n={4}>
+    **Kudo, T., & Richardson, J.** (2018). "SentencePiece: A simple and language independent subword tokenizer and detokenizer for neural text processing". [arXiv:1808.06226](https://arxiv.org/abs/1808.06226) — SentencePiece (BPE-mode and unigram-mode) (7.2 §5.4).
+  </FNItem>
+</Footnotes>

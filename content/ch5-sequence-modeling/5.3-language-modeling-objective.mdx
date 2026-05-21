@@ -17,7 +17,7 @@ $$
 
 To *train* a language model, we need (a) a parametric family $p_\theta$, and (b) a loss function whose minimisation makes $p_\theta$ close to the true distribution underlying the data. This session derives both from first principles. The factorisation is universal — it works for any sequence — and the loss is precisely the cross-entropy minimisation we already saw in [0.7](/session/ch0-math-foundations/0.7-cross-entropy-mle) and [1.8](/session/ch1-linear-models-perceptron/1.8-multiclass-ce-gradient), now lifted to sequences.
 
-After this session, the rest of Chapter 5 (and all of Chapters 6–9) operates *under* the autoregressive objective. Every architecture we look at is a different parameterisation of $p_\theta(x_t \mid x_{<t})$. Attention, MLP, normalisation, residuals — these are all design choices for the *same* function we define here.
+After this session, the rest of Chapter 5 (and all of Chapters 6–9) operates *under* the autoregressive objective. Every architecture we look at is a different parameterisation of $p_\theta(x_t \mid x_{<t})$. Attention, MLP, normalisation, residuals — these are all design choices for the *same* function we define here.<FN ns={[2, 3]} />
 
 ---
 
@@ -159,7 +159,7 @@ PPL is the *standard* benchmark number for pretraining experiments. Across paper
 
 <Aside type="note">
 **Bits-per-byte (BPB).** When comparing models with *different* tokenisers, perplexity is incomparable (a tokeniser that uses more tokens per byte will look "worse" purely because each prediction is smaller). The cure is to measure loss in bits per byte, dividing total bits by the *byte length* of the original text rather than the token length. This is the standard for Pile / RedPajama style evaluations.
-</Aside>
+</Aside><FN ns={[1, 4]} />
 
 ---
 
@@ -203,3 +203,18 @@ with $p_\theta$ a softmax over a vocabulary of size $V$, and $p_\theta(\cdot \mi
 **(e)** Suppose a model is trained on documents using the autoregressive loss above, but at inference time you ask it to fill in the *middle* of a sentence (the words "$ \dots $" are missing). Argue from the factorisation why the model cannot directly answer this without prefix-suffix tricks.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Luo, W., Li, Y., Urtasun, R., & Zemel, R.** (2016). "Understanding the effective receptive field in deep convolutional neural networks". *NeurIPS*. [arXiv:1701.04128](https://arxiv.org/abs/1701.04128) — Effective vs theoretical receptive field; Gaussian shape (4.2 §5.3).
+  </FNItem>
+  <FNItem n={2}>
+    **Jurafsky, D., & Martin, J. H.** (2024). *Speech and Language Processing* (3rd ed., draft). — Canonical reference for tokenisation (5.1), n-grams and smoothing (5.4), and language-modeling fundamentals (5.3). [stanford.edu/~jurafsky/slp3](https://web.stanford.edu/~jurafsky/slp3/)
+  </FNItem>
+  <FNItem n={3}>
+    **Manning, C., et al.** *CS224N: Natural Language Processing with Deep Learning.* Stanford. — Lectures on subword tokenisation and language modelling (5.1, 5.3).
+  </FNItem>
+  <FNItem n={4}>
+    **Ouyang, L., Wu, J., Jiang, X., et al.** (2022). "Training language models to follow instructions with human feedback" (InstructGPT). [arXiv:2203.02155](https://arxiv.org/abs/2203.02155) — Canonical SFT + RM + PPO pipeline (9.1, 9.2, 9.8); per-token KL implementation (9.9); PPO-ptx mixing (9.8 §5.3).
+  </FNItem>
+</Footnotes>

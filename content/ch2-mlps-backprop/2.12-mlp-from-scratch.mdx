@@ -9,7 +9,7 @@ prerequisites: ["ch2-mlps-backprop/2.7-backprop-weight-gradients", "ch2-mlps-bac
 
 ## 1. Why this session exists
 
-You've derived every formula in Chapter 2. Now type them into Python and watch the loss curve come down on a real dataset. Pure NumPy, no library magic. Eighty lines, end-to-end. This is the exercise that converts "I follow the math" into "I can build this".
+You've derived every formula in Chapter 2. Now type them into Python and watch the loss curve come down on a real dataset. Pure NumPy, no library magic. Eighty lines, end-to-end. This is the exercise that converts "I follow the math" into "I can build this".<FN n={1} />
 
 ---
 
@@ -223,3 +223,9 @@ Each of these is one or two lines of code and ten minutes of staring at training
 **(d)** Profile the forward and backward passes with `time.perf_counter`. Verify the ratio is roughly 1 : 1 (Baur–Strassen, 2.11).
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Karpathy, A.** "Neural Networks: Zero to Hero" lecture series, especially *micrograd* (Lecture 1). [karpathy.ai/zero-to-hero](https://karpathy.ai/zero-to-hero.html) — Used as resource in 2.12.
+  </FNItem>
+</Footnotes>

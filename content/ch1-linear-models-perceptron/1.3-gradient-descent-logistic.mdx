@@ -9,7 +9,7 @@ prerequisites: ["ch1-linear-models-perceptron/1.2-logistic-regression-bce"]
 
 ## 1. Why this session exists
 
-Session 1.2 gave us the loss and the pre-activation gradient $\partial L / \partial z = \hat y - y$. Now we walk the last step — from $\partial L / \partial z$ to $\partial L / \partial w$ — and write down the gradient-descent update. This is the simplest end-to-end training loop in the course: it has all the moving pieces of SGD with none of the depth.
+Session 1.2 gave us the loss and the pre-activation gradient $\partial L / \partial z = \hat y - y$. Now we walk the last step — from $\partial L / \partial z$ to $\partial L / \partial w$ — and write down the gradient-descent update. This is the simplest end-to-end training loop in the course: it has all the moving pieces of SGD with none of the depth.<FN n={1} />
 
 ---
 
@@ -130,3 +130,9 @@ is the single-sigmoid-unit version of the gradient descent rule that, in Chapter
 **(d)** SGD vs mini-batch. Estimate the variance of the one-example gradient as a function of batch size $B$. Why does increasing $B$ reduce variance by $1/B$ and let you increase the learning rate by roughly the same factor (the "linear scaling" rule)?
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Bishop, C. M.** (2006). *Pattern Recognition and Machine Learning.* Springer. — Linear regression (1.1), logistic regression (1.2–1.3), softmax (1.7), MAP / Gaussian priors.
+  </FNItem>
+</Footnotes>

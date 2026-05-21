@@ -44,13 +44,13 @@ Consider the quadratic $L(\theta) = \frac{1}{2}(\lambda_1 \theta_1^2 + \lambda_2
 
 **With momentum.** Along $\theta_1$ the gradient alternates sign on consecutive steps (because of the oscillation). The EMA averages those out — successive contributions cancel. Along $\theta_2$ the gradient has consistent sign, so the EMA *accumulates*. Net effect: the optimiser damps motion across the steep walls and accelerates along the slow floor.
 
-Quantitatively (Polyak, 1964; proof on a quadratic), the optimal momentum coefficient is
+Quantitatively (Polyak, 1964; proof on a quadratic)<FN n={1} />, the optimal momentum coefficient is
 
 $$
 \beta^\star = \left(\frac{\sqrt{\kappa} - 1}{\sqrt{\kappa} + 1}\right)^2,
 $$
 
-and the convergence rate improves from $1 - 1/\kappa$ (plain GD) to $1 - 1/\sqrt{\kappa}$ (momentum). A **square-root speedup** in condition number. For $\kappa = 10^4$ (entirely realistic for deep nets), that is a $100\times$ acceleration on the worst directions.
+and the convergence rate improves from $1 - 1/\kappa$ (plain GD) to $1 - 1/\sqrt{\kappa}$ (momentum). A **square-root speedup** in condition number. For $\kappa = 10^4$ (entirely realistic for deep nets), that is a $100\times$ acceleration on the worst directions.<FN ns={[3, 4]} />
 
 ---
 
@@ -76,7 +76,7 @@ For Luan: this is the same kind of damped-oscillator analysis you do in classica
 
 ## 5. Nesterov accelerated gradient
 
-Nesterov (1983) noticed: if we are about to move to $\theta_t - \alpha \beta v_{t-1}$ anyway (because of momentum), then the *next* gradient we care about is the one *there*, not the one at $\theta_t$. Evaluate the gradient at the look-ahead point.
+Nesterov (1983)<FN n={2} /> noticed: if we are about to move to $\theta_t - \alpha \beta v_{t-1}$ anyway (because of momentum), then the *next* gradient we care about is the one *there*, not the one at $\theta_t$. Evaluate the gradient at the look-ahead point.
 
 $$
 \boxed{\
@@ -144,3 +144,18 @@ Modern LLMs use Adam (§3.5), which is momentum + an adaptive per-parameter scal
 **(d)** Nesterov vs classical: on a strongly convex quadratic, both have rate $\rho(\kappa)$. For $\kappa = 1000$, what is the asymptotic improvement of Nesterov over momentum? (Hint: rate $1 - c/\sqrt{\kappa}$ with a different constant $c$.)
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Polyak, B. T.** (1964). "Some methods of speeding up the convergence of iteration methods". *USSR Comp. Math.*, 4(5), 1–17. — Heavy-ball momentum (3.3).
+  </FNItem>
+  <FNItem n={2}>
+    **Nesterov, Y.** (1983). "A method for solving the convex programming problem with convergence rate $O(1/k^2)$". *Soviet Math. Dokl.*, 27, 372–376. — Nesterov accelerated gradient (3.3).
+  </FNItem>
+  <FNItem n={3}>
+    **Rae, J. W., Borgeaud, S., Cai, T., et al.** (2021). "Scaling language models: Methods, analysis & insights from training Gopher" (MassiveText). [arXiv:2112.11446](https://arxiv.org/abs/2112.11446) — Heuristic data-filtering rules (7.1 §3.3).
+  </FNItem>
+  <FNItem n={4}>
+    **Narayanan, D., Harlap, A., Phanishayee, A., et al.** (2019). "PipeDream: Generalized pipeline parallelism for DNN training". [arXiv:1806.03377](https://arxiv.org/abs/1806.03377) — 1F1B pipeline schedule (7.9 §3.3).
+  </FNItem>
+</Footnotes>

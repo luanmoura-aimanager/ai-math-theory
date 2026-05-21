@@ -53,7 +53,7 @@ Modern training cannot afford either extreme: store-everything blows out memory;
 
 ## 4. The $\sqrt{L}$ trick
 
-**Chen et al. (2016)'s key idea.** Partition the $L$ layers into $\sqrt{L}$ groups of $\sqrt{L}$ layers each. Store *only* the activations at the boundaries of each group; recompute the inner activations of each group during backward.
+**Chen et al. (2016)'s<FN n={1} /> key idea.** Partition the $L$ layers into $\sqrt{L}$ groups of $\sqrt{L}$ layers each. Store *only* the activations at the boundaries of each group; recompute the inner activations of each group during backward.
 
 ### 4.1 The recipe
 
@@ -132,7 +132,7 @@ You could checkpoint at finer granularity (per-layer within a block) but the mem
 
 A 2023+ refinement: instead of checkpointing *whole blocks*, checkpoint only the **most-expensive-to-store** activations. The clearest example: attention scores.
 
-**Korthikanti et al., 2022, *Reducing Activation Recomputation in Large Transformer Models*** ([arXiv:2205.05198](https://arxiv.org/abs/2205.05198)) describe **selective activation recomputation** in Megatron-LM. Their key insight:
+**Korthikanti et al., 2022<FN n={2} />, *Reducing Activation Recomputation in Large Transformer Models*** ([arXiv:2205.05198](https://arxiv.org/abs/2205.05198)) describe **selective activation recomputation** in Megatron-LM. Their key insight:
 
 - Storing the residual stream + FFN hidden + LN inputs is cheap (linear in $T$).
 - Storing the attention scores is expensive (quadratic in $T$, $B h T^2$).
@@ -144,7 +144,7 @@ For LLaMA-7B at $T = 4096$: selective recomputation drops activation memory from
 
 ### 7.1 FlashAttention as the natural fit
 
-[FlashAttention (Dao et al., 2022)](https://arxiv.org/abs/2205.14135) is a fused attention kernel that *never materialises the score matrix* in HBM — it tiles the $Q K^\top$ and softmax into SRAM-friendly blocks. Selective recomputation of attention scores is essentially "what FlashAttention already does for free." The two ideas converge.
+[FlashAttention (Dao et al., 2022)<FN n={3} />](https://arxiv.org/abs/2205.14135) is a fused attention kernel that *never materialises the score matrix* in HBM — it tiles the $Q K^\top$ and softmax into SRAM-friendly blocks. Selective recomputation of attention scores is essentially "what FlashAttention already does for free." The two ideas converge.
 
 In practice: any modern LLM trained with PyTorch's `scaled_dot_product_attention` (with the `is_causal` flag and SDPA-backend selection) gets attention-score recomputation automatically. You don't need to manually checkpoint the attention sub-layer; it's handled at the kernel level. Block-level checkpointing then only covers the FFN and residual-stream activations.
 
@@ -211,3 +211,15 @@ This closes the single-machine training story. Next session (Cap 7.8 — Data pa
 **(e)** Selective recomputation reduces memory by $h T^2$ per block at compute cost of one extra $Q K^\top$ matmul. Argue when this is preferable to full block-level checkpointing. (Hint: think about the ratio of attention-score memory to other-activation memory at long context.)
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Chen, T., Xu, B., Zhang, C., & Guestrin, C.** (2016). "Training deep nets with sublinear memory cost". [arXiv:1604.06174](https://arxiv.org/abs/1604.06174) — Activation checkpointing / gradient checkpointing (7.7 §4).
+  </FNItem>
+  <FNItem n={2}>
+    **Korthikanti, V., Casper, J., Lym, S., et al.** (2022). "Reducing activation recomputation in large transformer models". [arXiv:2205.05198](https://arxiv.org/abs/2205.05198) — Selective recomputation in Megatron-LM (7.7 §7).
+  </FNItem>
+  <FNItem n={3}>
+    **Dao, T., Fu, D. Y., Ermon, S., Rudra, A., & Ré, C.** (2022). "FlashAttention: Fast and memory-efficient exact attention with IO-awareness". [arXiv:2205.14135](https://arxiv.org/abs/2205.14135) — Tiled attention kernel; in-SRAM softmax (7.7 §7.1; full treatment Cap 10.5).
+  </FNItem>
+</Footnotes>

@@ -9,7 +9,7 @@ prerequisites: ["ch5-sequence-modeling/5.5-rnn-bptt", "ch6-attention-transformer
 
 ## 1. Why this session exists
 
-Every architecture in Chapter 8 so far is a Transformer with one sub-module modified. State space models (SSMs), and their leading instantiation Mamba (Gu & Dao, 2023, [arXiv:2312.00752](https://arxiv.org/abs/2312.00752)), are different: they replace attention entirely with a *recurrent* sequence operator. Per token they need no KV cache, and per generated token they run in $O(d^2)$ time instead of attention's $O(T d)$ (with the cached-K, V matmul). For long-context inference this is a substantial wall-clock advantage.
+Every architecture in Chapter 8 so far is a Transformer with one sub-module modified. State space models (SSMs), and their leading instantiation Mamba (Gu & Dao, 2023<FN n={3} />, [arXiv:2312.00752](https://arxiv.org/abs/2312.00752)), are different: they replace attention entirely with a *recurrent* sequence operator. Per token they need no KV cache, and per generated token they run in $O(d^2)$ time instead of attention's $O(T d)$ (with the cached-K, V matmul). For long-context inference this is a substantial wall-clock advantage.
 
 The question is whether SSMs can match attention on quality at scale. As of 2026 the answer is: *pure* SSMs are competitive but not strictly better than Transformers at the frontier. *Hybrid* architectures (§8.8) that combine SSM and attention layers are an active research direction and have produced models that match dense Transformers at iso-compute. So SSMs matter both as a standalone variant and, more importantly, as the recurrent half of every hybrid model.
 
@@ -30,7 +30,7 @@ y(t)  &= C\, h(t),
 \ }
 $$
 
-with state $h(t) \in \mathbb{R}^n$, input $x(t) \in \mathbb{R}$, output $y(t) \in \mathbb{R}$, and matrices $A \in \mathbb{R}^{n \times n}, B \in \mathbb{R}^{n \times 1}, C \in \mathbb{R}^{1 \times n}$. This is the canonical control-theory SSM (Kalman 1960; not specific to deep learning).
+with state $h(t) \in \mathbb{R}^n$, input $x(t) \in \mathbb{R}$, output $y(t) \in \mathbb{R}$, and matrices $A \in \mathbb{R}^{n \times n}, B \in \mathbb{R}^{n \times 1}, C \in \mathbb{R}^{1 \times n}$. This is the canonical control-theory SSM (Kalman 1960; not specific to deep learning)<FN n={1} />.
 
 The matrix $A$ defines the *intrinsic dynamics* of the hidden state — how it evolves in the absence of input. $B$ defines how new input enters the state. $C$ defines what part of the state is observed as output.
 
@@ -71,7 +71,7 @@ The crucial structural difference from a standard RNN ([5.5](/session/ch5-sequen
 
 ### 3.1 Structured $A$: from S4 to Mamba
 
-The naive $n \times n$ matrix $A$ has $n^2$ free parameters per channel, which is impractical at the channel counts ($d_\text{model} = 4096$, etc.) of LLM-scale models. The S4 paper (Gu et al., 2022, [arXiv:2111.00396](https://arxiv.org/abs/2111.00396)) introduced **structured** $A$ matrices — diagonal-plus-low-rank — that have $O(n)$ parameters and admit fast convolutional evaluation via FFTs.
+The naive $n \times n$ matrix $A$ has $n^2$ free parameters per channel, which is impractical at the channel counts ($d_\text{model} = 4096$, etc.) of LLM-scale models. The S4 paper (Gu et al., 2022, [arXiv:2111.00396](https://arxiv.org/abs/2111.00396))<FN n={2} /> introduced **structured** $A$ matrices — diagonal-plus-low-rank — that have $O(n)$ parameters and admit fast convolutional evaluation via FFTs.
 
 Mamba uses a simpler structured form: $A$ is **diagonal** with negative real entries, so the recurrence is a per-state-coordinate exponential decay:
 
@@ -142,7 +142,7 @@ This is the structural reason for SSMs' interest in long-context generation:
 
 ### 5.1 But quality?
 
-The Mamba paper's main empirical claim: at iso-parameters, Mamba matches Transformer perplexity on Pile-style pretraining and outperforms on long-context benchmarks (where the Transformer's effective context degrades). Subsequent work (Mamba-2, Dao & Gu 2024; Hymba; etc.) has confirmed and extended this at the 1B–3B scale.
+The Mamba paper's main empirical claim: at iso-parameters, Mamba matches Transformer perplexity on Pile-style pretraining and outperforms on long-context benchmarks (where the Transformer's effective context degrades). Subsequent work (Mamba-2, Dao & Gu 2024<FN n={4} />; Hymba; etc.) has confirmed and extended this at the 1B–3B scale.
 
 But at the *frontier* ($\sim 100$B+ activated parameters), pure SSMs have not yet matched dense Transformer LLMs on standard benchmarks. The leading hypotheses for the residual gap:
 
@@ -203,3 +203,18 @@ This means a Mamba "layer" at fixed parameter count corresponds to about 2× the
 **(f)** State the leading hypothesis (§5.1, item 1) for why pure SSMs underperform Transformers at frontier scale. Why do hybrid architectures (§8.8) plausibly close the gap?
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Kalman, R. E.** (1960). "A new approach to linear filtering and prediction problems". *Trans. ASME—J. Basic Eng.*, 82, 35–45. — Canonical state-space formulation of linear filtering, ancestor of all SSM architectures (8.7 §2).
+  </FNItem>
+  <FNItem n={2}>
+    **Gu, A., Goel, K., & Ré, C.** (2022). "Efficiently modeling long sequences with structured state spaces" (S4). [arXiv:2111.00396](https://arxiv.org/abs/2111.00396) — Structured (diagonal-plus-low-rank) $A$ for efficient long-sequence SSM (8.7 §3.1).
+  </FNItem>
+  <FNItem n={3}>
+    **Gu, A., & Dao, T.** (2023). "Mamba: Linear-time sequence modeling with selective state spaces". [arXiv:2312.00752](https://arxiv.org/abs/2312.00752) — Selective SSM with input-dependent $\Delta, B, C$; hardware-aware parallel scan (8.7 §4).
+  </FNItem>
+  <FNItem n={4}>
+    **Dao, T., & Gu, A.** (2024). "Transformers are SSMs: Generalized models and efficient algorithms through structured state space duality" (Mamba-2). [arXiv:2405.21060](https://arxiv.org/abs/2405.21060) — SSM-attention duality; Mamba-2 architecture (8.7 §5.1).
+  </FNItem>
+</Footnotes>

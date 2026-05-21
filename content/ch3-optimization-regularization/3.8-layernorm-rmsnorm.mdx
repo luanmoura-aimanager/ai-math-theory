@@ -11,7 +11,7 @@ prerequisites: ["ch3-optimization-regularization/3.7-lr-schedules"]
 
 Every modern Transformer uses **LayerNorm**, not BatchNorm. RMSNorm — a stripped-down LayerNorm — is the version in LLaMA, Mistral, and most LLMs from 2023 onward. The reason is structural: BN's dependence on the batch breaks down for variable-length sequences and small per-GPU batches, both of which are the norm in Transformer training. LayerNorm sidesteps the issue by normalising **across the feature dimension** for each individual token, with no batch coupling at all.
 
-Past this point, every architecture choice we make for LLMs builds on LayerNorm / RMSNorm. (If you want a rigorous treatment of BatchNorm first — useful context but not required here — see [Appendix 3.C](/session/ch3-optimization-regularization/3.C-batchnorm).)
+Past this point, every architecture choice we make for LLMs builds on LayerNorm / RMSNorm. (If you want a rigorous treatment of BatchNorm first — useful context but not required here — see [Appendix 3.C](/session/ch3-optimization-regularization/3.C-batchnorm).)<FN n={3} />
 
 ---
 
@@ -65,7 +65,7 @@ Three reasons, in order of importance:
 For these reasons, every Transformer (encoder, decoder, encoder–decoder) since *Attention Is All You Need* uses LayerNorm.
 
 <Aside type="history">
-Ba, Kiros & Hinton (2016, *Layer Normalization*) proposed LN as a fix for *recurrent* networks, where BN's batch dependence was a problem because RNN gradients couple time steps non-trivially. The Transformer paper picked it up the next year and froze it as the canonical normalisation for sequence models.
+Ba, Kiros & Hinton (2016<FN n={1} />, *Layer Normalization*) proposed LN as a fix for *recurrent* networks, where BN's batch dependence was a problem because RNN gradients couple time steps non-trivially. The Transformer paper picked it up the next year and froze it as the canonical normalisation for sequence models.
 </Aside>
 
 ---
@@ -84,7 +84,7 @@ The sum is over features of a single token. This means LN's backward parallelise
 
 ## 6. RMSNorm: the modern stripped-down version
 
-Zhang & Sennrich (2019) noticed that the *mean-centring* of LN can be removed without hurting performance, leaving just the rescaling by RMS:
+Zhang & Sennrich (2019)<FN n={2} /> noticed that the *mean-centring* of LN can be removed without hurting performance, leaving just the rescaling by RMS:
 
 $$
 \boxed{\ \operatorname{RMSNorm}(x)_k = \gamma_k \cdot \frac{x_k}{\sqrt{\tfrac{1}{d}\sum_{j=1}^d x_j^2 + \varepsilon}}. \ }
@@ -171,3 +171,15 @@ Chapter 4 will use the main-path stack to revisit CNNs and then bridge to sequen
 **(d)** A LayerNorm has $d = 4096$ features. How many learnable parameters does it have? Compared to a `Linear(4096, 4096)` it precedes, what fraction of the weights is in the LN?
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Ba, J. L., Kiros, J. R., & Hinton, G. E.** (2016). "Layer normalization". [arXiv:1607.06450](https://arxiv.org/abs/1607.06450) — LayerNorm (3.8).
+  </FNItem>
+  <FNItem n={2}>
+    **Zhang, B., & Sennrich, R.** (2019). "Root mean square layer normalization". *NeurIPS*. [arXiv:1910.07467](https://arxiv.org/abs/1910.07467) — RMSNorm (3.8).
+  </FNItem>
+  <FNItem n={3}>
+    **Wu, Y., & He, K.** (2018). "Group normalization". *ECCV*. [arXiv:1803.08494](https://arxiv.org/abs/1803.08494) — GroupNorm (mentioned in 3.8).
+  </FNItem>
+</Footnotes>

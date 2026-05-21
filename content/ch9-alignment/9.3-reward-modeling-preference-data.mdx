@@ -15,7 +15,7 @@ The standard signal in 2024–2026 alignment is **pairwise preference data**: tu
 
 Preference data is the input to **reward modeling** (§9.4): we train a model $r_\phi(x, y)$ that scores responses by their predicted preferability, fit to match the human preference distribution. The trained reward model is then the optimisation target for either RL-based fine-tuning (§9.5–§9.8) or, equivalently, DPO (§9.10).
 
-This session is about the *data* — what preference data looks like, how it is collected, what makes it useful, and why it is the right level of feedback for scaling. The mathematics of fitting a reward model is §9.4; we focus here on the dataset that feeds that mathematics.
+This session is about the *data* — what preference data looks like, how it is collected, what makes it useful, and why it is the right level of feedback for scaling. The mathematics of fitting a reward model is §9.4; we focus here on the dataset that feeds that mathematics.<FN ns={[1, 2]} />
 
 ---
 
@@ -175,3 +175,12 @@ The next session derives the Bradley-Terry model and the reward-model training o
 **(f)** Estimate the cost (in labeller-minutes) of producing (i) $50{,}000$ preference labels at $1$ min/label, (ii) $50{,}000$ demonstration responses at $10$ min/demonstration. Comment on the implication for scaling.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Christiano, P., Leike, J., Brown, T., et al.** (2017). "Deep reinforcement learning from human preferences". [arXiv:1706.03741](https://arxiv.org/abs/1706.03741) — Original RLHF in deep RL; the algorithm InstructGPT inherits (9.3).
+  </FNItem>
+  <FNItem n={2}>
+    **Stiennon, N., Ouyang, L., Wu, J., et al.** (2020). "Learning to summarize from human feedback". [arXiv:2009.01325](https://arxiv.org/abs/2009.01325) — RLHF applied to summarisation; bridges Christiano 2017 to InstructGPT (9.3).
+  </FNItem>
+</Footnotes>

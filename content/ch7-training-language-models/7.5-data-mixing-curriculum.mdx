@@ -17,7 +17,7 @@ Three knobs:
 2. **Curriculum.** Order the data from "easy" to "hard" — short and simple sequences first, long and complex sequences later. *Why?* Curriculum aligns with how humans (and earlier shallow models) learn; for LLMs it has subtler effects, with mixed empirical results.
 3. **Annealing.** Switch to high-quality data near the end of training, alongside the learning-rate decay. *Why?* The model's final updates are the ones that "stick"; spending them on noisy data wastes the highest-impact training steps.
 
-The MiniCPM-style annealing recipe (Hu et al., 2024) combines #3 with the WSD learning-rate schedule of [3.7](/session/ch3-optimization-regularization/3.7-lr-schedules-and-clipping): warm-up, stable, decay — with the high-quality data introduced in the decay phase. This has become a near-universal pattern in 2024–2026 frontier pretraining.
+The MiniCPM-style annealing recipe (Hu et al., 2024)<FN n={6} /> combines #3 with the WSD learning-rate schedule of [3.7](/session/ch3-optimization-regularization/3.7-lr-schedules-and-clipping): warm-up, stable, decay — with the high-quality data introduced in the decay phase. This has become a near-universal pattern in 2024–2026 frontier pretraining.
 
 This session: what each knob does, why, the published evidence, and the recipe that ties them together.
 
@@ -42,7 +42,7 @@ The "right" weights are recipe-specific. LLaMA-1 used $\sim 67\%$ web, $\sim 4.5
 
 ### 2.2 DoReMi: learning the weights
 
-**Xie et al., 2023, *DoReMi: Optimizing Data Mixtures Speeds Up Language Model Pretraining*** ([arXiv:2305.10429](https://arxiv.org/abs/2305.10429)). Instead of hand-tuning $w_d$, *learn* them. Train a small "proxy" model under different mixtures; pick the mixture that minimises a *worst-domain* perplexity objective on a held-out evaluation set. Transfer the discovered mixture to the full-size pretraining run.
+**Xie et al., 2023<FN n={4} />, *DoReMi: Optimizing Data Mixtures Speeds Up Language Model Pretraining*** ([arXiv:2305.10429](https://arxiv.org/abs/2305.10429)). Instead of hand-tuning $w_d$, *learn* them. Train a small "proxy" model under different mixtures; pick the mixture that minimises a *worst-domain* perplexity objective on a held-out evaluation set. Transfer the discovered mixture to the full-size pretraining run.
 
 DoReMi reduced LLaMA-1's pretraining steps to reach a target loss by $2.6\times$ on the same total token budget — a substantial saving. The method is now used as a *first-stage exploration* before committing to a large run; modern pretraining recipes do a small DoReMi-style search at the 1B-parameter scale, then scale up.
 
@@ -61,7 +61,7 @@ The exact weights are adjusted via DoReMi-style search and held constant through
 
 ### 2.4 Repetition vs fresh tokens
 
-If a domain has fewer total tokens than the model needs to see at the desired weight, **repetition** is unavoidable. Muennighoff et al. (2023, [arXiv:2305.16264](https://arxiv.org/abs/2305.16264)) showed that high-quality data can be repeated up to ~4 times before quality degrades meaningfully. Modern recipes:
+If a domain has fewer total tokens than the model needs to see at the desired weight, **repetition** is unavoidable. Muennighoff et al. (2023<FN n={3} />, [arXiv:2305.16264](https://arxiv.org/abs/2305.16264)) showed that high-quality data can be repeated up to ~4 times before quality degrades meaningfully. Modern recipes:
 
 - Web data is large enough to see each token $\leq 1$ time.
 - Books and Wikipedia are repeated 2–4 times to match their target weight.
@@ -73,7 +73,7 @@ The total *effective epochs* across the mixture is typically 1.0–1.5 (each tok
 
 ## 3. Curriculum learning
 
-Curriculum learning ([Bengio et al., 2009, *Curriculum Learning*](https://dl.acm.org/doi/10.1145/1553374.1553380)) — train on easier examples first, harder later — is intuitive: humans and animals learn this way. For deep models the empirical evidence is mixed.
+Curriculum learning ([Bengio et al., 2009<FN n={5} />, *Curriculum Learning*](https://dl.acm.org/doi/10.1145/1553374.1553380)) — train on easier examples first, harder later — is intuitive: humans and animals learn this way. For deep models the empirical evidence is mixed.
 
 ### 3.1 What "easy" and "hard" mean for LLMs
 
@@ -121,9 +121,9 @@ MiniCPM-2B trained with annealing matched a non-annealed 7B model on several ben
 
 Independent verifications:
 
-- **Phi-3** (Abdin et al., 2024). Uses similar "textbook + filtered web" data in late training. Phi-3-mini (3.8B) reached LLaMA-3-7B performance on many benchmarks.
-- **DCLM-Baseline** (Li et al., 2024, [7.1 §4.4](/session/ch7-training-language-models/7.1-pretraining-data)). Reports a "two-stage" recipe with a high-quality final phase.
-- **LLaMA-3** (Dubey et al., 2024). The LLaMA-3 paper documents "data mixing in the late stages of training" as part of the production recipe.
+- **Phi-3** (Abdin et al., 2024)<FN n={7} />. Uses similar "textbook + filtered web" data in late training. Phi-3-mini (3.8B) reached LLaMA-3-7B performance on many benchmarks.
+- **DCLM-Baseline** (Li et al., 2024, [7.1 §4.4](/session/ch7-training-language-models/7.1-pretraining-data))<FN n={1} />. Reports a "two-stage" recipe with a high-quality final phase.
+- **LLaMA-3** (Dubey et al., 2024)<FN n={8} />. The LLaMA-3 paper documents "data mixing in the late stages of training" as part of the production recipe.
 
 The recipe is now standard. As of 2026, **every frontier pretraining run uses some form of late-stage annealing**.
 
@@ -147,7 +147,7 @@ WSD's advantages over cosine:
 - **Checkpoint-flexible.** Models can be "annealed" from any checkpoint of the stable phase — useful for adapting one base model to multiple specialised variants (each with its own annealing data).
 - **Less peak-LR-sensitive.** Cosine schedules need a precise peak-LR pick; WSD's constant phase is more robust.
 
-Most 2024–2026 frontier runs use WSD. Cosine remains common in smaller-scale experiments and where the total token budget is known precisely in advance.
+Most 2024–2026 frontier runs use WSD. Cosine remains common in smaller-scale experiments and where the total token budget is known precisely in advance.<FN n={2} />
 
 ---
 
@@ -235,3 +235,30 @@ Pretraining is not "feed tokens uniformly until done". It is a *scheduled* proce
 **(e)** Read MiniCPM (Hu et al., 2024, [arXiv:2404.06395](https://arxiv.org/abs/2404.06395)) §3. State, in your own words, the empirical evidence they offer for late-stage annealing. What single experiment most cleanly isolates the annealing effect from confounds?
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Li, J., Fang, A., Smyrnis, G., et al.** (2024). "DataComp-LM: In search of the next generation of training sets for language models" (DCLM). [arXiv:2406.11794](https://arxiv.org/abs/2406.11794) — Systematic data-quality experiments; DCLM-Baseline (7.1 §4.4, 7.5).
+  </FNItem>
+  <FNItem n={2}>
+    **Penedo, G., Kydlíček, H., Cappelli, A., et al.** (2024). "The FineWeb Datasets: Decanting the web for the finest text data at scale". [arXiv:2406.17557](https://arxiv.org/abs/2406.17557); HuggingFace blog. — FineWeb and FineWeb-Edu (7.1 §4.5, 7.5).
+  </FNItem>
+  <FNItem n={3}>
+    **Muennighoff, N., Rush, A. M., Barak, B., et al.** (2023). "Scaling data-constrained language models". [arXiv:2305.16264](https://arxiv.org/abs/2305.16264) — Repeating high-quality data up to 4× (7.1 §5, 7.5).
+  </FNItem>
+  <FNItem n={4}>
+    **Xie, S. M., Pham, H., Dong, X., et al.** (2023). "DoReMi: Optimizing data mixtures speeds up language model pretraining". [arXiv:2305.10429](https://arxiv.org/abs/2305.10429) — Worst-domain-perplexity optimisation for data mixtures (7.5 §2.2).
+  </FNItem>
+  <FNItem n={5}>
+    **Bengio, Y., Louradour, J., Collobert, R., & Weston, J.** (2009). "Curriculum learning". *ICML*. [dl.acm.org/doi/10.1145/1553374.1553380](https://dl.acm.org/doi/10.1145/1553374.1553380) — Original curriculum-learning paper (7.5 §3).
+  </FNItem>
+  <FNItem n={6}>
+    **Hu, S., Tu, Y., Han, X., et al.** (2024). "MiniCPM: Unveiling the potential of small language models with scalable training strategies". [arXiv:2404.06395](https://arxiv.org/abs/2404.06395) — WSD schedule + late-stage annealing recipe (7.5 §4).
+  </FNItem>
+  <FNItem n={7}>
+    **Abdin, M., Aneja, J., Awadalla, H., et al.** (2024). "Phi-3 technical report". [arXiv:2404.14219](https://arxiv.org/abs/2404.14219) — Synthetic/textbook-heavy data approach (7.5 §6 Aside).
+  </FNItem>
+  <FNItem n={8}>
+    **Dubey, A., Jauhri, A., Pandey, A., et al.** (2024). "The Llama 3 herd of models". [arXiv:2407.21783](https://arxiv.org/abs/2407.21783) — LLaMA-3 data-mixing-in-late-stages documentation (7.1 §4.6, 7.5).
+  </FNItem>
+</Footnotes>

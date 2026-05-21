@@ -9,7 +9,7 @@ prerequisites: ["ch4-cnn-bridge/4.1-discrete-convolution"]
 
 ## 1. Why this appendix exists
 
-Pooling is the second pillar of a classical CNN — convolution provides equivariant feature extraction, pooling provides local *invariance* and downsampling. Pooling layers have no learnable parameters, but they shape the receptive-field calculation and they have a slightly subtle backward pass that is worth writing once.
+Pooling is the second pillar of a classical CNN — convolution provides equivariant feature extraction, pooling provides local *invariance* and downsampling. Pooling layers have no learnable parameters, but they shape the receptive-field calculation and they have a slightly subtle backward pass that is worth writing once.<FN n={1} />
 
 ---
 
@@ -101,3 +101,9 @@ In LLM-era architectures, pooling has largely fallen out of favour. Vision Trans
 **(c)** Show that average-pool over a window of size $P \times P$ followed by upsampling by $P$ (nearest neighbour) is a linear map. Write its Jacobian for the 1D case $P = 2, H = 4$.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **LeCun, Y., Bottou, L., Bengio, Y., & Haffner, P.** (1998). "Gradient-based learning applied to document recognition". *Proceedings of the IEEE*, 86(11), 2278–2324. — LeNet-5 and the modern conv-pool-conv-pool template (4.1, Appendix 4.B).
+  </FNItem>
+</Footnotes>

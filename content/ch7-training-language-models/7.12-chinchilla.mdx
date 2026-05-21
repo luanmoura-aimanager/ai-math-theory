@@ -27,7 +27,7 @@ This session: the Chinchilla derivation, the corrected prescription, why product
 
 ## 2. The Chinchilla experiment
 
-**Hoffmann, Borgeaud, Mensch, et al., 2022, *Training Compute-Optimal Large Language Models*** ([arXiv:2203.15556](https://arxiv.org/abs/2203.15556)). Three complementary methodologies, all converging on the same answer.
+**Hoffmann, Borgeaud, Mensch, et al., 2022<FN n={1} />, *Training Compute-Optimal Large Language Models*** ([arXiv:2203.15556](https://arxiv.org/abs/2203.15556)). Three complementary methodologies, all converging on the same answer.
 
 ### 2.1 Approach 1: fix model size, vary compute
 
@@ -145,7 +145,7 @@ Inference FLOPs scale as $\sim 2 N$ per token generated (no backward, no Adam �
 
 ### 5.2 The new optimum
 
-If you anticipate $Q$ queries, the inference-aware optimum (Sardana, Frankle, 2024, [arXiv:2401.00448](https://arxiv.org/abs/2401.00448), *Beyond Chinchilla-Optimal*) is:
+If you anticipate $Q$ queries, the inference-aware optimum (Sardana, Frankle, 2024<FN n={2} />, [arXiv:2401.00448](https://arxiv.org/abs/2401.00448), *Beyond Chinchilla-Optimal*) is:
 
 $$
 D^* / N^* \approx 20 \cdot (1 + \kappa \cdot Q / Q_\text{ref})^{1 / \beta},
@@ -230,3 +230,12 @@ Three things:
 **(e)** The "all the data you have" recipe (§5 Aside) is the practical limit of inference-aware over-training. Argue why this is the *expected* equilibrium given the data-wall worry of [7.1 §5](/session/ch7-training-language-models/7.1-pretraining-data). Where does it break (if at all)?
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Hoffmann, J., Borgeaud, S., Mensch, A., et al.** (2022). "Training compute-optimal large language models" (Chinchilla). [arXiv:2203.15556](https://arxiv.org/abs/2203.15556) — The $D/N \approx 20$ correction (7.12).
+  </FNItem>
+  <FNItem n={2}>
+    **Sardana, N., & Frankle, J.** (2024). "Beyond Chinchilla-optimal: Accounting for inference in language model scaling laws". [arXiv:2401.00448](https://arxiv.org/abs/2401.00448) — Inference-aware over-training derivation (7.12 §5).
+  </FNItem>
+</Footnotes>

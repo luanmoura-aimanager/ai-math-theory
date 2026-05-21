@@ -19,7 +19,7 @@ By the end you should have:
 - A small reward model (a copy of TinyGPT v2 with a scalar head) trained on those preferences.
 - A DPO-updated TinyGPT v2 that demonstrably prefers one stylistic register over another in its samples.
 
-The whole thing fits in $\sim 300$ lines of Python.
+The whole thing fits in $\sim 300$ lines of Python.<FN n={1} />
 
 ---
 
@@ -323,3 +323,11 @@ Cap 12.6 next: the write-up. Distil what you've learned from Chapters 0–11 and
 **(f)** Compare sample quality from your aligned model vs. the v2 baseline on $5$ prompts. Note three observable differences. If you see *no* difference, list two debugging steps you'd take.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Karpathy, A.** (2023). [Let's build GPT: from scratch, in code, spelled out.](https://www.youtube.com/watch?v=kCc8FmEb1nY) YouTube companion to nanoGPT; line-by-line build of the architecture and training loop.
+    
+    For the architectural upgrades in 12.4, see the RoPE and RMSNorm references already in **Chapter 6** (Su et al., 2021 — RoPE) and **Chapter 3** (Zhang & Sennrich, 2019 — RMSNorm). For the mini-RLHF loop in 12.5, see the DPO and Bradley-Terry references in **Chapter 9** (Rafailov et al., 2023; Bradley & Terry, 1952).
+  </FNItem>
+</Footnotes>

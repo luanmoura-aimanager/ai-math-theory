@@ -17,7 +17,7 @@ BPE is *the* tokenization algorithm of modern LLMs. GPT-2, GPT-3, GPT-4, LLaMA, 
 - **Training-data tokens vs model-vocabulary tokens are different.** Reporting "2 T training tokens" depends on which tokenizer you use; a model with a larger vocabulary measures fewer tokens for the same text.
 - **Tokenizer choices are not free.** They affect downstream loss, multi-lingual performance, and code/math handling in measurable, sometimes large ways.
 
-This session: the algorithm with worked example, byte-level BPE and why GPT-2 introduced it, vocabulary sizes in practice, and the now-canonical pitfalls (number tokenization, encoding edge cases, glitch tokens). Pair this with [Karpathy's "Let's build the GPT tokenizer"](https://www.youtube.com/watch?v=zduSFxRajkE) lecture — they cover the same algorithm; reading + watching nails it.
+This session: the algorithm with worked example, byte-level BPE and why GPT-2 introduced it, vocabulary sizes in practice, and the now-canonical pitfalls (number tokenization, encoding edge cases, glitch tokens). Pair this with [Karpathy's<FN n={1} /> "Let's build the GPT tokenizer"](https://www.youtube.com/watch?v=zduSFxRajkE) lecture — they cover the same algorithm; reading + watching nails it.
 
 ---
 
@@ -41,7 +41,7 @@ Subword tokenization gets the best of both: a vocabulary of $\sim 50{,}000$ subw
 
 ## 3. The BPE algorithm
 
-**Sennrich, Haddow & Birch, 2016, *Neural Machine Translation of Rare Words with Subword Units*** ([arXiv:1508.07909](https://arxiv.org/abs/1508.07909)). Adapted from an older lossless-compression algorithm by Gage (1994), originally designed to compress strings by greedily replacing common byte pairs with new symbols.
+**Sennrich, Haddow & Birch, 2016<FN n={2} />, *Neural Machine Translation of Rare Words with Subword Units*** ([arXiv:1508.07909](https://arxiv.org/abs/1508.07909)). Adapted from an older lossless-compression algorithm by Gage (1994)<FN n={4} />, originally designed to compress strings by greedily replacing common byte pairs with new symbols.
 
 ### 3.1 Training BPE: pseudocode
 
@@ -202,7 +202,7 @@ UTF-8 has 256 distinct byte values. Some are printable ASCII (`0x20`–`0x7E`), 
 
 ### 5.4 SentencePiece — the LLaMA tokenizer
 
-LLaMA uses **SentencePiece** ([Kudo & Richardson, 2018, arXiv:1808.06226](https://arxiv.org/abs/1808.06226)) in BPE mode. SentencePiece treats the input as a raw Unicode stream (not pre-split), and learns the same BPE algorithm but with the *whitespace itself* as a regular character (`▁`, the lower-eighth-block) rather than a pre-tokenizer separator. The difference from GPT-2 byte-level BPE is mostly cosmetic — both end up with subword vocabularies that handle arbitrary UTF-8 — but SentencePiece is often considered cleaner because it has no language-specific pre-tokenizer regex.
+LLaMA uses **SentencePiece** ([Kudo & Richardson, 2018<FN n={3} />, arXiv:1808.06226](https://arxiv.org/abs/1808.06226)) in BPE mode. SentencePiece treats the input as a raw Unicode stream (not pre-split), and learns the same BPE algorithm but with the *whitespace itself* as a regular character (`▁`, the lower-eighth-block) rather than a pre-tokenizer separator. The difference from GPT-2 byte-level BPE is mostly cosmetic — both end up with subword vocabularies that handle arbitrary UTF-8 — but SentencePiece is often considered cleaner because it has no language-specific pre-tokenizer regex.
 
 ### 5.5 tiktoken — the OpenAI tokenizer
 
@@ -272,7 +272,7 @@ The fix is to apply Unicode normalisation (NFC) before tokenization; most modern
 
 When a tokenizer is trained on a different distribution from the LLM, you can end up with tokens in the vocabulary that the model has barely seen during training. Famous example: `SolidGoldMagikarp`, a token that appeared a few times in early CommonCrawl scrapes (a Reddit username) and was preserved in GPT-2/3's BPE vocab but rarely seen at training time. Asking GPT-3 about `SolidGoldMagikarp` produced wild hallucinations because the embedding for that token had received almost no gradient updates.
 
-Such "glitch tokens" are a structural feature of frozen-vocabulary models. The fix is to re-train the tokenizer alongside the model, or to delete obvious glitch entries pre-deployment.
+Such "glitch tokens" are a structural feature of frozen-vocabulary models. The fix is to re-train the tokenizer alongside the model, or to delete obvious glitch entries pre-deployment.<FN n={5} />
 
 ---
 
@@ -381,3 +381,21 @@ Five things to remember:
 **(e)** Implement the §8 BPE trainer and run it on the toy corpus. Verify that after 10 merges, the four input words tokenise into how many total tokens? Now repeat with a much larger toy corpus of your choice (e.g., the first 1000 words of *Moby Dick* repeated word-by-word) and discuss the resulting merges.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Karpathy, A.** "Let's build the GPT tokenizer". [YouTube](https://www.youtube.com/watch?v=zduSFxRajkE) (2024); paired with [`minbpe`](https://github.com/karpathy/minbpe). — Implements byte-level BPE from scratch (7.2).
+  </FNItem>
+  <FNItem n={2}>
+    **Sennrich, R., Haddow, B., & Birch, A.** (2016). "Neural machine translation of rare words with subword units" (BPE). [arXiv:1508.07909](https://arxiv.org/abs/1508.07909) — BPE adapted from Gage 1994 for NMT (7.2).
+  </FNItem>
+  <FNItem n={3}>
+    **Kudo, T., & Richardson, J.** (2018). "SentencePiece: A simple and language independent subword tokenizer and detokenizer for neural text processing". [arXiv:1808.06226](https://arxiv.org/abs/1808.06226) — SentencePiece (BPE-mode and unigram-mode) (7.2 §5.4).
+  </FNItem>
+  <FNItem n={4}>
+    **Gage, P.** (1994). "A new algorithm for data compression". *C Users Journal*, 12(2), 23–38. — The original byte-pair encoding compression algorithm (7.2 §3.4).
+  </FNItem>
+  <FNItem n={5}>
+    **Kool, W., van Hoof, H., & Welling, M.** (2019). "Buy 4 REINFORCE samples, get a baseline for free!". *ICLR Workshop*. — Leave-one-out baseline (RLOO precursor) (9.11 §7.2).
+  </FNItem>
+</Footnotes>

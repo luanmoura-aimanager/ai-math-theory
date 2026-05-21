@@ -15,7 +15,7 @@ We do three things here:
 
 1. Define translation equivariance.
 2. Prove that 1D and 2D convolutions are translation-equivariant, and identify *weight sharing* as the reason.
-3. Compute receptive fields exactly and see the "depth tax" that motivates attention.
+3. Compute receptive fields exactly and see the "depth tax" that motivates attention.<FN n={1} />
 
 ---
 
@@ -45,7 +45,7 @@ The slogan: *equivariance preserves the "where"; invariance throws it away.* A c
 
 <Aside type="note">
 **Invariance is usually a composition.** Pure invariance is hard to learn directly; it is much easier to learn an equivariant feature map and then aggregate it with an invariant readout (e.g. max-pool or sum over space). This is the standard CNN recipe: a stack of equivariant convs, ending in a global pool.
-</Aside>
+</Aside><FN n={6} />
 
 ---
 
@@ -88,8 +88,8 @@ This is called **weight sharing**, and it is the structural reason convolutions 
 Weight sharing also enforces translation equivariance during *learning*: gradient updates to $w[k]$ are sums over every output location, so the same kernel improves uniformly across the image. There is no way for the optimiser to "specialise" weights for the top-left corner versus the bottom-right.
 
 <Aside type="history">
-The biological inspiration came from Hubel & Wiesel (1962), whose recordings of cat visual cortex revealed neurons with localised receptive fields that responded to oriented edges and translated their preferred stimulus along the cortex. Fukushima's Neocognitron (1980) built the first multi-layer model with hand-wired weight sharing. LeCun et al. (1989, 1998) tied weight sharing to gradient-based learning and made it a layer of a trained neural network — that is when CNNs as we know them began.
-</Aside>
+The biological inspiration came from Hubel & Wiesel (1962)<FN n={2} />, whose recordings of cat visual cortex revealed neurons with localised receptive fields that responded to oriented edges and translated their preferred stimulus along the cortex. Fukushima's Neocognitron (1980)<FN n={3} /> built the first multi-layer model with hand-wired weight sharing. LeCun et al. (1989, 1998) tied weight sharing to gradient-based learning and made it a layer of a trained neural network — that is when CNNs as we know them began.
+</Aside><FN ns={[7, 8, 9, 10]} />
 
 ---
 
@@ -135,7 +135,7 @@ The lesson is sharp: **without striding or dilation, a stack of small kernels ne
 
 ### 5.3 Effective vs theoretical receptive field
 
-The recursion above gives the *theoretical* receptive field — the set of input pixels that *could* influence a given output. But not all of them influence it equally. Luo et al. (2016) showed that, even at full theoretical depth, the *effective* receptive field — the region whose pixels meaningfully contribute to the output — is dramatically smaller and approximately Gaussian, with a standard deviation that grows like $\sqrt{L}$ instead of $L$ for stride-1 stacks. So the picture is even less favourable for CNNs than the count above suggests: doubling depth doesn't double the part of the input the network actually *uses*.
+The recursion above gives the *theoretical* receptive field — the set of input pixels that *could* influence a given output. But not all of them influence it equally. Luo et al. (2016)<FN n={4} /> showed that, even at full theoretical depth, the *effective* receptive field — the region whose pixels meaningfully contribute to the output — is dramatically smaller and approximately Gaussian, with a standard deviation that grows like $\sqrt{L}$ instead of $L$ for stride-1 stacks. So the picture is even less favourable for CNNs than the count above suggests: doubling depth doesn't double the part of the input the network actually *uses*.<FN n={5} />
 
 ---
 
@@ -166,3 +166,36 @@ This is the gap attention closes. A single attention layer mixes every position 
 **(d)** Suppose you replace each kernel weight $w[k, l]$ by a *position-dependent* weight $w_{ij}[k, l]$ (one kernel per output location, no sharing). Show that this layer is no longer translation-equivariant by exhibiting a specific $w_{ij}$ and a specific $h$ where $f(T_h x) \neq T_h f(x)$.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Prince, S. J. D.** (2023). *Understanding Deep Learning,* §10 (Convolutional Networks). MIT Press. — Receptive fields and equivariance treatment (4.2). [udlbook.github.io](https://udlbook.github.io/udlbook/)
+  </FNItem>
+  <FNItem n={2}>
+    **Hubel, D. H., & Wiesel, T. N.** (1962). "Receptive fields, binocular interaction and functional architecture in the cat's visual cortex". *Journal of Physiology*, 160, 106–154. — Biological origin of local receptive fields (4.2).
+  </FNItem>
+  <FNItem n={3}>
+    **Fukushima, K.** (1980). "Neocognitron: A self-organizing neural network model for a mechanism of pattern recognition unaffected by shift in position". *Biological Cybernetics*, 36, 193–202. — First hierarchical model with weight sharing (4.2).
+  </FNItem>
+  <FNItem n={4}>
+    **Luo, W., Li, Y., Urtasun, R., & Zemel, R.** (2016). "Understanding the effective receptive field in deep convolutional neural networks". *NeurIPS*. [arXiv:1701.04128](https://arxiv.org/abs/1701.04128) — Effective vs theoretical receptive field; Gaussian shape (4.2 §5.3).
+  </FNItem>
+  <FNItem n={5}>
+    **He, K., Zhang, X., Ren, S., & Sun, J.** (2016). "Deep residual learning for image recognition". *CVPR*. [arXiv:1512.03385](https://arxiv.org/abs/1512.03385) — ResNet; deep stacks of small kernels (referenced in 4.2 §5).
+  </FNItem>
+  <FNItem n={6}>
+    **van den Oord, A., Dieleman, S., Zen, H., et al.** (2016). "WaveNet: A generative model for raw audio". [arXiv:1609.03499](https://arxiv.org/abs/1609.03499) — Dilated 1D convolutions for sequences (4.2 Aside, 4.3 §2).
+  </FNItem>
+  <FNItem n={7}>
+    **Shaw, P., Uszkoreit, J., & Vaswani, A.** (2018). "Self-attention with relative position representations". *NAACL*. [arXiv:1803.02155](https://arxiv.org/abs/1803.02155) — First relative positional encoding (6.6 §4.2).
+  </FNItem>
+  <FNItem n={8}>
+    **Raffel, C., Shazeer, N., Roberts, A., et al.** (2020). "Exploring the limits of transfer learning with a unified text-to-text transformer" (T5). *JMLR*. [arXiv:1910.10683](https://arxiv.org/abs/1910.10683) — Bucketed relative positional bias (6.6 §4.2).
+  </FNItem>
+  <FNItem n={9}>
+    **Wang, Q., Li, B., Xiao, T., et al.** (2019). "Improving deep transformer with depth-scaled initialization and merged attention" (a.k.a. learning deep Transformers). [arXiv:1908.11365](https://arxiv.org/abs/1908.11365) — Early analysis of post-LN instability; motivation for pre-LN (6.10 §4.2).
+  </FNItem>
+  <FNItem n={10}>
+    **Gao, L., Biderman, S., Black, S., et al.** (2020). "The Pile: An 800GB dataset of diverse text for language modeling". [arXiv:2101.00027](https://arxiv.org/abs/2101.00027) — 22-source mixed corpus (7.1 §4.2).
+  </FNItem>
+</Footnotes>

@@ -16,7 +16,7 @@ The two diagrams differ by the position of one box, but they train very differen
 - **Post-LN.** Stable up to ~12 layers; needs a learning-rate warmup; gradient norms blow up near the input on deep stacks; sensitive to initialisation.
 - **Pre-LN.** Trains stably at 96+ layers; no warmup required; gradient norms are well-behaved across depth; tolerates a wider learning rate range.
 
-This session shows both block diagrams, derives why pre-norm preserves the identity path of [6.9](/session/ch6-attention-transformer/6.9-residual-connections) while post-norm breaks it, and surveys the evidence that every modern LLM (GPT-2/3/4, LLaMA, Mistral, Qwen, Gemini, Claude) uses pre-norm. We will be writing pre-norm blocks for the rest of the course.
+This session shows both block diagrams, derives why pre-norm preserves the identity path of [6.9](/session/ch6-attention-transformer/6.9-residual-connections) while post-norm breaks it, and surveys the evidence that every modern LLM (GPT-2/3/4, LLaMA, Mistral, Qwen, Gemini, Claude) uses pre-norm. We will be writing pre-norm blocks for the rest of the course.<FN ns={[1, 3]} />
 
 ---
 
@@ -39,7 +39,7 @@ y &= \text{LN}\!\big(x' + \text{FFN}(x')\big).
 \end{aligned}
 $$
 
-This is the diagram in *Attention Is All You Need* §3.1 ([Vaswani et al., 2017](https://arxiv.org/abs/1706.03762)) — the one usually drawn with "Add & Norm" boxes after each sub-layer.
+This is the diagram in *Attention Is All You Need* §3.1 ([Vaswani et al., 2017<FN n={2} />](https://arxiv.org/abs/1706.03762)) — the one usually drawn with "Add & Norm" boxes after each sub-layer.
 
 ### 2.2 Pre-LN (GPT-2 and modern LLMs)
 
@@ -90,7 +90,7 @@ $$
 \frac{\partial x_\ell}{\partial x_{\ell-1}} = \underbrace{\frac{\partial \text{LN}}{\partial g_\ell}}_{\text{the norm's Jacobian}} \cdot \underbrace{\big(I + J_\ell^{(f)}\big)}_{\text{residual term}}.
 $$
 
-The norm's Jacobian is *not* identity. LayerNorm subtracts the mean and divides by the standard deviation, with a learnable scale $\gamma$ that at initialisation is $1$. As shown by Xiong et al. (2020) — see §5 — for $d \gg 1$,
+The norm's Jacobian is *not* identity. LayerNorm subtracts the mean and divides by the standard deviation, with a learnable scale $\gamma$ that at initialisation is $1$. As shown by Xiong et al. (2020)<FN n={6} /> — see §5 — for $d \gg 1$,
 
 $$
 \frac{\partial \text{LN}}{\partial g} \approx \frac{1}{\|g\|/\sqrt{d}}\, \Big(I - \tfrac{1}{d}\mathbf{1}\mathbf{1}^\top - \tfrac{1}{d}\hat{g}\hat{g}^\top\Big),
@@ -112,7 +112,7 @@ This was tolerable at 6 layers. At 12 layers (BERT-base) it was already annoying
 
 ### 4.2 Pre-LN removes the warmup
 
-Empirically — and provably, via the analysis below — pre-LN models train stably from step 1 with any reasonable learning rate. Constant-LR training works, and a *cosine* schedule (3.7) or WSD (3.7) without warmup converges to within a couple of percent of the warmed-up baseline. The first paper to attribute GPT-2's stability to its pre-LN choice was Wang et al. (2019), *Improving deep Transformer with depth-scaled initialization and merged attention* ([arXiv:1908.11365](https://arxiv.org/abs/1908.11365)).
+Empirically — and provably, via the analysis below — pre-LN models train stably from step 1 with any reasonable learning rate. Constant-LR training works, and a *cosine* schedule (3.7) or WSD (3.7) without warmup converges to within a couple of percent of the warmed-up baseline. The first paper to attribute GPT-2's stability to its pre-LN choice was Wang et al. (2019)<FN n={5} />, *Improving deep Transformer with depth-scaled initialization and merged attention* ([arXiv:1908.11365](https://arxiv.org/abs/1908.11365)).
 
 <Aside type="note">
 **Pre-LN is also what allows the "scaling laws" cleanly.** When Kaplan et al. (2020) ([arXiv:2001.08361](https://arxiv.org/abs/2001.08361), Cap 7.11) characterised loss as a power law in compute, parameters, and data, they implicitly assumed an architecture that *trains stably across orders of magnitude of depth*. Post-LN would not have given them clean curves. Pre-LN became the lab default partly because it made experiments at varying scales actually comparable.
@@ -159,7 +159,7 @@ The same lesson recurs throughout deep-learning architecture. Whenever a normali
 This is one rule with multiple instances:
 
 - **ResNet-v1** (post-activation BN): the BN sits between two residuals on the main path → harder to train at extreme depth.
-- **ResNet-v2** (pre-activation BN, He et al., 2016, *Identity mappings in deep residual networks*, [arXiv:1603.05027](https://arxiv.org/abs/1603.05027)): the BN moves into the residual branch → trains to 1000+ layers with the same recipe.
+- **ResNet-v2** (pre-activation BN, He et al., 2016<FN n={4} />, *Identity mappings in deep residual networks*, [arXiv:1603.05027](https://arxiv.org/abs/1603.05027)): the BN moves into the residual branch → trains to 1000+ layers with the same recipe.
 - **Pre-LN Transformer**: the LN moves into the residual branch → 96+ layers train stably.
 
 The pattern is structural, not specific to Transformers. The same proof template applies to any residual architecture.
@@ -184,9 +184,9 @@ Equivalently: pre-LN's invariant is "every sub-layer sees a unit-norm input"; th
 
 A few architectural offsprings worth knowing the names of, mostly outside the scope of this chapter:
 
-- **DeepNorm** (Wang et al., 2022, [arXiv:2203.00555](https://arxiv.org/abs/2203.00555)). A *post-norm* variant with carefully chosen residual scaling that trains at $1000$ layers. Used in some Microsoft/Tsinghua research papers; not in current frontier LLMs.
+- **DeepNorm** (Wang et al., 2022, [arXiv:2203.00555](https://arxiv.org/abs/2203.00555))<FN n={7} />. A *post-norm* variant with carefully chosen residual scaling that trains at $1000$ layers. Used in some Microsoft/Tsinghua research papers; not in current frontier LLMs.
 - **Sandwich-norm** (Ding et al., 2021, GLM). Adds *both* pre-norm and post-norm. Stable but more parameters.
-- **NormFormer** (Shleifer et al., 2021, [arXiv:2110.09456](https://arxiv.org/abs/2110.09456)). Adds an extra LN after attention output. Reduces gradient norm in deeper layers.
+- **NormFormer** (Shleifer et al., 2021, [arXiv:2110.09456](https://arxiv.org/abs/2110.09456))<FN n={8} />. Adds an extra LN after attention output. Reduces gradient norm in deeper layers.
 
 All build on the pre-LN baseline. None has displaced it in any frontier LLM. **For the rest of this course, "Transformer block" means pre-LN with one $\text{LN}_\text{final}$ at the top.**
 
@@ -217,3 +217,30 @@ Two residual additions, two LayerNorms placed inside the residual branches, no w
 **(e)** Argue why pre-LN requires a *final* $\text{LN}_\text{final}$ before the output projection but post-LN does not.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Raschka, S.** (2024). *Build a Large Language Model (From Scratch),* Chapters 3–4. Manning. — Self-attention implementation (6.3, 6.4), causal masking (6.5), pre-norm block (6.10–6.11).
+  </FNItem>
+  <FNItem n={2}>
+    **Vaswani, A., Shazeer, N., Parmar, N., et al.** (2017). "Attention is all you need". *NeurIPS*. [arXiv:1706.03762](https://arxiv.org/abs/1706.03762) — The Transformer paper. Scaled dot-product attention (6.2), multi-head attention (6.4), encoder–decoder cross-attention (6.3), sinusoidal positional encoding (Appendix 6.A), the FFN sub-layer (6.8), post-LN block diagram (6.10), full architecture read (6.11).
+  </FNItem>
+  <FNItem n={3}>
+    **Radford, A., Wu, J., Child, R., et al.** (2019). "Language models are unsupervised multitask learners" (GPT-2). OpenAI technical report. — Learned absolute positional encoding (Appendix 6.B), pre-LN variant (6.10), the architectural skeleton of every modern decoder-only LLM (6.11).
+  </FNItem>
+  <FNItem n={4}>
+    **He, K., Zhang, X., Ren, S., & Sun, J.** (2016). "Identity mappings in deep residual networks". [arXiv:1603.05027](https://arxiv.org/abs/1603.05027) — Pre-activation ResNet; the structural blueprint behind pre-LN Transformer (6.10 §6).
+  </FNItem>
+  <FNItem n={5}>
+    **Wang, Q., Li, B., Xiao, T., et al.** (2019). "Improving deep transformer with depth-scaled initialization and merged attention" (a.k.a. learning deep Transformers). [arXiv:1908.11365](https://arxiv.org/abs/1908.11365) — Early analysis of post-LN instability; motivation for pre-LN (6.10 §4.2).
+  </FNItem>
+  <FNItem n={6}>
+    **Xiong, R., Yang, Y., He, D., et al.** (2020). "On layer normalization in the Transformer architecture". [arXiv:2002.04745](https://arxiv.org/abs/2002.04745) — Theoretical analysis: post-LN gradient grows as √L, pre-LN is O(1) (6.10 §5).
+  </FNItem>
+  <FNItem n={7}>
+    **Wang, H., Ma, S., Dong, L., et al.** (2022). "DeepNet: Scaling Transformers to 1000 layers" (DeepNorm). [arXiv:2203.00555](https://arxiv.org/abs/2203.00555) — Stable post-norm variant via residual scaling (6.10 §8).
+  </FNItem>
+  <FNItem n={8}>
+    **Shleifer, S., Weston, J., & Ott, M.** (2021). "NormFormer: Improved transformer pretraining with extra normalization". [arXiv:2110.09456](https://arxiv.org/abs/2110.09456) — Additional norm placements for deeper models (6.10 §8).
+  </FNItem>
+</Footnotes>

@@ -15,7 +15,7 @@ The dense FFN of [6.8](/session/ch6-attention-transformer/6.8-ffn) and the SwiGL
 
 Frontier models in 2024–2026 routinely have $E \in [8, 256]$ experts with $k \in [1, 8]$ activated per token. Mixtral-8x7B uses $E = 8, k = 2$ — $47$B total parameters, $\sim 13$B activated per token. DeepSeek-V3 uses $E = 256$ fine-grained experts + 1 shared expert with $k = 8$ activated — $671$B total, $37$B activated. The model has GPT-4-scale capacity at $\sim 1/20$ of GPT-4's inference cost per token.
 
-This session derives the construction (router, top-$k$, output mix), the load-balancing auxiliary loss that prevents expert collapse, and the operational tradeoffs (expert parallelism, capacity factor, fine-grained design). MoE is the largest architectural perturbation in Chapter 8.
+This session derives the construction (router, top-$k$, output mix), the load-balancing auxiliary loss that prevents expert collapse, and the operational tradeoffs (expert parallelism, capacity factor, fine-grained design). MoE is the largest architectural perturbation in Chapter 8.<FN n={1} />
 
 ---
 
@@ -65,7 +65,7 @@ $$
 
 where the first term is the experts and the second term is the router. For $E = 64$, $d = 4096$: experts use $E \cdot 8 d^2 \approx 8.6 \cdot 10^9$ parameters per MoE layer, vs $8 d^2 \approx 1.3 \cdot 10^8$ for a dense FFN. **Total parameters scale linearly with $E$.**
 
-So the decoupling: $N_\text{total} \propto E$, $N_\text{active per token} \propto k$. At $E = 64, k = 2$, the model has $32\times$ more parameters than a dense baseline but spends only $2\times$ the FFN compute per token. The arithmetic of "more parameters per token for less than proportional compute" is the entire economic argument for MoE.
+So the decoupling: $N_\text{total} \propto E$, $N_\text{active per token} \propto k$. At $E = 64, k = 2$, the model has $32\times$ more parameters than a dense baseline but spends only $2\times$ the FFN compute per token. The arithmetic of "more parameters per token for less than proportional compute" is the entire economic argument for MoE.<FN n={3} />
 
 ---
 
@@ -76,7 +76,7 @@ The router learns to assign tokens to experts. There is no a priori constraint t
 1. **Capacity is wasted.** The unused experts' parameters contribute nothing; effective parameter count drops from $E$ to the number of frequently-used experts.
 2. **Expert-parallel hardware utilisation drops.** Experts are typically sharded one-per-device (§6 below). If $80\%$ of tokens go to $20\%$ of experts, $80\%$ of the devices are idle for $80\%$ of the time.
 
-The fix, introduced in the GShard paper (Lepikhin et al., 2020, [arXiv:2006.16668](https://arxiv.org/abs/2006.16668)) and refined in Switch Transformer (Fedus et al., 2021, [arXiv:2101.03961](https://arxiv.org/abs/2101.03961)), is an **auxiliary load-balancing loss** added to the training objective.
+The fix, introduced in the GShard paper (Lepikhin et al., 2020, [arXiv:2006.16668](https://arxiv.org/abs/2006.16668))<FN n={4} /> and refined in Switch Transformer (Fedus et al., 2021, [arXiv:2101.03961](https://arxiv.org/abs/2101.03961))<FN n={5} />, is an **auxiliary load-balancing loss** added to the training objective.
 
 ### 3.1 The Switch Transformer auxiliary loss
 
@@ -114,7 +114,7 @@ Capacity-factor dropping was central to early Switch Transformer training; moder
 
 Switch Transformer used $E = 64$, $k = 1$ (a single expert per token), with each expert being a *full-width* SwiGLU FFN. Mixtral-8x7B used $E = 8$, $k = 2$, again with full-width experts.
 
-DeepSeek-MoE (Dai et al., 2024, [arXiv:2401.06066](https://arxiv.org/abs/2401.06066)) introduced the **fine-grained expert** design: make each expert *smaller* (lower $d_\text{ff}$) but have many more of them, with $k$ correspondingly larger. The activated parameter count is the same; what changes is the *combinatorial capacity* of the gating.
+DeepSeek-MoE (Dai et al., 2024, [arXiv:2401.06066](https://arxiv.org/abs/2401.06066))<FN n={6} /> introduced the **fine-grained expert** design: make each expert *smaller* (lower $d_\text{ff}$) but have many more of them, with $k$ correspondingly larger. The activated parameter count is the same; what changes is the *combinatorial capacity* of the gating.
 
 Concretely: a baseline of $E = 8, k = 2$ has $\binom{8}{2} = 28$ possible 2-expert combinations per token. Splitting each expert into $4$ pieces gives $E = 32, k = 8$ — same activated compute, but now $\binom{32}{8} = 10{,}518{,}300$ possible 8-expert combinations. Each combination is a distinct "skill" the layer can specialise to.
 
@@ -147,7 +147,7 @@ Two consequences:
 
 1. **MoE shifts the parameter-to-compute ratio.** A dense $13$B model and a MoE model with $13$B activated parameters spend the same compute per token, but the MoE model has substantially more capacity. At iso-compute, MoE typically outperforms dense on knowledge-heavy benchmarks (MMLU, GSM8K) and is roughly tied on reasoning (HumanEval, MATH) — the latter being the workloads where attention compute matters more than FFN capacity.
 
-2. **MoE requires more memory.** The full $E$ experts must be resident across the inference cluster. This is the dominant reason MoE serving uses many GPUs even at modest batch sizes — the parameters are large.
+2. **MoE requires more memory.** The full $E$ experts must be resident across the inference cluster. This is the dominant reason MoE serving uses many GPUs even at modest batch sizes — the parameters are large.<FN n={7} />
 
 ---
 
@@ -169,7 +169,7 @@ Expert parallelism is orthogonal to (and composes with) the data/tensor/pipeline
 
 <Aside type="note">
 **Auxiliary-loss-free balancing.** DeepSeek-V3 (2024) introduced an "auxiliary-loss-free" load balancing scheme: instead of adding $\mathcal{L}_\text{aux}$ to the loss, dynamically maintain a per-expert *bias* $b_e$ added to the router logits, increased for under-used experts and decreased for over-used experts (a control loop, not a gradient). The empirical claim is that this preserves balance without the gradient interference from the auxiliary loss. Subsequent MoE work has split between auxiliary-loss-only, auxiliary-loss-free, and hybrid schemes; the field has not converged.
-</Aside>
+</Aside><FN ns={[2, 8]} />
 
 ---
 
@@ -222,3 +222,30 @@ The next two sessions (§8.7 and §8.8) leave the Transformer block entirely: st
 **(f)** Argue why MoE helps knowledge-heavy benchmarks (MMLU) more than reasoning benchmarks (MATH). Cite the FFN-as-knowledge view of [6.8 §6](/session/ch6-attention-transformer/6.8-ffn).
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **DeepSeek-AI** (2024). "DeepSeek-V2: A strong, economical, and efficient mixture-of-experts language model". [arXiv:2405.04434](https://arxiv.org/abs/2405.04434) — Multi-head Latent Attention (MLA) with decoupled RoPE (8.5); also primary source for fine-grained MoE (8.6).
+  </FNItem>
+  <FNItem n={2}>
+    **DeepSeek-AI** (2024). "DeepSeek-V3 technical report". [arXiv:2412.19437](https://arxiv.org/abs/2412.19437) — V3 architecture: MLA + 256-expert fine-grained MoE + auxiliary-loss-free balancing (8.5, 8.6 §6).
+  </FNItem>
+  <FNItem n={3}>
+    **Shazeer, N., Mirhoseini, A., Maziarz, K., et al.** (2017). "Outrageously large neural networks: The sparsely-gated mixture-of-experts layer". [arXiv:1701.06538](https://arxiv.org/abs/1701.06538) — Original deep MoE with top-$k$ gating (8.6 §2).
+  </FNItem>
+  <FNItem n={4}>
+    **Lepikhin, D., Lee, H., Xu, Y., et al.** (2020). "GShard: Scaling giant models with conditional computation and automatic sharding". [arXiv:2006.16668](https://arxiv.org/abs/2006.16668) — Capacity factor, auxiliary load-balance loss, expert parallelism (8.6 §3, §6).
+  </FNItem>
+  <FNItem n={5}>
+    **Fedus, W., Zoph, B., & Shazeer, N.** (2021). "Switch Transformer: Scaling to trillion parameter models with simple and efficient sparsity". [arXiv:2101.03961](https://arxiv.org/abs/2101.03961) — Top-1 routing; standard auxiliary loss formulation (8.6 §3.1).
+  </FNItem>
+  <FNItem n={6}>
+    **Dai, D., Deng, C., Zhao, C., et al.** (2024). "DeepSeek-MoE: Towards ultimate expert specialization in mixture-of-experts language models". [arXiv:2401.06066](https://arxiv.org/abs/2401.06066) — Fine-grained experts + shared experts (8.6 §4).
+  </FNItem>
+  <FNItem n={7}>
+    **Jiang, A. Q., Sablayrolles, A., Roux, A., et al.** (2024). "Mixtral of experts". [arXiv:2401.04088](https://arxiv.org/abs/2401.04088) — Mixtral-8x7B; production MoE LLM (8.6 §5).
+  </FNItem>
+  <FNItem n={8}>
+    **Wang, L., Gao, H., Zhao, C., Sun, X., & Dai, D.** (2024). "Auxiliary-loss-free load balancing strategy for mixture-of-experts" (DeepSeek-V3 routing). [arXiv:2408.15664](https://arxiv.org/abs/2408.15664) — Control-loop-based balance without auxiliary loss (8.6 §6 Aside).
+  </FNItem>
+</Footnotes>

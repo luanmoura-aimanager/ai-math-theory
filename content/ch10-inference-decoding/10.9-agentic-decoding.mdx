@@ -15,7 +15,7 @@ This session closes the chapter at the layer *above* the decode loop: **agentic 
 
 The pattern unifies what was previously a zoo of techniques. Self-consistency, Tree of Thoughts, ReAct, and the broader "agent" framing of 2024–2026 are all instances of one idea: **the decoder is a controller that orchestrates an outer search, with each inner step still being one of the decode strategies from earlier in this chapter**.
 
-By the end you should see test-time scaling (10.7), inference-time alignment (9.15), and the agentic loop as three views of the same underlying spend-more-inference-compute paradigm.
+By the end you should see test-time scaling (10.7), inference-time alignment (9.15), and the agentic loop as three views of the same underlying spend-more-inference-compute paradigm.<FN n={1} />
 
 ---
 
@@ -33,7 +33,7 @@ SelfConsistency(prompt, N):
     return mode(answers)
 ```
 
-Wang et al. (2022, [arXiv:2203.11171](https://arxiv.org/abs/2203.11171)) showed this lifts GSM8K accuracy from $\sim 57\%$ (single CoT) to $\sim 75\%$ at $N = 40$. The gain is monotonic in $N$ up to roughly $N \sim 40$, then saturates.
+Wang et al. (2022<FN n={2} />, [arXiv:2203.11171](https://arxiv.org/abs/2203.11171)) showed this lifts GSM8K accuracy from $\sim 57\%$ (single CoT) to $\sim 75\%$ at $N = 40$. The gain is monotonic in $N$ up to roughly $N \sim 40$, then saturates.
 
 ### 2.1 Why it works
 
@@ -59,7 +59,7 @@ These conditions push you towards the next family: explicit search.
 
 ## 3. Tree of Thoughts (ToT)
 
-Yao et al. (2023, [arXiv:2305.10601](https://arxiv.org/abs/2305.10601)) generalised self-consistency to *search over partial reasoning trees*. Instead of generating $N$ complete chains in parallel, build a tree where each node is a partial reasoning state and each edge is one reasoning *step*.
+Yao et al. (2023<FN n={3} />, [arXiv:2305.10601](https://arxiv.org/abs/2305.10601)) generalised self-consistency to *search over partial reasoning trees*. Instead of generating $N$ complete chains in parallel, build a tree where each node is a partial reasoning state and each edge is one reasoning *step*.
 
 ```
 ToT(prompt):
@@ -100,7 +100,7 @@ ToT generates $O(k^d)$ partial states for depth $d$ in the worst case (with beam
 
 ## 4. ReAct: interleaving reasoning and tools
 
-Yao et al. (2022, [arXiv:2210.03629](https://arxiv.org/abs/2210.03629)) introduced **ReAct** — Reason + Act — the prototype of modern tool-using agents.
+Yao et al. (2022<FN n={4} />, [arXiv:2210.03629](https://arxiv.org/abs/2210.03629)) introduced **ReAct** — Reason + Act — the prototype of modern tool-using agents.
 
 The decoder alternates between two kinds of tokens:
 
@@ -150,7 +150,7 @@ ReAct composes with everything else:
 
 A natural extension: instead of just emitting an answer, emit an answer, *critique it* (with the same model or a separate critic), then *revise*.
 
-Shinn et al. (2023, [arXiv:2303.11366](https://arxiv.org/abs/2303.11366)) formalised this as **Reflexion**:
+Shinn et al. (2023<FN n={5} />, [arXiv:2303.11366](https://arxiv.org/abs/2303.11366)) formalised this as **Reflexion**:
 
 ```
 Reflexion(prompt, max_iters):
@@ -276,3 +276,21 @@ Chapter 10 closes. Chapter 11 opens: interpretability — peering inside the net
 **(f)** A 2026 production reasoning model with tool use combines: a 70B base, 30k thinking tokens per query, $N=8$ resamples, verifier-based selection, ReAct-style tool calls. Identify which session of Chapter 9 or 10 each component traces back to.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Wei, J., Wang, X., Schuurmans, D., et al.** (2022). "Chain-of-thought prompting elicits reasoning in large language models". [arXiv:2201.11903](https://arxiv.org/abs/2201.11903) — Chain-of-thought (10.7, 10.9).
+  </FNItem>
+  <FNItem n={2}>
+    **Wang, X., Wei, J., Schuurmans, D., et al.** (2022). "Self-consistency improves chain of thought reasoning in language models". [arXiv:2203.11171](https://arxiv.org/abs/2203.11171) — Self-consistency / majority vote over reasoning chains (10.7, 10.9).
+  </FNItem>
+  <FNItem n={3}>
+    **Yao, S., Yu, D., Zhao, J., et al.** (2023). "Tree of Thoughts: Deliberate problem solving with large language models". [arXiv:2305.10601](https://arxiv.org/abs/2305.10601) — ToT (10.9).
+  </FNItem>
+  <FNItem n={4}>
+    **Yao, S., Zhao, J., Yu, D., et al.** (2022). "ReAct: Synergizing reasoning and acting in language models". [arXiv:2210.03629](https://arxiv.org/abs/2210.03629) — ReAct (10.9).
+  </FNItem>
+  <FNItem n={5}>
+    **Shinn, N., Cassano, F., Berman, E., et al.** (2023). "Reflexion: Language agents with verbal reinforcement learning". [arXiv:2303.11366](https://arxiv.org/abs/2303.11366) — Reflexion (10.9).
+  </FNItem>
+</Footnotes>

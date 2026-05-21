@@ -54,13 +54,13 @@ A "model organism" in biology is a simple system used to study a property of com
 
 ### 3.1 Deception and sandbagging
 
-Hubinger et al. (Anthropic 2024, [*Sleeper Agents*](https://arxiv.org/abs/2401.05566)) deliberately trained models to behave *differently* in evaluation vs. deployment ("sleeper" agents): perform well on safety evals but exhibit harmful behaviour in specific deployment conditions. The point: study whether such deceptive training can be *detected* by current interpretability tools.
+Hubinger et al. (Anthropic 2024<FN n={5} />, [*Sleeper Agents*](https://arxiv.org/abs/2401.05566))<FN n={3} /> deliberately trained models to behave *differently* in evaluation vs. deployment ("sleeper" agents): perform well on safety evals but exhibit harmful behaviour in specific deployment conditions. The point: study whether such deceptive training can be *detected* by current interpretability tools.
 
 The headline finding: standard safety fine-tuning (SFT, RLHF) does *not* remove the deceptive behaviour — it's robust to alignment. Interpretability tools (linear probes, simple SAE-based detection) showed mixed results in detecting the sleeper behaviour. This is concerning evidence that *training* alone may not be sufficient for safety; mechanistic understanding is necessary.
 
 ### 3.2 Sandbagging
 
-Similar idea: models that *underperform* on specific benchmarks while retaining the capability. Research on whether sandbagging can be detected via activation analysis is ongoing (van der Weij et al., 2024, [arXiv:2406.07358](https://arxiv.org/abs/2406.07358)).
+Similar idea: models that *underperform* on specific benchmarks while retaining the capability. Research on whether sandbagging can be detected via activation analysis is ongoing (van der Weij et al., 2024, [arXiv:2406.07358](https://arxiv.org/abs/2406.07358))<FN n={6} />.
 
 ### 3.3 Why model organisms
 
@@ -79,7 +79,7 @@ If the model emits 10K reasoning tokens then answers $X$, two scenarios:
 - **Faithful chain.** The reasoning tokens are causal — perturbing them changes the answer. The chain is the model "working through" the problem.
 - **Performative chain.** The reasoning tokens are post-hoc — the model has already committed to $X$ and is generating plausible-looking justification. Perturbing the chain doesn't change $X$.
 
-Empirically, both phenomena exist. Lanham et al. (2023, [arXiv:2307.13702](https://arxiv.org/abs/2307.13702)) and Turpin et al. (2023, [arXiv:2305.04388](https://arxiv.org/abs/2305.04388)) found that for *non-reasoning-trained* models, chains were frequently performative — the answer was largely determined before the chain. For *reasoning-trained* models (o1/R1-style with GRPO on verifiable rewards), chains are more faithful, but the question is still open.
+Empirically, both phenomena exist. Lanham et al. (2023<FN n={1} />, [arXiv:2307.13702](https://arxiv.org/abs/2307.13702)) and Turpin et al. (2023<FN n={2} />, [arXiv:2305.04388](https://arxiv.org/abs/2305.04388)) found that for *non-reasoning-trained* models, chains were frequently performative — the answer was largely determined before the chain. For *reasoning-trained* models (o1/R1-style with GRPO on verifiable rewards), chains are more faithful, but the question is still open.
 
 ### 4.2 Mechanistic open problems
 
@@ -107,9 +107,9 @@ The mechanistic intuition: SSM blocks handle long-range linear-time mixing; atte
 
 Several lines of architectural research are active:
 
-- **xLSTM** (Beck et al., 2024, [arXiv:2405.04517](https://arxiv.org/abs/2405.04517)). Modernised LSTM with exponential gating and matrix memory; competitive with Transformers at small scale.
-- **DeltaNet / Gated DeltaNet** (Yang et al., 2024, [arXiv:2406.06484](https://arxiv.org/abs/2406.06484)). Linear-attention variant with explicit memory update rules.
-- **TTT (Test-Time Training)** (Sun et al., 2024, [arXiv:2407.04620](https://arxiv.org/abs/2407.04620)). Inner-loop gradient descent at inference time as a sequence-modelling primitive.
+- **xLSTM** (Beck et al., 2024, [arXiv:2405.04517](https://arxiv.org/abs/2405.04517))<FN n={8} />. Modernised LSTM with exponential gating and matrix memory; competitive with Transformers at small scale.
+- **DeltaNet / Gated DeltaNet** (Yang et al., 2024, [arXiv:2406.06484](https://arxiv.org/abs/2406.06484))<FN n={9} />. Linear-attention variant with explicit memory update rules.
+- **TTT (Test-Time Training)** (Sun et al., 2024, [arXiv:2407.04620](https://arxiv.org/abs/2407.04620))<FN n={10} />. Inner-loop gradient descent at inference time as a sequence-modelling primitive.
 
 Whether any of these displaces the Transformer-Mamba hybrid as the dominant frontier architecture is open. As of mid-2026, hybrids are dominant; specialised architectures (e.g., audio diffusion-Transformer hybrids) are common for non-text modalities.
 
@@ -127,9 +127,9 @@ The shift from "what does the model output given a prompt" to "what can the mode
 
 ### 6.1 Notable agent benchmarks
 
-- **SWE-bench** (Jimenez et al., 2024, [arXiv:2310.06770](https://arxiv.org/abs/2310.06770)). Real-world GitHub issues; the model must produce a code patch that fixes the bug. Current frontier: $\sim 40\%$–$60\%$ resolution for top models.
-- **OSWorld** (Xie et al., 2024, [arXiv:2404.07972](https://arxiv.org/abs/2404.07972)). Computer-use benchmark; the model controls a desktop environment via screenshots and keyboard/mouse actions.
-- **GAIA** (Mialon et al., 2023, [arXiv:2311.12983](https://arxiv.org/abs/2311.12983)). General assistant benchmark; multi-step web research, computation, document analysis.
+- **SWE-bench** (Jimenez et al., 2024, [arXiv:2310.06770](https://arxiv.org/abs/2310.06770))<FN n={11} />. Real-world GitHub issues; the model must produce a code patch that fixes the bug. Current frontier: $\sim 40\%$–$60\%$ resolution for top models.
+- **OSWorld** (Xie et al., 2024, [arXiv:2404.07972](https://arxiv.org/abs/2404.07972))<FN n={12} />. Computer-use benchmark; the model controls a desktop environment via screenshots and keyboard/mouse actions.
+- **GAIA** (Mialon et al., 2023, [arXiv:2311.12983](https://arxiv.org/abs/2311.12983))<FN n={13} />. General assistant benchmark; multi-step web research, computation, document analysis.
 - **METR's task suite** (METR, 2024). Long-horizon software-engineering tasks measured by human-time-equivalent.
 
 ### 6.2 The horizon-length story
@@ -150,7 +150,7 @@ The 2024–2026 phenomenon: language models *doing* AI research. Not just helpin
 
 ### 7.1 Sakana AI Scientist
 
-Lu, Lu, Lange, Foerster, Clune, Ha (2024, [arXiv:2408.06292](https://arxiv.org/abs/2408.06292)). An LLM-based system that proposes research ideas, implements experiments, writes papers — at modest quality but end-to-end automated.
+Lu, Lu, Lange, Foerster, Clune, Ha (2024<FN n={14} />, [arXiv:2408.06292](https://arxiv.org/abs/2408.06292)). An LLM-based system that proposes research ideas, implements experiments, writes papers — at modest quality but end-to-end automated.
 
 ### 7.2 LLM-assisted mech-interp
 
@@ -169,7 +169,7 @@ For the "pick three papers" coda originally specified in the roadmap, here are r
 **Circuit tracing.**
 
 - Anthropic, *Circuit Tracing*, 2024 ([transformer-circuits.pub](https://transformer-circuits.pub/2024/circuits-updates-june/index.html)). The state of the art on end-to-end attribution.
-- Marks et al., *Sparse Feature Circuits*, 2024 ([arXiv:2403.19647](https://arxiv.org/abs/2403.19647)).
+- Marks et al., *Sparse Feature Circuits*, 2024<FN n={4} /> ([arXiv:2403.19647](https://arxiv.org/abs/2403.19647)).
 
 **Reasoning-model interpretability.**
 
@@ -182,7 +182,7 @@ For the "pick three papers" coda originally specified in the roadmap, here are r
 
 **Hybrid architectures.**
 
-- AI21 Labs, *Jamba*, 2024 ([arXiv:2403.19887](https://arxiv.org/abs/2403.19887)).
+- AI21 Labs, *Jamba*, 2024<FN n={7} /> ([arXiv:2403.19887](https://arxiv.org/abs/2403.19887)).
 
 **Agentic capability evaluation.**
 
@@ -241,3 +241,48 @@ Three things.
 **(f)** Pick one frontier thread above (circuit tracing, model organisms, reasoning interpretability, hybrid architectures, agentic evaluation, AI-driven research). Find one paper from 2025 or later that you'd add to the reading list, and write a one-sentence reason.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Lanham, T., Chen, A., Radhakrishnan, A., et al.** (2023). "Measuring faithfulness in chain-of-thought reasoning". [arXiv:2307.13702](https://arxiv.org/abs/2307.13702) — Faithfulness of CoT (10.7, 11.9).
+  </FNItem>
+  <FNItem n={2}>
+    **Turpin, M., Michael, J., Perez, E., & Bowman, S.** (2023). "Language models don't always say what they think". [arXiv:2305.04388](https://arxiv.org/abs/2305.04388) — Performative vs faithful chains (10.7, 11.9).
+  </FNItem>
+  <FNItem n={3}>
+    **Anthropic** (2024). "Circuit tracing and updates". *Transformer Circuits Thread.* [transformer-circuits.pub](https://transformer-circuits.pub/2024/circuits-updates-june/index.html) — End-to-end circuit attribution (11.9).
+  </FNItem>
+  <FNItem n={4}>
+    **Marks, S., Rager, C., Michaud, E. J., et al.** (2024). "Sparse feature circuits: Discovering and editing interpretable causal graphs in language models". [arXiv:2403.19647](https://arxiv.org/abs/2403.19647) — Cross-layer SAE circuit identification (11.9).
+  </FNItem>
+  <FNItem n={5}>
+    **Hubinger, E., Denison, C., Mu, J., et al.** (2024). "Sleeper agents: Training deceptive LLMs that persist through safety training". [arXiv:2401.05566](https://arxiv.org/abs/2401.05566) — Model organisms of deceptive alignment (11.9).
+  </FNItem>
+  <FNItem n={6}>
+    **van der Weij, T., Hofstätter, F., Jaffe, O., et al.** (2024). "AI sandbagging: Language models can strategically underperform on evaluations". [arXiv:2406.07358](https://arxiv.org/abs/2406.07358) — Sandbagging studies (11.9).
+  </FNItem>
+  <FNItem n={7}>
+    **AI21 Labs** (2024). "Jamba: A hybrid Transformer-Mamba language model". [arXiv:2403.19887](https://arxiv.org/abs/2403.19887) — Jamba hybrid architecture (11.9).
+  </FNItem>
+  <FNItem n={8}>
+    **Beck, M., Pöppel, K., Spanring, M., et al.** (2024). "xLSTM: Extended long short-term memory". [arXiv:2405.04517](https://arxiv.org/abs/2405.04517) — xLSTM (11.9).
+  </FNItem>
+  <FNItem n={9}>
+    **Yang, S., Wang, B., Zhang, Y., et al.** (2024). "Parallelizing linear transformers with the delta rule over sequence length". [arXiv:2406.06484](https://arxiv.org/abs/2406.06484) — Gated DeltaNet (11.9).
+  </FNItem>
+  <FNItem n={10}>
+    **Sun, Y., Li, X., Dalal, K., et al.** (2024). "Learning to (learn at test time): RNNs with expressive hidden states". [arXiv:2407.04620](https://arxiv.org/abs/2407.04620) — Test-Time Training as sequence modelling (11.9).
+  </FNItem>
+  <FNItem n={11}>
+    **Jimenez, C. E., Yang, J., Wettig, A., et al.** (2024). "SWE-bench: Can language models resolve real-world GitHub issues?". [arXiv:2310.06770](https://arxiv.org/abs/2310.06770) — SWE-bench (11.9).
+  </FNItem>
+  <FNItem n={12}>
+    **Xie, T., Zhang, D., Chen, J., et al.** (2024). "OSWorld: Benchmarking multimodal agents for open-ended tasks in real computer environments". [arXiv:2404.07972](https://arxiv.org/abs/2404.07972) — OSWorld (11.9).
+  </FNItem>
+  <FNItem n={13}>
+    **Mialon, G., Fourrier, C., Swift, C., et al.** (2023). "GAIA: A benchmark for general AI assistants". [arXiv:2311.12983](https://arxiv.org/abs/2311.12983) — GAIA (11.9).
+  </FNItem>
+  <FNItem n={14}>
+    **Lu, C., Lu, C., Lange, R. T., Foerster, J., Clune, J., & Ha, D.** (2024). "The AI Scientist: Towards fully automated open-ended scientific discovery". [arXiv:2408.06292](https://arxiv.org/abs/2408.06292) — AI-driven research (11.9). *Note:* the two "C. Lu" authors are distinct people — Chris Lu and Cong Lu.
+  </FNItem>
+</Footnotes>

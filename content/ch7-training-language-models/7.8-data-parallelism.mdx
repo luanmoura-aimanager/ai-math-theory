@@ -69,7 +69,7 @@ Two problems: (a) rank 0's network link is the bottleneck, idle on everyone else
 
 ### 3.2 Ring all-reduce
 
-**Patarasuk & Yuan, 2009, *Bandwidth optimal all-reduce algorithms for clusters of workstations*** ([sciencedirect.com](https://www.sciencedirect.com/science/article/pii/S0743731508001767)). Arrange the $D$ devices in a logical ring. Each device communicates only with its two neighbours. The all-reduce executes in two phases of $D - 1$ steps each:
+**Patarasuk & Yuan, 2009<FN n={1} />, *Bandwidth optimal all-reduce algorithms for clusters of workstations*** ([sciencedirect.com](https://www.sciencedirect.com/science/article/pii/S0743731508001767)). Arrange the $D$ devices in a logical ring. Each device communicates only with its two neighbours. The all-reduce executes in two phases of $D - 1$ steps each:
 
 **Phase 1: reduce-scatter.** Split each device's tensor into $D$ equal chunks of size $G / D$. In step $k$ ($k = 1, \dots, D - 1$):
 
@@ -216,6 +216,15 @@ Three things:
 
 **(d)** A LLaMA-7B model has $20 N = 140$ GB of non-activation memory. Why does pure DP fail at this scale on H100 (80 GB)? What does FSDP / ZeRO-3 do differently?
 
-**(e)** Critical batch size grows with training progress (McCandlish et al., 2018). Suppose your current critical batch is $B^* = 4$M tokens. You're running DP across $D = 1024$ devices with per-device microbatch $B_d = 1$ sequence at $T = 4096$. Compute the effective batch. Are you above or below critical? What does this imply about adding more DP devices?
+**(e)** Critical batch size grows with training progress (McCandlish et al., 2018)<FN n={2} />. Suppose your current critical batch is $B^* = 4$M tokens. You're running DP across $D = 1024$ devices with per-device microbatch $B_d = 1$ sequence at $T = 4096$. Compute the effective batch. Are you above or below critical? What does this imply about adding more DP devices?
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Patarasuk, P., & Yuan, X.** (2009). "Bandwidth optimal all-reduce algorithms for clusters of workstations". *J. Parallel and Distributed Computing*. [sciencedirect.com](https://www.sciencedirect.com/science/article/pii/S0743731508001767) — Ring all-reduce algorithm (7.8 §3.2).
+  </FNItem>
+  <FNItem n={2}>
+    **McCandlish, S., Kaplan, J., Amodei, D., et al.** (2018). "An empirical model of large-batch training". [arXiv:1812.06162](https://arxiv.org/abs/1812.06162) — Critical batch size (7.8 §6, 7.11 §5).
+  </FNItem>
+</Footnotes>

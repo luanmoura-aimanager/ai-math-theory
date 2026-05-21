@@ -17,7 +17,7 @@ prerequisites: ["ch5-sequence-modeling/5.6-why-abandon-recurrence", "ch1-linear-
 
 Together with the fourth desideratum from [4.3 §5](/session/ch4-cnn-bridge/4.3-bridge-to-sequences) — **content-addressed mixing**, where weights depend on the tokens themselves — these four properties almost uniquely specify the operation we are about to build.
 
-This session derives the *shape* of attention from a single starting point: the **dictionary lookup**, a fundamental operation in computer science. Softening it into a differentiable function gives us attention. The specific similarity score and the batched matrix form come in 6.2.
+This session derives the *shape* of attention from a single starting point: the **dictionary lookup**, a fundamental operation in computer science. Softening it into a differentiable function gives us attention. The specific similarity score and the batched matrix form come in 6.2.<FN ns={[2, 3, 4]} />
 
 ---
 
@@ -97,7 +97,7 @@ Three slots, each with its own job:
 - **Key $k_i$.** The "what do I represent?" vector. Produced by the position that is *being looked at*. The query–key inner product is the similarity score.
 - **Value $v_i$.** The "what should I contribute if selected?" vector. The output is a weighted sum of values.
 
-In a hard dictionary, keys and values are tied: the key identifies a slot and the value is the slot's content. In attention, **they are decoupled**. The same source token will produce one $k$ vector for the matching role and a separate $v$ vector for the content role, via two different learnable linear projections (6.3). This separation is what gives the attention layer the flexibility to express different patterns at different layers — a token can be a strong "match target" without contributing strongly to the output, and vice versa.
+In a hard dictionary, keys and values are tied: the key identifies a slot and the value is the slot's content. In attention, **they are decoupled**. The same source token will produce one $k$ vector for the matching role and a separate $v$ vector for the content role, via two different learnable linear projections (6.3). This separation is what gives the attention layer the flexibility to express different patterns at different layers — a token can be a strong "match target" without contributing strongly to the output, and vice versa.<FN n={1} />
 
 ---
 
@@ -142,3 +142,18 @@ By the end of Part 1 (session 6.8) you will have every piece of one Transformer 
 **(e)** In a hard dictionary, the lookup of an unmatched query returns nothing. In soft attention, what is the output when no key strongly matches the query (all $s(q, k_i)$ approximately equal)? Interpret this behaviour geometrically.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Press, O., & Wolf, L.** (2017). "Using the output embedding to improve language models". *EACL*. [arXiv:1608.05859](https://arxiv.org/abs/1608.05859) — Weight tying between input embedding and output projection (5.2 §6.1).
+  </FNItem>
+  <FNItem n={2}>
+    **Prince, S. J. D.** (2023). *Understanding Deep Learning,* §12 (Sequence-to-Sequence Models) and §13 (Transformers). MIT Press. — Attention as soft lookup (6.1), scaled dot-product attention (6.2), multi-head attention (6.4).
+  </FNItem>
+  <FNItem n={3}>
+    **Bahdanau, D., Cho, K., & Bengio, Y.** (2014). "Neural machine translation by jointly learning to align and translate". [arXiv:1409.0473](https://arxiv.org/abs/1409.0473) — First "neural attention" paper; additive attention as a precursor to scaled dot-product (6.1, 6.2).
+  </FNItem>
+  <FNItem n={4}>
+    **3Blue1Brown.** "But what is a GPT? Visual intro to Transformers" and "Attention in transformers, step-by-step". [3blue1brown.com](https://www.3blue1brown.com/) — Visual introduction to attention (6.1, 6.2).
+  </FNItem>
+</Footnotes>

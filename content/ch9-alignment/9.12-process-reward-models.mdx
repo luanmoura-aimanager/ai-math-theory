@@ -15,7 +15,7 @@ For **multi-step reasoning** — math problems, code generation, multi-step plan
 
 **Process Reward Models (PRMs)** address this. Instead of a single reward per completion, evaluate *each reasoning step* individually and aggregate. The result is a dense, per-step signal: "this step is correct, this step is wrong, this step is unverifiable." The policy can be trained — via PPO with per-step rewards, or GRPO with step-level advantages — to favour completions with correct intermediate steps.
 
-This session: the outcome-vs-process distinction, the canonical PRM paper (Lightman et al. 2023, *"Let's Verify Step by Step"*), how PRMs are trained, and their role in o1/R1-style reasoning models.
+This session: the outcome-vs-process distinction, the canonical PRM paper (Lightman et al. 2023, *"Let's Verify Step by Step"*)<FN n={2} />, how PRMs are trained, and their role in o1/R1-style reasoning models.<FN n={1} />
 
 ---
 
@@ -148,7 +148,7 @@ Step-labelling is expensive. PRM800K took an order of magnitude more annotator-t
 Three sources of synthetic PRM data:
 
 - **LLM-as-judge** (RLAIF-style, [9.13](/session/ch9-alignment/9.13-rlaif-constitutional)): prompt a stronger LLM to evaluate each step.
-- **Outcome-conditioned** ([Wang et al., 2024](https://arxiv.org/abs/2312.08935), "Math-Shepherd"): for solutions known to be correct, label all steps as positive; for solutions known to be incorrect, use binary search to find the first incorrect step. Cheap and works well for math.
+- **Outcome-conditioned** ([Wang et al., 2024<FN n={3} />](https://arxiv.org/abs/2312.08935), "Math-Shepherd"): for solutions known to be correct, label all steps as positive; for solutions known to be incorrect, use binary search to find the first incorrect step. Cheap and works well for math.
 - **Self-consistency-based**: sample many completions of a problem from the same starting point. Steps that often lead to correct final answers are positive; steps that often lead to incorrect are negative.
 
 ### 6.3 Reward hacking on PRMs
@@ -198,3 +198,15 @@ Three things:
 **(e)** DeepSeek-R1 trains with GRPO and uses *both* outcome and process rewards. Argue why this mixture is better than either alone. (Hint: think about what each signal catches that the other misses.)
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **DeepSeek-AI** (2025). "DeepSeek-R1: Incentivizing reasoning capability in LLMs via reinforcement learning". [arXiv:2501.12948](https://arxiv.org/abs/2501.12948) — GRPO at frontier reasoning scale; R1-Zero pure-RL training (9.7, 9.12).
+  </FNItem>
+  <FNItem n={2}>
+    **Lightman, H., Kosaraju, V., Burda, Y., et al.** (2023). "Let's verify step by step". [arXiv:2305.20050](https://arxiv.org/abs/2305.20050) — PRM800K dataset; foundational PRM paper (9.12).
+  </FNItem>
+  <FNItem n={3}>
+    **Wang, P., Li, L., Shao, Z., et al.** (2024). "Math-Shepherd: Verify and reinforce LLMs step-by-step without human annotations". [arXiv:2312.08935](https://arxiv.org/abs/2312.08935) — Outcome-conditioned synthetic PRM labels (9.12 §6.2).
+  </FNItem>
+</Footnotes>

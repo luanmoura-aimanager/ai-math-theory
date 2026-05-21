@@ -16,9 +16,9 @@ Sessions 6.1 through 6.10 have built every piece of one Transformer block:
 - **Residuals** (6.9): identity skips that break the multiplicative chain rule.
 - **Pre-LN** (6.10): LayerNorm inside the residual branch, depth-independent gradient flow.
 
-This session puts them together. We draw the full **decoder-only Transformer** — the architecture of GPT-2, GPT-3, LLaMA, Mistral, Qwen, the model class behind ~every modern LLM — and count its parameters. Then we read *Attention Is All You Need* (Vaswani et al., 2017) end-to-end with the explicit goal of "underline three things that now feel obvious that did not before."
+This session puts them together. We draw the full **decoder-only Transformer** — the architecture of GPT-2, GPT-3, LLaMA, Mistral, Qwen, the model class behind ~every modern LLM — and count its parameters. Then we read *Attention Is All You Need* (Vaswani et al., 2017)<FN n={2} /> end-to-end with the explicit goal of "underline three things that now feel obvious that did not before."
 
-After this session you will be able to write the architecture in $\sim 60$ lines of pseudocode and read the original paper without confusion.
+After this session you will be able to write the architecture in $\sim 60$ lines of pseudocode and read the original paper without confusion.<FN ns={[1, 3]} />
 
 ---
 
@@ -129,7 +129,7 @@ $$
 X^{(L)} = E[\mathbf{t}] \;+\; \sum_{\ell = 1}^{L} \Big[\, \text{MHA}^{(\ell)} + \text{FFN}^{(\ell)} \,\Big]\!\big(\text{LN}\text{-inputs}\big).
 $$
 
-Each block adds two corrections (one from MHA, one from FFN). Everything the model "knows" lives in this stream; everything that comes out of a sub-layer is *added* to it, never *replacing* it. This is the entire interpretability story of Chapter 11 ([Anthropic Transformer Circuits](https://transformer-circuits.pub/), Olsson et al. 2022).
+Each block adds two corrections (one from MHA, one from FFN). Everything the model "knows" lives in this stream; everything that comes out of a sub-layer is *added* to it, never *replacing* it. This is the entire interpretability story of Chapter 11 ([Anthropic Transformer Circuits](https://transformer-circuits.pub/), Olsson et al. 2022)<FN n={4} />.
 
 ---
 
@@ -222,3 +222,18 @@ Sixty lines of pseudocode (with `MHA` and `FFN` opened up). $\approx 12 L d^2$ p
 **(e)** A decoder-only model and an encoder-only BERT-style model differ in two ways: (i) the attention mask, (ii) the training objective. State each difference in one sentence and explain why decoder-only is preferred for generative LLMs.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Raschka, S.** (2024). *Build a Large Language Model (From Scratch),* Chapters 3–4. Manning. — Self-attention implementation (6.3, 6.4), causal masking (6.5), pre-norm block (6.10–6.11).
+  </FNItem>
+  <FNItem n={2}>
+    **Vaswani, A., Shazeer, N., Parmar, N., et al.** (2017). "Attention is all you need". *NeurIPS*. [arXiv:1706.03762](https://arxiv.org/abs/1706.03762) — The Transformer paper. Scaled dot-product attention (6.2), multi-head attention (6.4), encoder–decoder cross-attention (6.3), sinusoidal positional encoding (Appendix 6.A), the FFN sub-layer (6.8), post-LN block diagram (6.10), full architecture read (6.11).
+  </FNItem>
+  <FNItem n={3}>
+    **Radford, A., Wu, J., Child, R., et al.** (2019). "Language models are unsupervised multitask learners" (GPT-2). OpenAI technical report. — Learned absolute positional encoding (Appendix 6.B), pre-LN variant (6.10), the architectural skeleton of every modern decoder-only LLM (6.11).
+  </FNItem>
+  <FNItem n={4}>
+    **Olsson, C., Elhage, N., Nanda, N., et al.** (2022). "In-context learning and induction heads". Anthropic. [transformer-circuits.pub](https://transformer-circuits.pub/2022/in-context-learning-and-induction-heads/index.html) — Induction heads as the mechanism behind in-context learning (6.4 §4); residual-stream view (6.11 §4).
+  </FNItem>
+</Footnotes>

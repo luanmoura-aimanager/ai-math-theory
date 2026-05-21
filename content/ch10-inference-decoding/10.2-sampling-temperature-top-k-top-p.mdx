@@ -19,7 +19,7 @@ The classical fix has three controls, each correcting a different failure mode:
 - **Top-$k$** — restricts sampling to the $k$ most-probable tokens.
 - **Top-$p$ (nucleus)** — restricts sampling to the smallest set whose cumulative probability is $\ge p$.
 
-This session derives all three from the next-token logits, characterises when each fails, and arrives at the modern default: **temperature + top-$p$**.
+This session derives all three from the next-token logits, characterises when each fails, and arrives at the modern default: **temperature + top-$p$**.<FN n={1} />
 
 ---
 
@@ -156,7 +156,7 @@ A typical OpenAI-API-style invocation: $T = 0.7$, top-$p = 0.95$, top-$k = 50$.
 
 ### 6.1 Min-$p$ sampling
 
-A more recent variant ([Nguyen et al., 2024, arXiv:2407.01082](https://arxiv.org/abs/2407.01082)): set a *floor* $p_{\min}$ relative to the maximum probability. Token $v$ is in the candidate set iff
+A more recent variant ([Nguyen et al., 2024<FN n={4} />, arXiv:2407.01082](https://arxiv.org/abs/2407.01082)): set a *floor* $p_{\min}$ relative to the maximum probability. Token $v$ is in the candidate set iff
 
 $$
 \pi_\theta(v) \;\ge\; p_{\min} \cdot \max_{v'} \pi_\theta(v').
@@ -176,7 +176,7 @@ $$
 z_v' \;=\; \begin{cases} z_v / \rho & v \in \text{recent context, } z_v > 0 \\ z_v \cdot \rho & v \in \text{recent context, } z_v \le 0 \\ z_v & \text{otherwise} \end{cases}
 $$
 
-with $\rho \in [1.0, 1.5]$ (the sign-dependent formulation, due to Keskar et al. CTRL, 2019, handles both positive and negative logits correctly). At $\rho = 1$ this is a no-op; larger $\rho$ more aggressively suppresses repetition. Common in narrative-text generation.
+with $\rho \in [1.0, 1.5]$ (the sign-dependent formulation, due to Keskar et al. CTRL, 2019<FN n={3} />, handles both positive and negative logits correctly). At $\rho = 1$ this is a no-op; larger $\rho$ more aggressively suppresses repetition. Common in narrative-text generation.
 
 **N-gram blocking.** Disallow tokens whose continuation would form an $n$-gram that already appeared in the context. Used in summarisation (where verbatim copying is undesirable beyond short spans) and translation.
 
@@ -193,7 +193,7 @@ Truncation (top-$k$/top-$p$) re-shapes the sampling distribution to *exclude* th
 This is the right mental model: sampling stays in the typical set; beam search exits it towards the mode; truncation trims a *small* tail that is responsible for most of the catastrophic failures.
 
 <Aside type="history">
-**Why nucleus sampling caught on.** Holtzman et al. (2019) presented top-$p$ alongside the beam search curse. Their plots compared beam, greedy, pure sampling, top-$k$, top-$p$, and human text on three axes: perplexity (likelihood under the LM), Zipf coefficient (vocabulary distribution shape), and self-BLEU (diversity). Pure sampling matched human text on perplexity; top-$p$ matched human text on Zipf and self-BLEU *and* preserved fluency. Greedy/beam matched human text on none. The community switched within a year — GPT-2 release in 2019 already used top-$p$ defaults.
+**Why nucleus sampling caught on.** Holtzman et al. (2019)<FN n={2} /> presented top-$p$ alongside the beam search curse. Their plots compared beam, greedy, pure sampling, top-$k$, top-$p$, and human text on three axes: perplexity (likelihood under the LM), Zipf coefficient (vocabulary distribution shape), and self-BLEU (diversity). Pure sampling matched human text on perplexity; top-$p$ matched human text on Zipf and self-BLEU *and* preserved fluency. Greedy/beam matched human text on none. The community switched within a year — GPT-2 release in 2019 already used top-$p$ defaults.
 </Aside>
 
 ---
@@ -247,3 +247,18 @@ The remaining sessions in this chapter are *engineering*: how to run a forward p
 **(f)** Min-$p$ keeps tokens with $\pi_\theta(v) \ge p_{\min} \cdot \max_{v'} \pi_\theta(v')$. State one case where min-$p$ is more adaptive than top-$p$ and one where top-$p$ is fine.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Jurafsky, D., & Martin, J. H.** (2025, draft 3rd ed.). *Speech and Language Processing.* Ch 9 covers greedy/beam decoding (10.1) and modern sampling (10.2). [stanford.edu/~jurafsky/slp3](https://web.stanford.edu/~jurafsky/slp3/)
+  </FNItem>
+  <FNItem n={2}>
+    **Holtzman, A., Buys, J., Du, L., Forbes, M., & Choi, Y.** (2019). "The curious case of neural text degeneration". [arXiv:1904.09751](https://arxiv.org/abs/1904.09751) — Beam search curse + nucleus (top-$p$) sampling (10.1, 10.2).
+  </FNItem>
+  <FNItem n={3}>
+    **Keskar, N. S., McCann, B., Varshney, L. R., et al.** (2019). "CTRL: A conditional transformer language model for controllable generation". [arXiv:1909.05858](https://arxiv.org/abs/1909.05858) — Repetition penalty (10.2).
+  </FNItem>
+  <FNItem n={4}>
+    **Nguyen, M., Baker, A., Neo, C., et al.** (2024). "Turning up the heat: Min-$p$ sampling for creative and coherent LLM outputs". [arXiv:2407.01082](https://arxiv.org/abs/2407.01082) — Min-$p$ sampling (10.2).
+  </FNItem>
+</Footnotes>

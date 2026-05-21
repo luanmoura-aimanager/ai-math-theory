@@ -9,17 +9,17 @@ prerequisites: ["ch5-sequence-modeling/5.3-language-modeling-objective", "ch2-ml
 
 ## 1. Why this session exists
 
-The $n$-gram model of [5.4](/session/ch5-sequence-modeling/5.4-ngram-baseline) was crushed by a fixed-range Markov assumption. The first family of neural architectures designed to escape that constraint was the **recurrent neural network** (RNN), introduced in modern form by Elman (1990).
+The $n$-gram model of [5.4](/session/ch5-sequence-modeling/5.4-ngram-baseline) was crushed by a fixed-range Markov assumption. The first family of neural architectures designed to escape that constraint was the **recurrent neural network** (RNN), introduced in modern form by Elman (1990)<FN n={4} />.
 
 The mathematical hope of an RNN is elegant: instead of conditioning on a fixed-length window, maintain a *hidden state* $h_t$ that summarises the entire history $x_{<t}$, and update it sequentially as new tokens arrive. In principle, an RNN can model arbitrary-range dependencies — the conditioning context is *all of the past*.
 
-In practice, RNNs hit a structural wall that took two decades to fully diagnose: the **vanishing/exploding gradient problem**, formalised by Bengio, Simard, and Frasconi (1994). That problem isn't a bug — it's a consequence of the recurrence structure, and it is the single most important reason modern LLMs abandoned recurrence in favour of attention.
+In practice, RNNs hit a structural wall that took two decades to fully diagnose: the **vanishing/exploding gradient problem**, formalised by Bengio, Simard, and Frasconi (1994)<FN n={6} />. That problem isn't a bug — it's a consequence of the recurrence structure, and it is the single most important reason modern LLMs abandoned recurrence in favour of attention.
 
 This session does three things:
 
 1. Define the vanilla RNN and write down its forward pass.
 2. Derive backpropagation through time (BPTT).
-3. Prove the vanishing/exploding gradient bound and quantify what it costs.
+3. Prove the vanishing/exploding gradient bound and quantify what it costs.<FN ns={[2, 3]} />
 
 ---
 
@@ -117,7 +117,7 @@ Because the weights are shared across all $T$ time steps, every parameter gradie
 
 The full BPTT in §3 needs to store every $h_t$ for $t = 1, \dots, T$ during the forward pass so that the backward pass can use them. Memory is $O(T \cdot d_h)$. For long documents (millions of tokens for an LLM-scale corpus), this is infeasible.
 
-In practice, RNN training uses **truncated BPTT** (TBPTT): break the sequence into chunks of $k$ tokens, run the forward and backward pass within each chunk treating $h_0$ as the previous chunk's final state (no gradient flows across chunk boundaries). Common values: $k \in [20, 200]$. The cost: any dependency longer than $k$ steps gets no gradient signal at all, which compounds the vanishing problem we're about to derive.
+In practice, RNN training uses **truncated BPTT** (TBPTT): break the sequence into chunks of $k$ tokens, run the forward and backward pass within each chunk treating $h_0$ as the previous chunk's final state (no gradient flows across chunk boundaries). Common values: $k \in [20, 200]$. The cost: any dependency longer than $k$ steps gets no gradient signal at all, which compounds the vanishing problem we're about to derive.<FN ns={[1, 7]} />
 
 ---
 
@@ -174,7 +174,7 @@ The killer corollary: **there is no choice of $W$ that simultaneously preserves 
 **(d) Attention.** The radical solution: replace the recurrent product with a *single* one-hop dependency from every position to every other. We will see in [5.6](/session/ch5-sequence-modeling/5.6-why-abandon-recurrence) and Chapter 6 why this is qualitatively different from any RNN fix.
 
 <Aside type="history">
-The vanishing-gradient problem in RNNs was first noticed by Sepp Hochreiter in his 1991 diploma thesis and formally analysed by Bengio, Simard, and Frasconi in 1994 (both already cited in [2.9](/session/ch2-mlps-backprop/2.9-vanishing-exploding-gradients)). Hochreiter & Schmidhuber's 1997 LSTM was the direct response: design a recurrence whose *default* path is the identity, so gradients can flow through long sequences without exponential decay. The LSTM dominated sequence modelling for two decades. The Transformer (Vaswani et al., 2017) did not "fix" recurrence — it sidestepped it entirely.
+The vanishing-gradient problem in RNNs was first noticed by Sepp Hochreiter in his 1991<FN n={5} /> diploma thesis and formally analysed by Bengio, Simard, and Frasconi in 1994 (both already cited in [2.9](/session/ch2-mlps-backprop/2.9-vanishing-exploding-gradients)). Hochreiter & Schmidhuber's 1997 LSTM was the direct response: design a recurrence whose *default* path is the identity, so gradients can flow through long sequences without exponential decay. The LSTM dominated sequence modelling for two decades. The Transformer (Vaswani et al., 2017) did not "fix" recurrence — it sidestepped it entirely.
 </Aside>
 
 ---
@@ -214,3 +214,27 @@ Three durable ideas from RNNs survive into modern LLMs:
 **(e)** The KV-cache in a Transformer at inference time stores $O(T \cdot d)$ tensors and updates incrementally. Argue that this is structurally similar to maintaining an RNN's hidden state $h_t$ at inference — and dissimilar from how a Transformer trains. Why is this not a contradiction with §5?
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Bishop, C. M.** (2006). *Pattern Recognition and Machine Learning,* §3.4 and §5.5. — L2 as Gaussian prior / MAP (Appendix 3.A).
+  </FNItem>
+  <FNItem n={2}>
+    **Goodfellow, I., Bengio, Y., & Courville, A.** (2016). *Deep Learning,* §10 (Sequence Modeling: Recurrent and Recursive Nets). MIT Press. — RNN, BPTT, LSTM/GRU (5.5, Appendix 5.A).
+  </FNItem>
+  <FNItem n={3}>
+    **Prince, S. J. D.** (2023). *Understanding Deep Learning,* §12 (Sequence-to-Sequence Models) and §15 (Recurrent Networks). MIT Press. — Embeddings (5.2), RNN treatment (5.5).
+  </FNItem>
+  <FNItem n={4}>
+    **Elman, J. L.** (1990). "Finding structure in time". *Cognitive Science,* 14(2), 179–211. — The modern (Elman) RNN (5.5).
+  </FNItem>
+  <FNItem n={5}>
+    **Hochreiter, S.** (1991). *Untersuchungen zu dynamischen neuronalen Netzen.* Diploma thesis, TU Munich. — First analysis of vanishing gradients in RNNs (already cited in Cap 2; recalled in 5.5).
+  </FNItem>
+  <FNItem n={6}>
+    **Bengio, Y., Simard, P., & Frasconi, P.** (1994). "Learning long-term dependencies with gradient descent is difficult". *IEEE Trans. Neural Networks,* 5(2), 157–166. — Formal vanishing/exploding gradient theorem for RNNs (5.5 §4.1).
+  </FNItem>
+  <FNItem n={7}>
+    **Werbos, P. J.** (1990). "Backpropagation through time: What it does and how to do it". *Proceedings of the IEEE,* 78(10), 1550–1560. — BPTT (5.5 §3).
+  </FNItem>
+</Footnotes>

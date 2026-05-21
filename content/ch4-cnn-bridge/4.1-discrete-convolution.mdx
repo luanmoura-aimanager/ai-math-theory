@@ -17,7 +17,7 @@ Convolution is the linear operator that hard-codes this prior. It replaces a den
 - **[4.2](/session/ch4-cnn-bridge/4.2-equivariance-receptive-fields)** — why convolution is the *right* operator for images, and how far it can see.
 - **[4.3](/session/ch4-cnn-bridge/4.3-bridge-to-sequences)** — where convolution runs out of road, and why language pushes us to attention.
 
-Engineering details — padding, stride, output sizes, pooling, backprop — live in the optional appendices [4.A](/session/ch4-cnn-bridge/4.A-padding-stride), [4.B](/session/ch4-cnn-bridge/4.B-pooling), and [4.C](/session/ch4-cnn-bridge/4.C-backprop-through-conv).
+Engineering details — padding, stride, output sizes, pooling, backprop — live in the optional appendices [4.A](/session/ch4-cnn-bridge/4.A-padding-stride), [4.B](/session/ch4-cnn-bridge/4.B-pooling), and [4.C](/session/ch4-cnn-bridge/4.C-backprop-through-conv).<FN ns={[1, 2]} />
 
 ---
 
@@ -99,7 +99,7 @@ z[2] &= 1 \cdot 3 + 0 \cdot 4 + (-1) \cdot 5 = -2.
 \end{aligned}
 $$
 
-So $z = (-2, -2, -2)$. The kernel $(1, 0, -1)$ measures a finite-difference between positions two apart — a discrete first-derivative detector. On a linear ramp like $(1, 2, 3, 4, 5)$ the derivative is constant, so $z$ is constant. That kernel is one of the classic edge detectors; in a real CNN it would be *learned*.
+So $z = (-2, -2, -2)$. The kernel $(1, 0, -1)$ measures a finite-difference between positions two apart — a discrete first-derivative detector. On a linear ramp like $(1, 2, 3, 4, 5)$ the derivative is constant, so $z$ is constant. That kernel is one of the classic edge detectors; in a real CNN it would be *learned*.<FN ns={[3, 4, 5]} />
 
 ---
 
@@ -194,3 +194,21 @@ Equivariance and receptive fields — the *reason* convolution works at all — 
 **(d)** Suppose you replace a conv layer with kernel $K \times K$ by a dense layer that uses the `im2col` matrix $X$ but lets *every* entry of $W$ be free (no kernel sharing across positions). How many parameters does this dense layer have, in terms of $C_\text{in}, C_\text{out}, K, H_\text{out}, W_\text{out}$? Why is it no longer translation-equivariant? (Sketch the reason; 4.2 makes it rigorous.)
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **LeCun, Y., Boser, B., Denker, J. S., et al.** (1989). "Backpropagation applied to handwritten zip code recognition". *Neural Computation*, 1(4), 541–551. — First end-to-end trained CNN (4.1).
+  </FNItem>
+  <FNItem n={2}>
+    **LeCun, Y., Bottou, L., Bengio, Y., & Haffner, P.** (1998). "Gradient-based learning applied to document recognition". *Proceedings of the IEEE*, 86(11), 2278–2324. — LeNet-5 and the modern conv-pool-conv-pool template (4.1, Appendix 4.B).
+  </FNItem>
+  <FNItem n={3}>
+    **Bengio, Y., Simard, P., & Frasconi, P.** (1994). "Learning long-term dependencies with gradient descent is difficult". *IEEE Trans. Neural Networks,* 5(2), 157–166. — Formal vanishing/exploding gradient theorem for RNNs (5.5 §4.1).
+  </FNItem>
+  <FNItem n={4}>
+    **Chen, S., Wong, S., Chen, L., & Tian, Y.** (2023). "Extending context window of large language models via positional interpolation". [arXiv:2306.15595](https://arxiv.org/abs/2306.15595) — Linear interpolation of RoPE frequencies for context extension (6.13 §4.1).
+  </FNItem>
+  <FNItem n={5}>
+    **Raffel, C., Shazeer, N., Roberts, A., et al.** (2020). "Exploring the limits of transfer learning with a unified text-to-text transformer" (T5). *JMLR*. [arXiv:1910.10683](https://arxiv.org/abs/1910.10683) — C4 corpus (7.1 §4.1).
+  </FNItem>
+</Footnotes>

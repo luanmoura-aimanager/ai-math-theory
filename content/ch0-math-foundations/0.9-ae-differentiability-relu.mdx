@@ -79,7 +79,7 @@ ReLU is differentiable a.e. — the failure set is $\{0\}$.
 
 More generally, two deep theorems we'll cite without proof:
 
-- **(Rademacher.)** Every Lipschitz function $f : \mathbb{R}^n \to \mathbb{R}$ is differentiable almost everywhere.
+- **(Rademacher<FN n={1} />.)** Every Lipschitz function $f : \mathbb{R}^n \to \mathbb{R}$ is differentiable almost everywhere.
 - **(Convex case.)** Every convex function $f$ on an open convex set $C \subseteq \mathbb{R}^n$ is differentiable a.e. on $C$ and even continuously differentiable on a dense open subset.
 
 ReLU is convex *and* Lipschitz with constant $1$, so it satisfies both. The same is true of $|x|$, max-pooling, and the entire piecewise-linear menagerie used in deep nets.
@@ -199,3 +199,9 @@ The same machinery applies to most non-smooth pieces of modern networks.
 **(d)** For Leaky ReLU with slope $\alpha \in (0, 1)$, prove that $\text{LReLU}_\alpha$ is convex on $\mathbb{R}$ and compute $\partial \text{LReLU}_\alpha(0)$.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Rademacher, H.** (1919). "Über partielle und totale Differenzierbarkeit von Funktionen mehrerer Variabeln und über die Transformation der Doppelintegrale". *Math. Annalen*, 79, 340–359. — The almost-everywhere differentiability theorem stated in 0.9.
+  </FNItem>
+</Footnotes>

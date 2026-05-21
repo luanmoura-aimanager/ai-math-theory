@@ -11,7 +11,7 @@ prerequisites: ["ch9-alignment/9.5-policy-gradient-reinforce"]
 
 §9.5 ended with REINFORCE: a correct but high-variance, sample-inefficient policy gradient algorithm. The two operational problems were (a) fresh samples are required for each gradient step, so each step is expensive, and (b) a single unlucky large gradient step can push the policy off-distribution and break it.
 
-**Proximal Policy Optimization** (Schulman et al., 2017, [arXiv:1707.06347](https://arxiv.org/abs/1707.06347)) addresses both. The core idea: use *importance sampling* to reuse on-policy samples for multiple gradient steps, and *clip* the importance-weighted objective so that each step cannot drag the policy too far from its sampling distribution.
+**Proximal Policy Optimization** (Schulman et al., 2017, [arXiv:1707.06347](https://arxiv.org/abs/1707.06347))<FN n={2} /> addresses both. The core idea: use *importance sampling* to reuse on-policy samples for multiple gradient steps, and *clip* the importance-weighted objective so that each step cannot drag the policy too far from its sampling distribution.
 
 PPO became the default RL algorithm in 2017 for control / robotics and was inherited by RLHF in 2020. Every major RLHF deployment from InstructGPT (2022) through Llama 3 (2024) used PPO until DPO and GRPO offered alternatives. Even now, PPO remains the reference algorithm — the one DPO is *derived against* (§9.10) and the one GRPO is *simplified from* (§9.7).
 
@@ -93,7 +93,7 @@ Net effect: **the clipping caps the upside of moving probability in the "right" 
 This is the **trust region** interpretation: PPO's clipping keeps the new policy within a multiplicative-ratio neighbourhood of the old, preventing destabilising large updates.
 
 <Aside type="note">
-**Trust-region origins.** PPO descends from Trust Region Policy Optimization (TRPO; Schulman et al., 2015), which directly imposed a KL constraint between the new and old policies via a constrained optimisation. TRPO was theoretically clean but operationally complex (each step required a constrained optimiser). PPO replaced TRPO's hard constraint with a soft clipped objective that captured most of the benefit at a fraction of the implementation cost. The 2017 paper's main selling point was "TRPO performance, much simpler code."
+**Trust-region origins.** PPO descends from Trust Region Policy Optimization (TRPO; Schulman et al., 2015)<FN n={1} />, which directly imposed a KL constraint between the new and old policies via a constrained optimisation. TRPO was theoretically clean but operationally complex (each step required a constrained optimiser). PPO replaced TRPO's hard constraint with a soft clipped objective that captured most of the benefit at a fraction of the implementation cost. The 2017 paper's main selling point was "TRPO performance, much simpler code."
 </Aside>
 
 ---
@@ -102,7 +102,7 @@ This is the **trust region** interpretation: PPO's clipping keeps the new policy
 
 PPO uses *advantages* $A(x, y)$ rather than raw rewards (§9.5 §5.1). The advantage is the expected-reward improvement of taking action $y$ at prompt $x$ over the prompt's baseline.
 
-For LLM RLHF, the standard advantage estimator is **Generalised Advantage Estimation** (GAE; Schulman et al., 2015, [arXiv:1506.02438](https://arxiv.org/abs/1506.02438)). For a trajectory with per-step rewards $r_t$ and value-function estimates $V_\psi(s_t)$, GAE defines per-step advantages
+For LLM RLHF, the standard advantage estimator is **Generalised Advantage Estimation** (GAE; Schulman et al., 2015<FN n={3} />, [arXiv:1506.02438](https://arxiv.org/abs/1506.02438)). For a trajectory with per-step rewards $r_t$ and value-function estimates $V_\psi(s_t)$, GAE defines per-step advantages
 
 $$
 \hat A_t^\text{GAE} = \sum_{l=0}^{\infty} (\gamma \lambda)^l\, \delta_{t+l}, \qquad \delta_t := r_t + \gamma V_\psi(s_{t+1}) - V_\psi(s_t),
@@ -266,3 +266,15 @@ The next session derives GRPO — DeepSeek-Math / R1's group-relative simplifica
 **(f)** Argue why PPO is *not* "doing pure policy gradient": identify the role of (i) importance sampling (multi-step reuse), (ii) clipping (trust region), (iii) GAE (advantage variance reduction). For each, name what PPO loses if it is omitted.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Schulman, J., Levine, S., Abbeel, P., Jordan, M., & Moritz, P.** (2015). "Trust region policy optimization" (TRPO). [arXiv:1502.05477](https://arxiv.org/abs/1502.05477) — Constrained policy update; the precursor PPO simplifies (9.6, 9.9 §4.3).
+  </FNItem>
+  <FNItem n={2}>
+    **Schulman, J., Wolski, F., Dhariwal, P., Radford, A., & Klimov, O.** (2017). "Proximal policy optimization algorithms" (PPO). [arXiv:1707.06347](https://arxiv.org/abs/1707.06347) — Clipped surrogate objective; the workhorse of RLHF (9.6).
+  </FNItem>
+  <FNItem n={3}>
+    **Schulman, J., Moritz, P., Levine, S., Jordan, M., & Abbeel, P.** (2015). "High-dimensional continuous control using generalized advantage estimation" (GAE). [arXiv:1506.02438](https://arxiv.org/abs/1506.02438) — GAE; used by PPO inside RLHF (9.6 §5).
+  </FNItem>
+</Footnotes>

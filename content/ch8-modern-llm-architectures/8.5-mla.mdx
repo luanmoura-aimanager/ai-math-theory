@@ -11,11 +11,11 @@ prerequisites: ["ch6-attention-transformer/6.7-rope", "ch6-attention-transformer
 
 GQA (§8.3) shrinks the KV cache by reducing the number of distinct K, V heads from $h$ to $g$. The shrink is linear in $h/g$, capped at $h$ (which would be MQA, with measurable quality cost). To go further, the cache has to be shrunk along a *different* axis — not the head count, but the per-head dimension.
 
-DeepSeek-AI introduced **Multi-head Latent Attention (MLA)** in DeepSeek-V2 (2024, [arXiv:2405.04434](https://arxiv.org/abs/2405.04434)) and kept it in V3 and R1. The structural device: per token, compute a single low-rank **latent vector** $c^{KV} \in \mathbb{R}^{r}$ with $r \ll h d_h$, store only this latent in the KV cache, and reconstruct the per-head $K$ and $V$ at attention time by multiplying with two fixed up-projection matrices. The cache shrink is $h d_h / r$ — typically $\sim 10\times$ smaller than MHA at *iso-quality*.
+DeepSeek-AI introduced **Multi-head Latent Attention (MLA)** in DeepSeek-V2 (2024<FN n={1} />, [arXiv:2405.04434](https://arxiv.org/abs/2405.04434)) and kept it in V3 and R1. The structural device: per token, compute a single low-rank **latent vector** $c^{KV} \in \mathbb{R}^{r}$ with $r \ll h d_h$, store only this latent in the KV cache, and reconstruct the per-head $K$ and $V$ at attention time by multiplying with two fixed up-projection matrices. The cache shrink is $h d_h / r$ — typically $\sim 10\times$ smaller than MHA at *iso-quality*.
 
 The construction also requires a small surgical fix because the latent factorisation does not commute with RoPE. The fix — *decoupled RoPE* — uses a small auxiliary set of position-aware K heads that bypass the latent. The result is the most aggressive 2024-era KV-cache compression in any frontier LLM, and the dominant choice for DeepSeek's V2/V3/R1 line; it is plausibly the direction every long-context model will adopt within the next two years.
 
-This session derives MLA from scratch, including the decoupled-RoPE trick, and compares the cache footprint against MHA and GQA-$8$.
+This session derives MLA from scratch, including the decoupled-RoPE trick, and compares the cache footprint against MHA and GQA-$8$.<FN n={3} />
 
 ---
 
@@ -201,7 +201,7 @@ out    = attn @ V        # (T, h, d_h)
 out    = reshape(out, T, d) @ W_O
 ```
 
-The cache footprint per token per layer is the storage of `c_KV` and `K_R` — $r + d_h^R$ scalars total. The rest is recomputed each step.
+The cache footprint per token per layer is the storage of `c_KV` and `K_R` — $r + d_h^R$ scalars total. The rest is recomputed each step.<FN n={2} />
 
 ---
 
@@ -230,3 +230,15 @@ We have now covered both attention-side KV-cache shrinkers in Chapter 8: GQA (§
 **(f)** Why does the field not consider GQA "obsolete" in 2026 despite MLA's better iso-quality numbers? List the three reasons of §5.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **DeepSeek-AI** (2024). "DeepSeek-V2: A strong, economical, and efficient mixture-of-experts language model" (MLA). [arXiv:2405.04434](https://arxiv.org/abs/2405.04434) — Multi-head latent attention; low-rank K, V compression (6.14 §5.2; full treatment Cap 8.5).
+  </FNItem>
+  <FNItem n={2}>
+    **DeepSeek-AI** (2024). "DeepSeek-V3 technical report". [arXiv:2412.19437](https://arxiv.org/abs/2412.19437) — V3 architecture: MLA + 256-expert fine-grained MoE + auxiliary-loss-free balancing (8.5, 8.6 §6).
+  </FNItem>
+  <FNItem n={3}>
+    **DeepSeek-AI** (2025). "DeepSeek-R1: Incentivizing reasoning capability in LLMs via reinforcement learning". [arXiv:2501.12948](https://arxiv.org/abs/2501.12948) — R1 architecture inherits V3's MLA + MoE (referenced in 8.5; primary citation in Cap 9.7).
+  </FNItem>
+</Footnotes>

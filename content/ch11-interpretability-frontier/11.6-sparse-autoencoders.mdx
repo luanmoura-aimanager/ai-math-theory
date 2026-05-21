@@ -38,7 +38,7 @@ For superposition recovery, we want *expansion*, not compression — the hidden 
 
 ### 2.1 The SAE architecture
 
-Standard sparse autoencoder (Bricken et al., 2023):
+Standard sparse autoencoder (Bricken et al., 2023)<FN n={1} />:
 
 $$
 \begin{aligned}
@@ -91,13 +91,13 @@ The sweet spot depends on the application. For interpretability ("what is this f
 
 ### 3.3 The expansion factor
 
-$k / d$. Bricken et al. used $k = 8 d$ initially; later work scaled to $k = 64 d$. Larger expansion gives finer-grained features but at higher training cost. Templeton et al. (2024) used $k$ up to $\sim 30$M for Claude 3 Sonnet's residual-stream activations of $d \approx 4096$ — i.e., $k \approx 7300 d$.
+$k / d$. Bricken et al. used $k = 8 d$ initially; later work scaled to $k = 64 d$. Larger expansion gives finer-grained features but at higher training cost. Templeton et al. (2024)<FN n={2} /> used $k$ up to $\sim 30$M for Claude 3 Sonnet's residual-stream activations of $d \approx 4096$ — i.e., $k \approx 7300 d$.
 
 Diminishing returns: doubling $k$ above $\sim 16 d$ tends to *split* existing features into finer sub-features (e.g., one "code" feature becomes "Python code", "C code", "JavaScript code") rather than discover entirely new ones. The frontier-model SAE literature is partly about this *feature-splitting* phenomenon.
 
 ### 3.4 Top-k vs. L1
 
-A variant — Top-$k$ SAE (Gao et al., 2024, [arXiv:2406.04093](https://arxiv.org/abs/2406.04093)) — replaces the L1 penalty with an explicit constraint: keep only the top-$k$ activations per input, zero the rest.
+A variant — Top-$k$ SAE (Gao et al., 2024, [arXiv:2406.04093](https://arxiv.org/abs/2406.04093))<FN n={3} /> — replaces the L1 penalty with an explicit constraint: keep only the top-$k$ activations per input, zero the rest.
 
 $$
 f = \mathrm{TopK}(W_e (x - b_d) + b_e, K).
@@ -107,7 +107,7 @@ Top-$k$ SAEs train more reliably (no dead-feature problem; no $\lambda$ tuning),
 
 ### 3.5 JumpReLU and other activations
 
-Refinement: the JumpReLU (Rajamanoharan et al., 2024) replaces standard ReLU with a *thresholded* ReLU, $\sigma(x) = x \cdot \mathbb{1}[x > \theta]$, learning the threshold $\theta$ per feature. This decouples the sparsity decision (binary: active or not) from the magnitude (continuous: how much). Empirically tighter Pareto frontier than standard ReLU SAEs.
+Refinement: the JumpReLU (Rajamanoharan et al., 2024)<FN n={4} /> replaces standard ReLU with a *thresholded* ReLU, $\sigma(x) = x \cdot \mathbb{1}[x > \theta]$, learning the threshold $\theta$ per feature. This decouples the sparsity decision (binary: active or not) from the magnitude (continuous: how much). Empirically tighter Pareto frontier than standard ReLU SAEs.
 
 ---
 
@@ -210,3 +210,18 @@ Three things.
 **(f)** Templeton et al. (2024) extracted $\sim 10^7$ features from Claude 3 Sonnet with $d \approx 4096$. State the expansion factor and the implication for superposition severity in frontier models.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Bricken, T., Templeton, A., Batson, J., et al.** (2023). "Towards monosemanticity: Decomposing language models with dictionary learning". *Transformer Circuits Thread.* [transformer-circuits.pub](https://transformer-circuits.pub/2023/monosemantic-features/index.html) — SAEs for feature extraction (11.6).
+  </FNItem>
+  <FNItem n={2}>
+    **Templeton, A., Conerly, T., Marcus, J., et al.** (2024). "Scaling monosemanticity: Extracting interpretable features from Claude 3 Sonnet". *Transformer Circuits Thread.* [transformer-circuits.pub](https://transformer-circuits.pub/2024/scaling-monosemanticity/index.html) — Frontier-scale SAEs; Golden Gate Claude (11.6, 11.7).
+  </FNItem>
+  <FNItem n={3}>
+    **Gao, L., Dupré la Tour, T., Tillman, H., et al.** (2024). "Scaling and evaluating sparse autoencoders". [arXiv:2406.04093](https://arxiv.org/abs/2406.04093) — Top-$k$ SAEs (11.6).
+  </FNItem>
+  <FNItem n={4}>
+    **Rajamanoharan, S., Conmy, A., Smith, L., et al.** (2024). "Jumping ahead: Improving reconstruction fidelity with JumpReLU sparse autoencoders". [arXiv:2407.14435](https://arxiv.org/abs/2407.14435) — JumpReLU SAEs (11.6).
+  </FNItem>
+</Footnotes>

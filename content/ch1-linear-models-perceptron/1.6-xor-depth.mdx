@@ -9,7 +9,7 @@ prerequisites: ["ch1-linear-models-perceptron/1.4-separating-hyperplane"]
 
 ## 1. Why this session exists
 
-Minsky and Papert's 1969 book *Perceptrons* observed that the simplest non-trivial logical function — exclusive OR — cannot be computed by a single-layer perceptron. The observation effectively killed neural-network research for a decade. The fix (a hidden layer) is mathematically trivial once you know it, but conceptually it is the entire reason the rest of this course exists: **adding depth strictly increases what a linear-threshold network can represent.**
+Minsky and Papert's 1969<FN n={1} /> book *Perceptrons* observed that the simplest non-trivial logical function — exclusive OR — cannot be computed by a single-layer perceptron. The observation effectively killed neural-network research for a decade. The fix (a hidden layer) is mathematically trivial once you know it, but conceptually it is the entire reason the rest of this course exists: **adding depth strictly increases what a linear-threshold network can represent.**
 
 This session does the proof of impossibility and constructs the explicit 2-hidden-unit solution.
 
@@ -137,3 +137,9 @@ The hidden layer is the *new primitive*. It is the difference between fitting a 
 **(d)** Argue that the family of functions computable by a single linear-threshold unit is closed under negation but not under XOR. Use this closure property to give a 3-line non-existence proof of XOR for a perceptron.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Minsky, M., & Papert, S.** (1969). *Perceptrons: An Introduction to Computational Geometry.* MIT Press. — The XOR impossibility result (1.6).
+  </FNItem>
+</Footnotes>

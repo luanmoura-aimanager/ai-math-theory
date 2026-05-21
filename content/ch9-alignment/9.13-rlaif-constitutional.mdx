@@ -39,7 +39,7 @@ That's the entire change. The downstream pipeline (reward model training, PPO or
 
 ### 2.2 What judges do well
 
-Empirically (Lee et al., 2023, [arXiv:2309.00267](https://arxiv.org/abs/2309.00267)), LLM judges agree with human judges:
+Empirically (Lee et al., 2023, [arXiv:2309.00267](https://arxiv.org/abs/2309.00267))<FN n={2} />, LLM judges agree with human judges:
 
 - ~80–90% on broad preference dimensions ("which response is more helpful?")
 - ~70–80% on subtle judgements ("which is more nuanced?")
@@ -63,7 +63,7 @@ A production RLAIF pipeline accounts for these — randomising positions, using 
 
 ## 3. Constitutional AI: the principled extension
 
-**Bai, Kadavath, Kundu, et al., 2022, *Constitutional AI: Harmlessness from AI Feedback*** ([arXiv:2212.08073](https://arxiv.org/abs/2212.08073)). Anthropic's framework that makes RLAIF principled by *explicitly writing down the principles* the AI labeller should apply.
+**Bai, Kadavath, Kundu, et al., 2022<FN n={1} />, *Constitutional AI: Harmlessness from AI Feedback*** ([arXiv:2212.08073](https://arxiv.org/abs/2212.08073)). Anthropic's framework that makes RLAIF principled by *explicitly writing down the principles* the AI labeller should apply.
 
 ### 3.1 The constitution
 
@@ -221,3 +221,12 @@ Three things:
 **(e)** Read [Bai et al., 2022](https://arxiv.org/abs/2212.08073) §2. Identify the specific kinds of harms the CAI principles target. How does the model's harmlessness compare to standard RLHF baselines?
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Bai, Y., Kadavath, S., Kundu, S., et al.** (2022). "Constitutional AI: Harmlessness from AI feedback" (CAI). [arXiv:2212.08073](https://arxiv.org/abs/2212.08073) — Anthropic's CAI recipe; critique-and-revise + AI-judged preferences (9.13).
+  </FNItem>
+  <FNItem n={2}>
+    **Lee, H., Phatale, S., Mansoor, H., et al.** (2023). "RLAIF: Scaling reinforcement learning from human feedback with AI feedback". [arXiv:2309.00267](https://arxiv.org/abs/2309.00267) — Empirical comparison RLHF vs RLAIF (9.13 §2.2).
+  </FNItem>
+</Footnotes>

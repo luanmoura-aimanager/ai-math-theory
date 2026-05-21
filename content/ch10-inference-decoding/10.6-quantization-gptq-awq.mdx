@@ -13,7 +13,7 @@ Recall the rough memory budget of LLM serving (Cap 10.3): weights + KV cache com
 
 Quantisation is the most leveraged inference optimisation: a $\sim 4\times$ reduction in weight memory, $\sim 2$–$4\times$ reduction in weight-read time (the dominant cost at small batch — Cap 10.3 §5.1), at a typical quality cost of $<1$ perplexity point for INT8 and $1$–$3$ perplexity points for INT4. By 2026, INT8 is universal in production; INT4 is the default for open-source local inference (llama.cpp, MLX).
 
-But naive quantisation — round each weight to its nearest INT8/INT4 grid point — fails catastrophically below INT8 because of *activation outliers*. The two algorithms that made INT4 viable are **GPTQ** (Frantar et al., 2022, [arXiv:2210.17323](https://arxiv.org/abs/2210.17323)) and **AWQ** (Lin et al., 2023, [arXiv:2306.00978](https://arxiv.org/abs/2306.00978)). Both use a small calibration dataset to be smarter than nearest-rounding.
+But naive quantisation — round each weight to its nearest INT8/INT4 grid point — fails catastrophically below INT8 because of *activation outliers*. The two algorithms that made INT4 viable are **GPTQ** (Frantar et al., 2022, [arXiv:2210.17323](https://arxiv.org/abs/2210.17323))<FN n={2} /> and **AWQ** (Lin et al., 2023, [arXiv:2306.00978](https://arxiv.org/abs/2306.00978))<FN n={3} />. Both use a small calibration dataset to be smarter than nearest-rounding.
 
 This session does the math of both.
 
@@ -57,7 +57,7 @@ The granularity is a trade-off: finer grids ↔ more scale parameters stored alo
 
 Naive per-channel weight quantisation works well to INT8. Below that — INT4, INT3 — quality collapses on standard LLMs. The reason is *activation outliers*.
 
-**Empirical observation** (Dettmers et al., 2022, [arXiv:2208.07339](https://arxiv.org/abs/2208.07339)): in Transformer activations, a small number of *channels* carry values $50$–$100\times$ larger in magnitude than the median channel. These are the "outlier channels". They emerge during pretraining and are *systematic* — the same channels carry outliers across most inputs.
+**Empirical observation** (Dettmers et al., 2022, [arXiv:2208.07339](https://arxiv.org/abs/2208.07339))<FN n={1} />: in Transformer activations, a small number of *channels* carry values $50$–$100\times$ larger in magnitude than the median channel. These are the "outlier channels". They emerge during pretraining and are *systematic* — the same channels carry outliers across most inputs.
 
 The quantisation problem: a per-tensor scale $s$ chosen to cover the outlier-channel range is *too large* for the other channels — most values round to zero. Conversely, a per-tensor scale chosen for the typical channel *clips* the outliers, also catastrophic.
 
@@ -169,7 +169,7 @@ Beyond weight quantisation, *activations* can also be quantised — meaning matr
 
 ### 6.1 SmoothQuant
 
-Xiao et al. (2022, [arXiv:2211.10438](https://arxiv.org/abs/2211.10438)) observed that activations are hard to quantise (outliers) and weights are easy. *Migrate* the activation difficulty into the weights:
+Xiao et al. (2022<FN n={4} />, [arXiv:2211.10438](https://arxiv.org/abs/2211.10438)) observed that activations are hard to quantise (outliers) and weights are easy. *Migrate* the activation difficulty into the weights:
 
 $$
 y \;=\; W x \;=\; \big(W \cdot \mathrm{diag}(s)\big) \cdot \big(\mathrm{diag}(1/s) \cdot x\big).
@@ -192,7 +192,7 @@ The KV cache is the other large fp16 tensor in inference (Cap 10.3). It can be q
 - **INT8 KV cache.** Halves cache memory; typical perplexity loss $< 0.1$. Standard in modern stacks.
 - **INT4 KV cache.** Quarters cache memory; loss $\sim 0.3$–$0.5$ perplexity points. Used in long-context settings where the cache dominates HBM.
 
-KV cache values have outliers similar to activations. The robust approach: per-token, per-head quantisation with INT8 scales; per-group quantisation for INT4. KIVI (Liu et al., 2024) is one common open-source recipe.
+KV cache values have outliers similar to activations. The robust approach: per-token, per-head quantisation with INT8 scales; per-group quantisation for INT4. KIVI (Liu et al., 2024)<FN n={5} /> is one common open-source recipe.
 
 The total memory math: a Llama-3 70B with INT4 weights + INT4 KV cache + GQA-$8$ fits a $32\text{k}$ context at batch $32$ on a single H100. Without quantisation, the same context+batch combination requires $4\times$ the GPU memory.
 
@@ -235,3 +235,21 @@ Cap 10.7 next: *test-time scaling*. Quantisation cuts cost per token; test-time 
 **(f)** A production deployment uses Llama-3 70B with INT4 (AWQ) weights + INT8 KV cache + GQA-$8$. Estimate the weight memory and per-token KV-cache memory. How much $32\text{k}$-context batch fits in 80 GB HBM?
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Dettmers, T., Lewis, M., Belkada, Y., & Zettlemoyer, L.** (2022). "LLM.int8(): 8-bit matrix multiplication for transformers at scale". [arXiv:2208.07339](https://arxiv.org/abs/2208.07339) — Outlier-aware quantisation; structural activation outliers (7.4 §6.2; full treatment Cap 10.6).
+  </FNItem>
+  <FNItem n={2}>
+    **Frantar, E., Ashkboos, S., Hoefler, T., & Alistarh, D.** (2022). "GPTQ: Accurate post-training quantization for generative pre-trained transformers". [arXiv:2210.17323](https://arxiv.org/abs/2210.17323) — GPTQ (10.6).
+  </FNItem>
+  <FNItem n={3}>
+    **Lin, J., Tang, J., Tang, H., et al.** (2023). "AWQ: Activation-aware weight quantization for LLM compression and acceleration". [arXiv:2306.00978](https://arxiv.org/abs/2306.00978) — AWQ (10.6).
+  </FNItem>
+  <FNItem n={4}>
+    **Xiao, G., Lin, J., Seznec, M., et al.** (2022). "SmoothQuant: Accurate and efficient post-training quantization for large language models". [arXiv:2211.10438](https://arxiv.org/abs/2211.10438) — Activation-weight scaling for INT8-everywhere inference (10.6).
+  </FNItem>
+  <FNItem n={5}>
+    **Liu, Z., Yuan, J., Jin, H., et al.** (2024). "KIVI: A tuning-free asymmetric 2bit quantization for KV cache". [arXiv:2402.02750](https://arxiv.org/abs/2402.02750) — KV-cache quantisation recipe (10.6).
+  </FNItem>
+</Footnotes>

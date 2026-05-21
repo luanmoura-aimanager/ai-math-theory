@@ -9,7 +9,7 @@ prerequisites: ["ch4-cnn-bridge/4.1-discrete-convolution"]
 
 ## 1. Why this appendix exists
 
-The forward formula in 4.1 §4 assumed no padding and stride 1. Real conv layers expose two extra knobs — **padding $P$** and **stride $S$** — that control output size and how aggressively the layer downsamples. The formulas are simple but produce off-by-one bugs when you misremember which way to round.
+The forward formula in 4.1 §4 assumed no padding and stride 1. Real conv layers expose two extra knobs — **padding $P$** and **stride $S$** — that control output size and how aggressively the layer downsamples. The formulas are simple but produce off-by-one bugs when you misremember which way to round.<FN n={1} />
 
 ---
 
@@ -88,3 +88,9 @@ For Transformer-era engineers who pass through a conv layer occasionally (vision
 **(c)** A dilated 1D conv has $K = 3, d = 4, S = 1, P = 4$. What is the output size for $H_\text{in} = 16$? What span of inputs does each output depend on?
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Dumoulin, V., & Visin, F.** (2016). "A guide to convolution arithmetic for deep learning". [arXiv:1603.07285](https://arxiv.org/abs/1603.07285) — Definitive reference for padding, stride, dilation, and transposed convolutions (Appendices 4.A, 4.C).
+  </FNItem>
+</Footnotes>

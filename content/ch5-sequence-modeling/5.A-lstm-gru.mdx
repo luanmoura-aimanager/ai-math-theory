@@ -9,7 +9,7 @@ prerequisites: ["ch5-sequence-modeling/5.5-rnn-bptt"]
 
 ## 1. Why this appendix exists
 
-The vanilla RNN of [5.5](/session/ch5-sequence-modeling/5.5-rnn-bptt) suffers vanishing/exploding gradients (Bengio, Simard & Frasconi, 1994). For two decades, the field's response was a single architectural family: **gated recurrent cells**, of which the LSTM (Hochreiter & Schmidhuber, 1997) and the GRU (Cho et al., 2014) are the canonical members.
+The vanilla RNN of [5.5](/session/ch5-sequence-modeling/5.5-rnn-bptt) suffers vanishing/exploding gradients (Bengio, Simard & Frasconi, 1994). For two decades, the field's response was a single architectural family: **gated recurrent cells**, of which the LSTM (Hochreiter & Schmidhuber, 1997)<FN n={2} /> and the GRU (Cho et al., 2014)<FN n={4} /> are the canonical members.
 
 These cells are no longer used in modern LLMs. We retire them — gracefully — by understanding *why they worked* and *which of their ideas survived*. The "gated residual" pattern reappears in three downstream places:
 
@@ -17,7 +17,7 @@ These cells are no longer used in modern LLMs. We retire them — gracefully —
 - Highway networks and the residual stream of Transformers more broadly (foreshadowed in Chapter 6).
 - Selective state-space models (Mamba — coming in Chapter 8).
 
-Read this appendix as cultural literacy and as motivation for why "additive paths with learnable gates" is one of the most important architectural primitives in deep learning, even after the specific cell types fell out of fashion.
+Read this appendix as cultural literacy and as motivation for why "additive paths with learnable gates" is one of the most important architectural primitives in deep learning, even after the specific cell types fell out of fashion.<FN n={1} />
 
 ---
 
@@ -97,7 +97,7 @@ $$
 which is at most 1 per step and is preserved when $f_t \approx 1$. The exponential decay of the vanilla RNN is gone; vanishing happens only when the network *chooses* to forget. The same reasoning explains why exploding is less of an issue too — each per-step Jacobian is bounded by 1 along the dominant path.
 
 <Aside type="note">
-**"Constant error carousel."** Hochreiter & Schmidhuber's 1997 paper called the additive cell-state path the **constant error carousel** (CEC): a path along which the error signal can be carried indefinitely without exponential decay. Modern terminology calls this a *gated residual*, but the conceptual content is the same. Note also that the original 1997 LSTM did *not* include a forget gate — the cell state was simply $c_t = c_{t-1} + i_t \odot \tilde c_t$. The forget gate was added by Gers, Schmidhuber, and Cummins (2000) and quickly became standard.
+**"Constant error carousel."** Hochreiter & Schmidhuber's 1997 paper called the additive cell-state path the **constant error carousel** (CEC): a path along which the error signal can be carried indefinitely without exponential decay. Modern terminology calls this a *gated residual*, but the conceptual content is the same. Note also that the original 1997 LSTM did *not* include a forget gate — the cell state was simply $c_t = c_{t-1} + i_t \odot \tilde c_t$. The forget gate was added by Gers, Schmidhuber, and Cummins (2000)<FN n={3} /> and quickly became standard.
 </Aside>
 
 ---
@@ -119,7 +119,7 @@ The update equation $h_t = (1 - z_t) \odot h_{t-1} + z_t \odot \tilde h_t$ is a 
 
 This is structurally the same idea as the LSTM's cell-state update — a *gated additive path* through time — but with fewer parameters (the GRU has $3 \cdot d_h \cdot (d_h + d_x + 1)$ vs $4$ for LSTM) and no separate cell state.
 
-Empirical comparisons (Chung et al., 2014; Jozefowicz, Zaremba & Sutskever, 2015) found LSTMs and GRUs roughly equivalent on most sequence tasks; the GRU's lower parameter count is a small efficiency win.
+Empirical comparisons (Chung et al., 2014; Jozefowicz<FN n={6} />, Zaremba & Sutskever, 2015)<FN n={5} /> found LSTMs and GRUs roughly equivalent on most sequence tasks; the GRU's lower parameter count is a small efficiency win.
 
 ---
 
@@ -139,7 +139,7 @@ By 2018 the field had largely settled: LSTMs continued in production for smaller
 
 The *implementation* — gated cells with cell states and forget gates — is gone from LLMs. The *idea* — an additive path with a learned gate — is everywhere.
 
-**Highway networks (Srivastava, Greff & Schmidhuber, 2015).** A direct generalisation of the LSTM gating idea to *feed-forward* networks: each layer outputs $(1 - g) \odot \text{input} + g \odot \text{layer}(input)$. This is the immediate predecessor of the residual connection.
+**Highway networks (Srivastava, Greff & Schmidhuber, 2015)<FN n={7} />.** A direct generalisation of the LSTM gating idea to *feed-forward* networks: each layer outputs $(1 - g) \odot \text{input} + g \odot \text{layer}(input)$. This is the immediate predecessor of the residual connection.
 
 **Residual connections (He et al., 2015 — ResNet).** Drop the gate and always pass the input through: $\text{output} = \text{input} + \text{layer}(input)$. The residual stream of a Transformer is exactly this pattern at every block, and it is the reason a 100-layer Transformer trains stably where a 100-layer plain MLP would not (cf. [2.9 / 2.10](/session/ch2-mlps-backprop/2.10-weight-initialization)).
 
@@ -156,7 +156,7 @@ This is exactly the "multiplicative gate on an information path" idea from LSTMs
 So the LSTM is gone, but its DNA pervades every modern architecture. The cell type was retired; the design principle was promoted.
 
 <Aside type="history">
-The LSTM was published in 1997 and remained the dominant sequence model until 2017 — twenty years as the field standard, longer than any neural architecture before or since. Hochreiter went on to a long career in computational biology; Schmidhuber became famously vocal about the historical credit for deep learning. The forget gate added by Gers, Schmidhuber & Cummins (2000) is what made the model truly useful in practice, and Karpathy's 2015 blog post *The Unreasonable Effectiveness of Recurrent Neural Networks* — which trained character-level LSTMs on Shakespeare and Linux kernel source — was the proximate cause of LSTM going mainstream. The Transformer paper arrived two years later.
+The LSTM was published in 1997 and remained the dominant sequence model until 2017 — twenty years as the field standard, longer than any neural architecture before or since. Hochreiter went on to a long career in computational biology; Schmidhuber became famously vocal about the historical credit for deep learning. The forget gate added by Gers, Schmidhuber & Cummins (2000) is what made the model truly useful in practice, and Karpathy's 2015<FN n={8} /> blog post *The Unreasonable Effectiveness of Recurrent Neural Networks* — which trained character-level LSTMs on Shakespeare and Linux kernel source — was the proximate cause of LSTM going mainstream. The Transformer paper arrived two years later.
 </Aside>
 
 <SelfTest>
@@ -172,3 +172,30 @@ The LSTM was published in 1997 and remained the dominant sequence model until 20
 **(e)** Identify the LSTM/GRU "gated residual" pattern in the SwiGLU FFN and in the Transformer residual connection. In each case, what plays the role of "previous state" and what plays the role of "candidate update"?
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Goodfellow, I., Bengio, Y., & Courville, A.** (2016). *Deep Learning,* §10 (Sequence Modeling: Recurrent and Recursive Nets). MIT Press. — RNN, BPTT, LSTM/GRU (5.5, Appendix 5.A).
+  </FNItem>
+  <FNItem n={2}>
+    **Hochreiter, S., & Schmidhuber, J.** (1997). "Long short-term memory". *Neural Computation,* 9(8), 1735–1780. — LSTM cell (Appendix 5.A §3).
+  </FNItem>
+  <FNItem n={3}>
+    **Gers, F. A., Schmidhuber, J., & Cummins, F.** (2000). "Learning to forget: Continual prediction with LSTM". *Neural Computation,* 12(10), 2451–2471. — Forget gate (Appendix 5.A Aside).
+  </FNItem>
+  <FNItem n={4}>
+    **Cho, K., van Merriënboer, B., Gulcehre, C., et al.** (2014). "Learning phrase representations using RNN encoder–decoder for statistical machine translation". *EMNLP*. [arXiv:1406.1078](https://arxiv.org/abs/1406.1078) — GRU (Appendix 5.A §5).
+  </FNItem>
+  <FNItem n={5}>
+    **Chung, J., Gulcehre, C., Cho, K., & Bengio, Y.** (2014). "Empirical evaluation of gated recurrent neural networks on sequence modeling". [arXiv:1412.3555](https://arxiv.org/abs/1412.3555) — LSTM/GRU empirical comparison (Appendix 5.A §5).
+  </FNItem>
+  <FNItem n={6}>
+    **Jozefowicz, R., Zaremba, W., & Sutskever, I.** (2015). "An empirical exploration of recurrent network architectures". *ICML*. — Architecture search over gated RNN variants (Appendix 5.A §5).
+  </FNItem>
+  <FNItem n={7}>
+    **Srivastava, R. K., Greff, K., & Schmidhuber, J.** (2015). "Highway networks". [arXiv:1505.00387](https://arxiv.org/abs/1505.00387) — Gated residual feed-forward networks; conceptual bridge from LSTM to ResNet (Appendix 5.A §7).
+  </FNItem>
+  <FNItem n={8}>
+    **Karpathy, A.** (2015). "The unreasonable effectiveness of recurrent neural networks". [karpathy.github.io](https://karpathy.github.io/2015/05/21/rnn-effectiveness/) — Cultural-historical reference for LSTM in language modelling (Appendix 5.A Aside).
+  </FNItem>
+</Footnotes>

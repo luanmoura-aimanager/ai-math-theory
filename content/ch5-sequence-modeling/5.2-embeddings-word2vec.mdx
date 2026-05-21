@@ -15,7 +15,7 @@ This session does three things:
 
 1. Define the embedding matrix and the lookup operation.
 2. Derive Mikolov's **skip-gram-with-negative-sampling** (SGNS) objective, the algorithm behind word2vec, and see *why* it produces the linear-analogy geometry that made embeddings famous.
-3. Place word2vec inside the modern picture: in LLMs, embeddings are *not* trained with a separate skip-gram step. They are part of the language model and are updated jointly with everything else. Word2vec is the conceptual ancestor and the geometric intuition, not the implementation.
+3. Place word2vec inside the modern picture: in LLMs, embeddings are *not* trained with a separate skip-gram step. They are part of the language model and are updated jointly with everything else. Word2vec is the conceptual ancestor and the geometric intuition, not the implementation.<FN n={1} />
 
 ---
 
@@ -53,19 +53,19 @@ That such a relation could be *learned* from raw co-occurrence statistics, with 
 
 ## 3. The distributional hypothesis
 
-The conceptual backbone of every embedding method since Bengio et al. (2003) is the **distributional hypothesis**, due to Harris (1954) and Firth (1957):
+The conceptual backbone of every embedding method since Bengio et al. (2003)<FN n={4} /> is the **distributional hypothesis**, due to Harris (1954)<FN n={3} /> and Firth (1957)<FN n={2} />:
 
 > *"You shall know a word by the company it keeps."* — Firth
 
 Concretely: two words that appear in the same kinds of contexts (the words around them) tend to have similar meanings. If *"dog"* and *"cat"* are surrounded by similar neighbours (*"pet"*, *"walk"*, *"vet"*), they should be close in embedding space — even if the algorithm never sees a dictionary or an ontology.
 
-Every embedding method since then can be read as: *"design an objective whose optimum forces vectors of tokens with similar contexts to be similar."* Word2vec is one such design; GloVe (Pennington et al., 2014) is another; the LLM's own forward pass is a third. The conceptual unity is the distributional hypothesis.
+Every embedding method since then can be read as: *"design an objective whose optimum forces vectors of tokens with similar contexts to be similar."* Word2vec is one such design; GloVe (Pennington et al., 2014)<FN n={7} /> is another; the LLM's own forward pass is a third. The conceptual unity is the distributional hypothesis.
 
 ---
 
 ## 4. Skip-gram with negative sampling (SGNS)
 
-Mikolov et al. (2013) introduced two related architectures (CBOW and skip-gram); skip-gram with negative sampling, the more commonly used variant, is what we derive here.
+Mikolov et al. (2013)<FN n={6} /> introduced two related architectures (CBOW and skip-gram); skip-gram with negative sampling, the more commonly used variant, is what we derive here.
 
 ### 4.1 The skip-gram setup
 
@@ -115,7 +115,7 @@ Mikolov found empirically that $P_n(c) \propto U(c)^{3/4}$, where $U(c)$ is the 
 After training, the **target embedding $E$** is the artefact people use downstream. The context matrix $\tilde E$ is discarded. The result: a $V \times d$ matrix where similar-meaning tokens are nearby and (empirically) where linear analogies hold.
 
 <Aside type="note">
-**SGNS is implicit matrix factorisation.** Levy & Goldberg (2014) proved that, in the limit of infinite data and dimension, SGNS factorises the **shifted positive pointwise mutual information** (SPPMI) matrix:
+**SGNS is implicit matrix factorisation.** Levy & Goldberg (2014)<FN n={8} /> proved that, in the limit of infinite data and dimension, SGNS factorises the **shifted positive pointwise mutual information** (SPPMI) matrix:
 
 $$
 E_w^\top \tilde E_c \approx \text{PMI}(w, c) - \log K, \quad \text{PMI}(w, c) = \log \frac{P(w, c)}{P(w) P(c)}.
@@ -145,8 +145,8 @@ $$
 The success of this prediction at scale empirically validates the claim that SGNS (and successor methods) produces a representation whose principal directions roughly correspond to interpretable semantic axes. The structure is approximate — analogy accuracy on benchmark sets like Google Analogy is 60–70%, not 100% — but it is real, and it is the cleanest experimental evidence that distributed representations encode meaning *geometrically*.
 
 <Aside type="history">
-Word2vec (Mikolov et al., 2013) was not the first method to produce semantic embeddings — Bengio et al. (2003) had a neural language model with learned embeddings, and methods based on co-occurrence matrices (LSI, HAL) date to the 1990s. What word2vec contributed was: (1) speed (the SGNS objective scales linearly in corpus size, no SVD), (2) public release of a high-quality 300-dim embedding for 3M English words trained on Google News, and (3) the discovery of linear analogies, which became the cultural meme that put representation learning on every NLP researcher's screen.
-</Aside>
+Word2vec (Mikolov et al., 2013)<FN n={5} /> was not the first method to produce semantic embeddings — Bengio et al. (2003) had a neural language model with learned embeddings, and methods based on co-occurrence matrices (LSI, HAL) date to the 1990s. What word2vec contributed was: (1) speed (the SGNS objective scales linearly in corpus size, no SVD), (2) public release of a high-quality 300-dim embedding for 3M English words trained on Google News, and (3) the discovery of linear analogies, which became the cultural meme that put representation learning on every NLP researcher's screen.
+</Aside><FN n={10} />
 
 ---
 
@@ -164,7 +164,7 @@ This matters for two reasons:
 
 ### 6.1 Weight tying
 
-A trick used by almost every LLM (introduced by Press & Wolf, 2017): the **output projection** that maps the final hidden state to logits over the vocabulary uses the *same* matrix as the embedding, transposed:
+A trick used by almost every LLM (introduced by Press & Wolf, 2017)<FN n={9} />: the **output projection** that maps the final hidden state to logits over the vocabulary uses the *same* matrix as the embedding, transposed:
 
 $$
 \boxed{\ \text{logits} = h_T\, E^\top \in \mathbb{R}^V, \quad \text{with } E \text{ the same matrix as the input embedding.} \ }
@@ -210,3 +210,36 @@ Three durable lessons:
 **(e)** Sketch why a model with $V = 100{,}000, d = 4096$ benefits significantly more from weight tying than a model with $V = 256, d = 4096$.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Prince, S. J. D.** (2023). *Understanding Deep Learning,* §12 (Sequence-to-Sequence Models) and §15 (Recurrent Networks). MIT Press. — Embeddings (5.2), RNN treatment (5.5).
+  </FNItem>
+  <FNItem n={2}>
+    **Firth, J. R.** (1957). "A synopsis of linguistic theory, 1930–1955". *Studies in Linguistic Analysis,* 1–32. — Distributional hypothesis (5.2 §3).
+  </FNItem>
+  <FNItem n={3}>
+    **Harris, Z. S.** (1954). "Distributional structure". *Word,* 10(2–3), 146–162. — Distributional hypothesis (5.2 §3).
+  </FNItem>
+  <FNItem n={4}>
+    **Bengio, Y., Ducharme, R., Vincent, P., & Jauvin, C.** (2003). "A neural probabilistic language model". *JMLR,* 3, 1137–1155. — First neural LM with learned word embeddings; the conceptual ancestor of every modern LLM (5.2, 5.4).
+  </FNItem>
+  <FNItem n={5}>
+    **Mikolov, T., Chen, K., Corrado, G., & Dean, J.** (2013). "Efficient estimation of word representations in vector space". [arXiv:1301.3781](https://arxiv.org/abs/1301.3781) — Word2Vec architectures (CBOW, skip-gram) (5.2).
+  </FNItem>
+  <FNItem n={6}>
+    **Mikolov, T., Sutskever, I., Chen, K., Corrado, G., & Dean, J.** (2013). "Distributed representations of words and phrases and their compositionality". *NeurIPS*. [arXiv:1310.4546](https://arxiv.org/abs/1310.4546) — Skip-gram with negative sampling; the linear-analogy result (5.2 §4–§5).
+  </FNItem>
+  <FNItem n={7}>
+    **Pennington, J., Socher, R., & Manning, C. D.** (2014). "GloVe: Global vectors for word representation". *EMNLP*. — Co-occurrence-matrix factorisation as an alternative to word2vec (5.2 §3).
+  </FNItem>
+  <FNItem n={8}>
+    **Levy, O., & Goldberg, Y.** (2014). "Neural word embedding as implicit matrix factorization". *NeurIPS*. — Proves that SGNS factorises the shifted PMI matrix (5.2 Aside).
+  </FNItem>
+  <FNItem n={9}>
+    **Press, O., & Wolf, L.** (2017). "Using the output embedding to improve language models". *EACL*. [arXiv:1608.05859](https://arxiv.org/abs/1608.05859) — Weight tying between input embedding and output projection (5.2 §6.1).
+  </FNItem>
+  <FNItem n={10}>
+    **DeepSeek-AI** (2024). "DeepSeek-V2: A strong, economical, and efficient mixture-of-experts language model" (MLA). [arXiv:2405.04434](https://arxiv.org/abs/2405.04434) — Multi-head latent attention; low-rank K, V compression (6.14 §5.2; full treatment Cap 8.5).
+  </FNItem>
+</Footnotes>

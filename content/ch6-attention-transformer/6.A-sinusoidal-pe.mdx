@@ -9,7 +9,7 @@ prerequisites: ["ch6-attention-transformer/6.6-why-positional-info"]
 
 ## 1. Why this appendix exists
 
-The original *Attention Is All You Need* paper (Vaswani et al., 2017) handled positions with an **additive sinusoidal encoding**: compute a deterministic vector $\text{PE}(\text{pos}) \in \mathbb{R}^d$ from sinusoids of geometrically-progressing frequencies, and *add* it to the token embedding before the first block. The Transformer was thus position-aware at the input layer, and every subsequent layer inherited that signal through the residual stream ([6.9](/session/ch6-attention-transformer/6.9-residual-connections)).
+The original *Attention Is All You Need* paper (Vaswani et al., 2017)<FN n={1} /> handled positions with an **additive sinusoidal encoding**: compute a deterministic vector $\text{PE}(\text{pos}) \in \mathbb{R}^d$ from sinusoids of geometrically-progressing frequencies, and *add* it to the token embedding before the first block. The Transformer was thus position-aware at the input layer, and every subsequent layer inherited that signal through the residual stream ([6.9](/session/ch6-attention-transformer/6.9-residual-connections)).
 
 This was the canonical positional encoding from 2017 to ~2020. Then learned PE (GPT-2 — Appendix 6.B) and rotary PE ([6.7](/session/ch6-attention-transformer/6.7-rope)) displaced it. Sinusoidal PE survives in the literature as the *historical reference design* and in a few niche models (some encoder-decoder text-to-speech systems, some scientific Transformers). The math is short and instructive — particularly the property "$\text{PE}(\text{pos} + k)$ is a linear function of $\text{PE}(\text{pos})$" that motivated the design — and worth knowing if you read pre-2020 papers.
 
@@ -177,3 +177,9 @@ Read AIAYN §3.5 with this appendix open; the two pages explain the design inten
 **(e)** Read AIAYN §3.5 (one page). State, in your own words, why the authors chose sinusoidal over learned. Was their reasoning vindicated by later research?
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Vaswani, A., Shazeer, N., Parmar, N., et al.** (2017). "Attention is all you need". *NeurIPS*. [arXiv:1706.03762](https://arxiv.org/abs/1706.03762) — The Transformer paper. Scaled dot-product attention (6.2), multi-head attention (6.4), encoder–decoder cross-attention (6.3), sinusoidal positional encoding (Appendix 6.A), the FFN sub-layer (6.8), post-LN block diagram (6.10), full architecture read (6.11).
+  </FNItem>
+</Footnotes>

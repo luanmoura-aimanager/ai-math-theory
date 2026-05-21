@@ -45,7 +45,7 @@ $$
 \theta_{\text{MAP}} = \arg\max_\theta \log p(\theta \mid \mathcal{D}) = \arg\min_\theta \bigl[\underbrace{-\log p(\mathcal{D} \mid \theta)}_{L(\theta)} \;-\; \log p(\theta)\bigr].
 $$
 
-This is the MLE objective with an extra term $-\log p(\theta)$ — the **negative log-prior**, acting as a regulariser. The shape of this term encodes our beliefs about $\theta$ before seeing the data.
+This is the MLE objective with an extra term $-\log p(\theta)$ — the **negative log-prior**, acting as a regulariser. The shape of this term encodes our beliefs about $\theta$ before seeing the data.<FN n={1} />
 
 ---
 
@@ -154,3 +154,9 @@ This is also why weight decay helps Adam *more* than plain SGD: Adam's per-param
 **(d)** Show that for a linear regression model $\hat y = \theta^\top x$ with Gaussian likelihood $p(y \mid x, \theta) = \mathcal{N}(\theta^\top x, \sigma^2)$ and Gaussian prior $p(\theta) = \mathcal{N}(0, \tau^2 I)$, the MAP estimator $\theta_{\text{MAP}}$ is exactly **ridge regression**: $\theta_{\text{MAP}} = (X^\top X + \frac{\sigma^2}{\tau^2} I)^{-1} X^\top y$.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Bishop, C. M.** (2006). *Pattern Recognition and Machine Learning,* §3.4 and §5.5. — L2 as Gaussian prior / MAP (Appendix 3.A).
+  </FNItem>
+</Footnotes>

@@ -9,7 +9,7 @@ prerequisites: ["ch2-mlps-backprop/2.7-backprop-weight-gradients", "ch0-math-fou
 
 ## 1. Why this session exists
 
-Backprop in 2.5–2.7 was derived for one specific architecture (the MLP). In real frameworks — PyTorch, JAX, TensorFlow — the same chain-rule computation is generated *automatically* for any computational graph you can write down. This is **automatic differentiation** (AD), and it comes in two flavours, **forward-mode** and **reverse-mode**. Knowing the cost asymmetry between them is the difference between a working training loop and one that's $10^6 \times$ slower than it should be.
+Backprop in 2.5–2.7 was derived for one specific architecture (the MLP). In real frameworks — PyTorch, JAX, TensorFlow — the same chain-rule computation is generated *automatically* for any computational graph you can write down. This is **automatic differentiation** (AD), and it comes in two flavours, **forward-mode** and **reverse-mode**. Knowing the cost asymmetry between them is the difference between a working training loop and one that's $10^6 \times$ slower than it should be.<FN n={1} />
 
 ---
 
@@ -57,7 +57,7 @@ Initialise $\bar L = 1$ and sweep backward through the graph (in reverse topolog
 
 **Good for.** One output, many inputs ($N \sim 10^9$ parameters and a scalar loss). **The only practical choice for deep learning.**
 
-The "$\Theta(\text{forward})$" claim is essentially the **Baur–Strassen theorem** (1983): the cost of computing the gradient of a scalar-valued function is within a constant factor of the cost of evaluating the function. The constant is small (usually $2$–$5$); for our MLP backprop derivation it was $\approx 2$ (one matmul backward $\approx$ one matmul forward).
+The "$\Theta(\text{forward})$" claim is essentially the **Baur–Strassen theorem** (1983)<FN n={2} />: the cost of computing the gradient of a scalar-valued function is within a constant factor of the cost of evaluating the function. The constant is small (usually $2$–$5$); for our MLP backprop derivation it was $\approx 2$ (one matmul backward $\approx$ one matmul forward).
 
 ---
 
@@ -129,3 +129,12 @@ For deep learning, we almost never form the full Hessian (it has $N^2$ entries, 
 **(d)** Why don't deep-learning frameworks materialise the full Hessian? Answer in terms of $N$, FLOPs, and memory. What is the right object to materialise instead?
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Griewank, A., & Walther, A.** (2008). *Evaluating Derivatives: Principles and Techniques of Algorithmic Differentiation* (2nd ed.). SIAM. — Canonical AD reference (2.11).
+  </FNItem>
+  <FNItem n={2}>
+    **Baur, W., & Strassen, V.** (1983). "The complexity of partial derivatives". *Theoretical Computer Science*, 22(3), 317–330. — Cost-of-gradient = cost-of-function theorem (2.11).
+  </FNItem>
+</Footnotes>

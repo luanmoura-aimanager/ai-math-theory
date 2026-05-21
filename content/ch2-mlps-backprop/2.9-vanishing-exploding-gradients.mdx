@@ -17,7 +17,7 @@ $$
 
 is a *product* over layers. Whatever happens at the top gets multiplied by a chain of Jacobian factors as it propagates to the bottom. If those factors are systematically $< 1$, the gradient signal **vanishes** before reaching the input layers. If they are systematically $> 1$, it **explodes**. Either way, training stalls — vanishing because layer-1 weights stop receiving meaningful updates; exploding because the optimiser overshoots into noise.
 
-This session quantifies the chain and pins down why ReLU saved deep learning circa 2012.
+This session quantifies the chain and pins down why ReLU saved deep learning circa 2012.<FN ns={[1, 2]} />
 
 ---
 
@@ -109,3 +109,12 @@ The combination of "good activation + good init + residuals + layernorm" is esse
 **(d)** Residual connection: $a^{(\ell)} = a^{(\ell-1)} + f^{(\ell)}(a^{(\ell-1)})$. Compute $\partial a^{(\ell)} / \partial a^{(\ell-1)}$ and explain why this Jacobian "always contains $I$ as a term", letting gradient flow through even when $f$ saturates.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Hochreiter, S.** (1991). *Untersuchungen zu dynamischen neuronalen Netzen.* Diploma thesis, TU Munich. — First vanishing-gradient analysis in RNNs (2.9).
+  </FNItem>
+  <FNItem n={2}>
+    **Bengio, Y., Simard, P., & Frasconi, P.** (1994). "Learning long-term dependencies with gradient descent is difficult". *IEEE Transactions on Neural Networks*, 5(2), 157–166. — Formal vanishing-gradient analysis (2.9).
+  </FNItem>
+</Footnotes>

@@ -16,7 +16,7 @@ prerequisites: ["ch12-capstone-tiny-gpt/12.3-train-tinyshakespeare", "ch3-optimi
 
 This session applies both to your `TinyGPT`. Re-train. Compare. The goal is the *feel*: see the loss curve shift, see the samples change, internalise why these are the modern defaults.
 
-By the end you should have `tiny_gpt_v2.py` with both upgrades and a side-by-side comparison of v1 vs. v2.
+By the end you should have `tiny_gpt_v2.py` with both upgrades and a side-by-side comparison of v1 vs. v2.<FN n={1} />
 
 ---
 
@@ -324,3 +324,11 @@ Three things.
 **(f)** Compare v1 vs v2 loss curves at step $5000$. The improvement is modest (~$1$–$3\%$). At what scale (training data, model size) do you expect the improvement to be larger? (Hint: Cap 6.13 long-context, Cap 8 GQA/MLA cache shrinkage interact with RoPE.)
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Karpathy, A.** (2023). [Let's build GPT: from scratch, in code, spelled out.](https://www.youtube.com/watch?v=kCc8FmEb1nY) YouTube companion to nanoGPT; line-by-line build of the architecture and training loop.
+    
+    For the architectural upgrades in 12.4, see the RoPE and RMSNorm references already in **Chapter 6** (Su et al., 2021 — RoPE) and **Chapter 3** (Zhang & Sennrich, 2019 — RMSNorm). For the mini-RLHF loop in 12.5, see the DPO and Bradley-Terry references in **Chapter 9** (Rafailov et al., 2023; Bradley & Terry, 1952).
+  </FNItem>
+</Footnotes>

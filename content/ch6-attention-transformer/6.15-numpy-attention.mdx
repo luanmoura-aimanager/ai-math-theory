@@ -275,7 +275,7 @@ Attention is ten lines of numpy. The invariants are:
 
 If any of these fails, you have a bug. Type the code, run the checks, keep the file as a reference whenever you need to read someone else's attention implementation in the future.
 
-[Next session](/session/ch6-attention-transformer/6.16-nanogpt-walkthrough) walks line-by-line through `nanoGPT/model.py` — Karpathy's reference implementation — which does exactly this in PyTorch with batched multi-head, the full pre-LN block, and a tiny LM head.
+[Next session](/session/ch6-attention-transformer/6.16-nanogpt-walkthrough) walks line-by-line through `nanoGPT/model.py` — Karpathy's<FN n={1} /> reference implementation — which does exactly this in PyTorch with batched multi-head, the full pre-LN block, and a tiny LM head.
 
 <SelfTest>
 
@@ -290,3 +290,9 @@ If any of these fails, you have a bug. Type the code, run the checks, keep the f
 **(e)** Derive the backward pass for the attention output $Y = A V$ with respect to $V$, given a gradient $\partial \mathcal{L} / \partial Y$. (Hint: this is just matrix-matrix gradient — write it in numerator layout from [0.2](/session/ch0-math-foundations/0.2-matrix-calculus).) Compare the analytical derivative to a finite-difference numerical check.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Karpathy, A.** "Let's build GPT: from scratch, in code, spelled out". [YouTube](https://www.youtube.com/watch?v=kCc8FmEb1nY); part of the Zero-to-Hero series at [karpathy.ai](https://karpathy.ai/zero-to-hero.html) — Live coding of a Transformer; pairs directly with 6.15–6.16.
+  </FNItem>
+</Footnotes>

@@ -11,7 +11,7 @@ prerequisites: ["ch8-modern-llm-architectures/8.1-decoder-only", "ch8-modern-llm
 
 The original AIAYN Transformer (Vaswani et al., 2017) was an **encoder-decoder** — exactly the architecture used in this appendix. The encoder reads a source sequence with bidirectional attention; the decoder generates a target sequence autoregressively, attending to its own past via causal self-attention *and* to the encoder's output via **cross-attention**. This is the natural shape for sequence-to-sequence problems: translation, summarisation, generic text-to-text rewrites.
 
-T5 (Raffel et al., 2020, "Exploring the limits of transfer learning with a unified text-to-text transformer", [arXiv:1910.10683](https://arxiv.org/abs/1910.10683)) is the canonical large-scale encoder-decoder LLM. It introduced the "everything is text-to-text" framing: every task — translation, classification, QA, summarisation — is cast as "given source text, produce target text". The architecture supports this with a clean separation of input encoding (encoder) and output generation (decoder).
+T5 (Raffel et al., 2020<FN n={1} />, "Exploring the limits of transfer learning with a unified text-to-text transformer", [arXiv:1910.10683](https://arxiv.org/abs/1910.10683)) is the canonical large-scale encoder-decoder LLM. It introduced the "everything is text-to-text" framing: every task — translation, classification, QA, summarisation — is cast as "given source text, produce target text". The architecture supports this with a clean separation of input encoding (encoder) and output generation (decoder).
 
 Encoder-decoder lost the frontier race to decoder-only (§8.1) for the reasons given there: the architecture costs roughly $2\times$ the parameters of an equivalent decoder-only model, and the empirical wins on generative benchmarks are absent. But it persists in 2026 for use cases that are *genuinely* seq2seq with structurally different input and output distributions: machine translation, code-to-natural-language, structured generation (e.g., schema-constrained outputs).
 
@@ -115,7 +115,7 @@ These are non-trivial use cases but they are a small fraction of the LLM market 
 
 <Aside type="history">
 **T5's unrealised potential.** Through 2020–2021, T5 was widely seen as a credible alternative to GPT-3. T5-11B was a strong model at the time of its release; UL2 (a T5 successor) and PaLM (which had a T5-like "prefix-LM" option) explored continuations. But by 2022, the GPT-3 lineage had taken the headlines, and the encoder-decoder line slowly faded from frontier work. The structural reasons (§8.1 §4) — denser causal LM signal per FLOP, lower parameter count per quality unit — eventually outweighed the encoder-decoder's per-task elegance. T5 was the *correct* architecture for the supervised-finetuning era it grew up in; decoder-only is the correct architecture for the prompt-and-in-context-learning era that succeeded it.
-</Aside>
+</Aside><FN n={2} />
 
 ---
 
@@ -144,3 +144,12 @@ This closes Chapter 8 in full. Chapter 9 turns to alignment: SFT, RLHF, DPO, GRP
 **(f)** The text-to-text framing of §4 is the ancestor of modern prompt engineering. Identify the *structural* difference between T5's "translate English to German:" prefix and a 2026 LLaMA-3-Instruct prompt like "User: Translate this English to German: ... Assistant:".
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Raffel, C., Shazeer, N., Roberts, A., et al.** (2020). "Exploring the limits of transfer learning with a unified text-to-text transformer" (T5). *JMLR*. [arXiv:1910.10683](https://arxiv.org/abs/1910.10683) — Encoder-decoder with span corruption (Appendix 8.A); also cited in Ch 6 (T5 relative bias) and Ch 7 (C4 corpus).
+  </FNItem>
+  <FNItem n={2}>
+    **Tay, Y., Dehghani, M., Tran, V. Q., et al.** (2022). "UL2: Unifying language learning paradigms". [arXiv:2205.05131](https://arxiv.org/abs/2205.05131) — Mixture of denoisers; T5 successor (Appendix 8.A §5 Aside).
+  </FNItem>
+</Footnotes>

@@ -26,7 +26,7 @@ This session derives both axes. By the end you can read a frontier-training pape
 
 ## 2. Tensor parallelism (TP)
 
-**Shoeybi, Patwary, Puri, et al., 2019, *Megatron-LM: Training Multi-Billion Parameter Language Models Using Model Parallelism*** ([arXiv:1909.08053](https://arxiv.org/abs/1909.08053)). The foundational TP paper.
+**Shoeybi, Patwary, Puri, et al., 2019<FN n={1} />, *Megatron-LM: Training Multi-Billion Parameter Language Models Using Model Parallelism*** ([arXiv:1909.08053](https://arxiv.org/abs/1909.08053)). The foundational TP paper.
 
 ### 2.1 The FFN, sharded
 
@@ -97,7 +97,7 @@ But on an 8-GPU node with NVLink (~900 GB/s within the node), the same all-reduc
 
 ### 2.5 Sequence parallelism
 
-A refinement of TP: outside the matmuls (LayerNorm, dropout, residual add), shard along the *sequence dimension* instead of replicating. **Korthikanti et al., 2022, *Reducing Activation Recomputation in Large Transformer Models*** ([arXiv:2205.05198](https://arxiv.org/abs/2205.05198)) — the same paper as selective recomputation ([7.7 §7](/session/ch7-training-language-models/7.7-activation-checkpointing)). The activations of LN/dropout/residual scale linearly in $T$; sequence parallelism shards them across the same $T_p$ devices that hold the TP-sharded matmuls. Combined effect: per-device activation memory drops by $T_p$ uniformly.
+A refinement of TP: outside the matmuls (LayerNorm, dropout, residual add), shard along the *sequence dimension* instead of replicating. **Korthikanti et al., 2022<FN n={2} />, *Reducing Activation Recomputation in Large Transformer Models*** ([arXiv:2205.05198](https://arxiv.org/abs/2205.05198)) — the same paper as selective recomputation ([7.7 §7](/session/ch7-training-language-models/7.7-activation-checkpointing)). The activations of LN/dropout/residual scale linearly in $T$; sequence parallelism shards them across the same $T_p$ devices that hold the TP-sharded matmuls. Combined effect: per-device activation memory drops by $T_p$ uniformly.
 
 Adds two communications per block (gather + scatter), but the bytes are no more than TP's all-reduce, and they fit in the same hidden-behind-compute window. Standard in Megatron-LM since 2022.
 
@@ -105,7 +105,7 @@ Adds two communications per block (gather + scatter), but the bytes are no more 
 
 ## 3. Pipeline parallelism (PP)
 
-**Huang, Cheng, Bapna, et al., 2018, *GPipe: Efficient Training of Giant Neural Networks Using Pipeline Parallelism*** ([arXiv:1811.06965](https://arxiv.org/abs/1811.06965)). The foundational PP paper.
+**Huang, Cheng, Bapna, et al., 2018<FN n={3} />, *GPipe: Efficient Training of Giant Neural Networks Using Pipeline Parallelism*** ([arXiv:1811.06965](https://arxiv.org/abs/1811.06965)). The foundational PP paper.
 
 ### 3.1 The setup
 
@@ -137,7 +137,7 @@ The catch: $M$ microbatches need $M$ activation buffers stored simultaneously (f
 
 ### 3.3 1F1B (one-forward-one-backward)
 
-**Narayanan, Harlap, et al., 2019, *PipeDream*** ([arXiv:1806.03377](https://arxiv.org/abs/1806.03377)). Improves on GPipe: as soon as a microbatch finishes forward, start its backward instead of waiting for all forwards. The schedule becomes alternating: $F_1, F_2, B_1, F_3, B_2, F_4, B_3, \dots$ — "one forward, one backward".
+**Narayanan, Harlap, et al., 2019<FN n={4} />, *PipeDream*** ([arXiv:1806.03377](https://arxiv.org/abs/1806.03377)). Improves on GPipe: as soon as a microbatch finishes forward, start its backward instead of waiting for all forwards. The schedule becomes alternating: $F_1, F_2, B_1, F_3, B_2, F_4, B_3, \dots$ — "one forward, one backward".
 
 Two benefits:
 
@@ -148,7 +148,7 @@ Two benefits:
 
 ### 3.4 Interleaved pipeline
 
-**Megatron-LM v2 (Narayanan et al., 2021).** A further refinement: instead of contiguous stages (blocks 1–8 on device 0, 9–16 on device 1, etc.), interleave. Device 0 owns blocks $\{1, 5, 9, 13, \dots\}$ (every 4th), device 1 owns $\{2, 6, 10, 14, \dots\}$, etc. With $v$ virtual stages per device, the bubble fraction becomes
+**Megatron-LM v2 (Narayanan et al., 2021)<FN n={5} />.** A further refinement: instead of contiguous stages (blocks 1–8 on device 0, 9–16 on device 1, etc.), interleave. Device 0 owns blocks $\{1, 5, 9, 13, \dots\}$ (every 4th), device 1 owns $\{2, 6, 10, 14, \dots\}$, etc. With $v$ virtual stages per device, the bubble fraction becomes
 
 $$
 \text{bubble}_\text{interleaved} = \frac{1}{v} \cdot \frac{P_p - 1}{M + P_p - 1}.
@@ -223,7 +223,7 @@ Total per-step communication for a 70B-parameter run can be 50–200 GB per devi
 Two more axes that exist in some frameworks:
 
 - **Sequence parallelism (SP)** ([§2.5](#)). A TP-extension; shards activations along the $T$ dimension for sub-layers outside matmuls (LN, dropout). Combined with TP, gives uniform $T_p$-way activation sharding.
-- **Context parallelism (CP)** (also called Ring Attention, [Liu et al., 2023, arXiv:2310.01889](https://arxiv.org/abs/2310.01889)). Splits the sequence dimension across devices specifically for attention's $T^2$ memory at very long context. Each device computes attention on its sequence chunk; partial results are passed in a ring. Used by Gemini 1.5 for 1M+ context training.
+- **Context parallelism (CP)** (also called Ring Attention, [Liu et al., 2023<FN n={6} />, arXiv:2310.01889](https://arxiv.org/abs/2310.01889)). Splits the sequence dimension across devices specifically for attention's $T^2$ memory at very long context. Each device computes attention on its sequence chunk; partial results are passed in a ring. Used by Gemini 1.5 for 1M+ context training.
 
 These are the bleeding edge of long-context training; most production stacks include them as optional axes.
 
@@ -252,3 +252,24 @@ Three things:
 **(e)** A frontier run uses $T_p = 8, P_p = 16, D = 64$. State the total number of devices, and explain where each axis sits in the network topology (NVLink within a node, IB between nodes, etc.). Why is this called "5D parallelism" when you count sequence parallelism?
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Shoeybi, M., Patwary, M., Puri, R., et al.** (2019). "Megatron-LM: Training multi-billion parameter language models using model parallelism". [arXiv:1909.08053](https://arxiv.org/abs/1909.08053) — Tensor parallelism (column/row sharding of FFN and MHA) (7.9 §2).
+  </FNItem>
+  <FNItem n={2}>
+    **Korthikanti, V., Casper, J., Lym, S., et al.** (2022). "Reducing activation recomputation in large transformer models". [arXiv:2205.05198](https://arxiv.org/abs/2205.05198) — Sequence parallelism + selective activation recomputation (7.9 §2.5; also 7.7 §7).
+  </FNItem>
+  <FNItem n={3}>
+    **Huang, Y., Cheng, Y., Bapna, A., et al.** (2018). "GPipe: Efficient training of giant neural networks using pipeline parallelism". [arXiv:1811.06965](https://arxiv.org/abs/1811.06965) — Microbatch-based pipeline parallelism; bubble fraction (7.9 §3).
+  </FNItem>
+  <FNItem n={4}>
+    **Narayanan, D., Harlap, A., Phanishayee, A., et al.** (2019). "PipeDream: Generalized pipeline parallelism for DNN training". [arXiv:1806.03377](https://arxiv.org/abs/1806.03377) — 1F1B pipeline schedule (7.9 §3.3).
+  </FNItem>
+  <FNItem n={5}>
+    **Narayanan, D., Shoeybi, M., Casper, J., et al.** (2021). "Efficient large-scale language model training on GPU clusters using Megatron-LM". [arXiv:2104.04473](https://arxiv.org/abs/2104.04473) — Interleaved pipeline + TP × PP × DP composition (7.9 §3.4).
+  </FNItem>
+  <FNItem n={6}>
+    **Liu, H., Zaharia, M., & Abbeel, P.** (2023). "Ring Attention with blockwise transformers for near-infinite context". [arXiv:2310.01889](https://arxiv.org/abs/2310.01889) — Context parallelism for 1M+ context training (7.9 §6, 7.13 §5.1).
+  </FNItem>
+</Footnotes>

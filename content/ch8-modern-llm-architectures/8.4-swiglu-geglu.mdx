@@ -19,7 +19,7 @@ The reason to do a full session on what looks like a syntactic detail is twofold
 
 ## 2. Gated linear units, from first principles
 
-A **GLU** in its general form (Dauphin et al., 2017, "Language modeling with gated convolutional networks", [arXiv:1612.08083](https://arxiv.org/abs/1612.08083)) is the elementwise product of a linear transformation and a *gate* — another linear transformation passed through a sigmoid:
+A **GLU** in its general form (Dauphin et al., 2017<FN n={2} />, "Language modeling with gated convolutional networks", [arXiv:1612.08083](https://arxiv.org/abs/1612.08083)) is the elementwise product of a linear transformation and a *gate* — another linear transformation passed through a sigmoid:
 
 $$
 \text{GLU}(x) = (x W) \odot \sigma(x V), \qquad W, V \in \mathbb{R}^{d \times d_\text{ff}}.
@@ -135,10 +135,10 @@ The 2026 frontier block of [8.1 §6](/session/ch8-modern-llm-architectures/8.1-d
 - The SwiGLU input is normalised by RMSNorm: $\text{FFN}_\text{SwiGLU}(\text{RMSNorm}(x))$. This is the same pre-norm placement as in pre-LN Transformer ([6.10 §3](/session/ch6-attention-transformer/6.10-pre-vs-post-norm)); the only change is the swap LayerNorm $\to$ RMSNorm.
 - The choice $d_\text{ff} = (8/3) d$ depends on the parameter-counting convention; it does not depend on which normalisation is upstream.
 
-The pairing is a coincidence of historical timing: SwiGLU (Shazeer 2020), RMSNorm (Zhang & Sennrich 2019), and RoPE (Su et al. 2021) were all on the table by mid-2021, and LLaMA-1 (Touvron et al. 2023) combined all three plus AdamW into a single architectural reset. Subsequent LLMs inherited the bundle.
+The pairing is a coincidence of historical timing: SwiGLU (Shazeer 2020)<FN n={1} />, RMSNorm (Zhang & Sennrich 2019), and RoPE (Su et al. 2021) were all on the table by mid-2021, and LLaMA-1 (Touvron et al. 2023)<FN n={4} /> combined all three plus AdamW into a single architectural reset. Subsequent LLMs inherited the bundle.
 
 <Aside type="note">
-**What about biases?** The original FFN ([6.8 §2](/session/ch6-attention-transformer/6.8-ffn)) had biases $b_1, b_2$. SwiGLU FFNs in LLaMA / Mistral / Qwen omit *all* biases — in attention projections, in the FFN matrices, and in RMSNorm (RMSNorm has only $\gamma$, no $\beta$, by construction). The removal of biases was originally a PaLM choice (Chowdhery et al., 2022) and was adopted by LLaMA-1; the empirical evidence is that biases hurt training stability at large scale by adding low-magnitude noise to every linear sub-layer's output. The 2026 frontier convention is bias-free linear layers throughout, with normalisation providing the only learnable additive offsets.
+**What about biases?** The original FFN ([6.8 §2](/session/ch6-attention-transformer/6.8-ffn)) had biases $b_1, b_2$. SwiGLU FFNs in LLaMA / Mistral / Qwen omit *all* biases — in attention projections, in the FFN matrices, and in RMSNorm (RMSNorm has only $\gamma$, no $\beta$, by construction). The removal of biases was originally a PaLM choice (Chowdhery et al., 2022)<FN n={3} /> and was adopted by LLaMA-1; the empirical evidence is that biases hurt training stability at large scale by adding low-magnitude noise to every linear sub-layer's output. The 2026 frontier convention is bias-free linear layers throughout, with normalisation providing the only learnable additive offsets.
 </Aside>
 
 ---
@@ -195,3 +195,18 @@ The next session, MLA (§8.5), returns to the attention side with the most aggre
 **(f)** Read Shazeer (2020) Table 1 (in your head, from §4 above). Which row has the lowest perplexity? Was the same paper able to *explain* why?
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Shazeer, N.** (2020). "GLU variants improve Transformer". [arXiv:2002.05202](https://arxiv.org/abs/2002.05202) — SwiGLU / GeGLU; modern FFN variant (6.8 Aside; full treatment in Cap 8.4).
+  </FNItem>
+  <FNItem n={2}>
+    **Dauphin, Y. N., Fan, A., Auli, M., & Grangier, D.** (2017). "Language modeling with gated convolutional networks". [arXiv:1612.08083](https://arxiv.org/abs/1612.08083) — Gated linear units (GLU); ancestor of SwiGLU (8.4 §2).
+  </FNItem>
+  <FNItem n={3}>
+    **Chowdhery, A., Narang, S., Devlin, J., et al.** (2022). "PaLM: Scaling language modeling with pathways". [arXiv:2204.02311](https://arxiv.org/abs/2204.02311) — Adopted GeGLU and dropped FFN biases; reference for the "no biases" convention (8.4 §5 Aside).
+  </FNItem>
+  <FNItem n={4}>
+    **Touvron, H., Lavril, T., Izacard, G., et al.** (2023). "LLaMA: Open and efficient foundation language models". [arXiv:2302.13971](https://arxiv.org/abs/2302.13971) — Architectural bundle: RMSNorm + RoPE + SwiGLU; defaults for $d_\text{ff} = (8/3)d$ (8.4 §3, 8.4 §5).
+  </FNItem>
+</Footnotes>

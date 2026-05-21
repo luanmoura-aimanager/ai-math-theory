@@ -126,9 +126,9 @@ Synthesising the literature.
 Cases where there's mechanistic + behavioural evidence for a genuine capability transition:
 
 - **Induction heads** (Olsson et al., 2022). Circuit-formation phase transition during training; in-context learning capability appears.
-- **Grokking** (Power et al., 2022; Nanda et al., 2023). Algorithmic generalisation phase transition; small models on algorithmic tasks.
+- **Grokking** (Power et al., 2022; Nanda et al., 2023)<FN n={2} />. Algorithmic generalisation phase transition; small models on algorithmic tasks.
 - **Multi-digit arithmetic at sufficient scale**. Beyond some scale threshold, dedicated arithmetic circuits form (work by Stolfo et al., 2023; Nikankin et al., 2024).
-- **Some chain-of-thought benefit thresholds**. CoT only helps above a model-scale threshold (Wei 2022); below threshold, CoT *hurts*. This might be a real phase: the model needs enough capacity to use a CoT productively.
+- **Some chain-of-thought benefit thresholds**. CoT only helps above a model-scale threshold (Wei 2022)<FN n={3} />; below threshold, CoT *hurts*. This might be a real phase: the model needs enough capacity to use a CoT productively.
 
 ### 7.2 Likely-metric-artefact list
 
@@ -136,7 +136,7 @@ Cases where Schaeffer's critique applies:
 
 - **Exact-match accuracy on most generation tasks**. Sharp jumps in accuracy reflect threshold-crossing in cumulative per-token correctness.
 - **Multiple-choice benchmark scores**. Near-chance until cumulative reasoning works; sharp climb thereafter.
-- **Many of the BIG-Bench "emergent" tasks** (re-analysed in Lu et al., 2023, [arXiv:2309.01809](https://arxiv.org/abs/2309.01809)).
+- **Many of the BIG-Bench "emergent" tasks** (re-analysed in Lu et al., 2023<FN n={5} />, [arXiv:2309.01809](https://arxiv.org/abs/2309.01809)).
 
 ### 7.3 Open / contested
 
@@ -176,7 +176,7 @@ The phase-transition framing — that intelligence might be a series of qualitat
 
 Three things.
 
-1. **The Wei–Schaeffer debate is a layer-confusion.** Wei (2022) identified benchmark phase transitions; Schaeffer (2023) showed many of them are metric artefacts (exact-match thresholding). Both correct; talking about different layers.
+1. **The Wei–Schaeffer debate is a layer-confusion.** Wei (2022) identified benchmark phase transitions; Schaeffer (2023)<FN n={4} /> showed many of them are metric artefacts (exact-match thresholding). Both correct; talking about different layers.
 2. **Some emergence is genuine.** Induction heads (mechanistic phase transition during training) and grokking (algorithmic generalisation phase transition) are real, not metric. Other examples likely exist; mech-interp is the tool to find them.
 3. **Distinguishing real from artefactual requires mechanistic evidence.** Behavioural curves alone can mislead. Identifying the responsible circuit, its formation timing, and its causal role gives confidence that an emergence is structural rather than measurement-induced.
 
@@ -190,10 +190,28 @@ Cap 11.9 next: the *2026 frontier* of interpretability — what's hot, what's ha
 
 **(c)** Induction-head emergence is *not* a metric artefact. Why? What mechanistic evidence distinguishes it from a smooth improvement disguised as a phase transition?
 
-**(d)** Define grokking. State the mechanistic finding from Nanda et al. (2023) about *what* the grokked model has learned.
+**(d)** Define grokking. State the mechanistic finding from Nanda et al. (2023)<FN n={1} /> about *what* the grokked model has learned.
 
 **(e)** Give two safety-relevant reasons why distinguishing real from artefactual emergence matters.
 
 **(f)** A 2026 researcher claims "agentic behaviour emerges at $10^{25}$ FLOPs." State two pieces of evidence you'd want before accepting this as a real circuit-emergence claim.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Nanda, N., Chan, L., Lieberum, T., et al.** (2023). "Progress measures for grokking via mechanistic interpretability". [arXiv:2301.05217](https://arxiv.org/abs/2301.05217) — Fourier-basis modular-arithmetic circuit (11.8).
+  </FNItem>
+  <FNItem n={2}>
+    **Power, A., Burda, Y., Edwards, H., et al.** (2022). "Grokking: Generalization beyond overfitting on small algorithmic datasets". [arXiv:2201.02177](https://arxiv.org/abs/2201.02177) — Grokking phenomenon (11.8).
+  </FNItem>
+  <FNItem n={3}>
+    **Wei, J., Tay, Y., Bommasani, R., et al.** (2022). "Emergent abilities of large language models". [arXiv:2206.07682](https://arxiv.org/abs/2206.07682) — Emergence claim (11.8).
+  </FNItem>
+  <FNItem n={4}>
+    **Schaeffer, R., Miranda, B., & Koyejo, S.** (2023). "Are emergent abilities of large language models a mirage?". [arXiv:2304.15004](https://arxiv.org/abs/2304.15004) — Metric-artefact critique (11.8).
+  </FNItem>
+  <FNItem n={5}>
+    **Lu, S., Bigoulaeva, I., Sachdeva, R., et al.** (2023). "Are emergent abilities in large language models just in-context learning?". [arXiv:2309.01809](https://arxiv.org/abs/2309.01809) — Re-analysis of BIG-Bench emergence (11.8).
+  </FNItem>
+</Footnotes>

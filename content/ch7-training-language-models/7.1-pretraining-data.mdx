@@ -55,7 +55,7 @@ The pipeline from "raw HTML dump" to "training tokens" is the single biggest eng
 
 ### 3.1 Text extraction
 
-Convert HTML to plain text. Strip navigation, ads, boilerplate (header/footer/sidebar). The Common Crawl Foundation distributes both `WARC` (raw response) and `WET` (extracted text) files; modern pipelines re-extract from WARCs with better tools because WET extraction is too lossy. Trafilatura ([Barbaresi 2021](https://aclanthology.org/2021.acl-demo.15)) is a strong open-source extractor.
+Convert HTML to plain text. Strip navigation, ads, boilerplate (header/footer/sidebar). The Common Crawl Foundation distributes both `WARC` (raw response) and `WET` (extracted text) files; modern pipelines re-extract from WARCs with better tools because WET extraction is too lossy. Trafilatura ([Barbaresi 2021<FN n={12} />](https://aclanthology.org/2021.acl-demo.15)) is a strong open-source extractor.
 
 ### 3.2 Language identification
 
@@ -72,11 +72,11 @@ Drop pages that fail simple heuristics:
 - Excessive line-ending characters (extraction artefacts).
 - Pages with disallowed phrases (e.g., adult content, spam markers).
 
-Each heuristic catches a specific failure mode. The MassiveText filtering of [Gopher (Rae et al., 2021, arXiv:2112.11446)](https://arxiv.org/abs/2112.11446) §A.2 codified the now-standard 7-rule list.
+Each heuristic catches a specific failure mode. The MassiveText filtering of [Gopher (Rae et al., 2021, arXiv:2112.11446)<FN n={6} />](https://arxiv.org/abs/2112.11446) §A.2 codified the now-standard 7-rule list.
 
 ### 3.4 Quality filtering — learned
 
-Train a classifier on a small high-quality sample (Wikipedia, references, etc. as positives; random web as negatives) and use it to rank-filter the web. The **CCNet** pipeline ([Wenzek et al., 2020, arXiv:1911.00359](https://arxiv.org/abs/1911.00359)) used a perplexity threshold from a small KenLM trained on Wikipedia: keep pages whose Wikipedia-LM perplexity is low (Wikipedia-like) and drop the rest. Modern pipelines (DCLM, FineWeb-Edu) use a fastText classifier trained on hand-labeled examples.
+Train a classifier on a small high-quality sample (Wikipedia, references, etc. as positives; random web as negatives) and use it to rank-filter the web. The **CCNet** pipeline ([Wenzek et al., 2020<FN n={7} />, arXiv:1911.00359](https://arxiv.org/abs/1911.00359)) used a perplexity threshold from a small KenLM trained on Wikipedia: keep pages whose Wikipedia-LM perplexity is low (Wikipedia-like) and drop the rest. Modern pipelines (DCLM, FineWeb-Edu) use a fastText classifier trained on hand-labeled examples.
 
 ### 3.5 Deduplication
 
@@ -93,7 +93,7 @@ Remove text that overlaps with *evaluation* benchmarks: MMLU, HumanEval, GSM8K, 
 
 ### 3.7 PII removal and toxicity filtering
 
-Optional, recipe-dependent: redact phone numbers, email addresses, social security numbers; classifier-filter toxic content. Some models keep "toxic" content in pretraining and rely on alignment (Cap 9) to suppress harmful outputs; some filter at the pretraining stage. The trade-off is documented in [Welbl et al., 2021](https://arxiv.org/abs/2109.07445).
+Optional, recipe-dependent: redact phone numbers, email addresses, social security numbers; classifier-filter toxic content. Some models keep "toxic" content in pretraining and rely on alignment (Cap 9) to suppress harmful outputs; some filter at the pretraining stage. The trade-off is documented in [Welbl et al., 2021<FN n={11} />](https://arxiv.org/abs/2109.07445).
 
 ### 3.8 The result
 
@@ -113,29 +113,29 @@ A short tour of the corpora you'll see cited in model cards and ablation studies
 
 ### 4.1 C4 — *Colossal Clean Crawled Corpus* (2019)
 
-**Raffel et al., *Exploring the limits of transfer learning with a unified text-to-text transformer* (T5)** ([arXiv:1910.10683](https://arxiv.org/abs/1910.10683)) §3.1. ~750 GB, ~150 B tokens, extracted from one Common Crawl snapshot. Heuristic-only filtering: drop pages with placeholder text, profanity, fewer than 5 sentences, etc.
+**Raffel<FN n={1} /> et al., *Exploring the limits of transfer learning with a unified text-to-text transformer* (T5)** ([arXiv:1910.10683](https://arxiv.org/abs/1910.10683)) §3.1. ~750 GB, ~150 B tokens, extracted from one Common Crawl snapshot. Heuristic-only filtering: drop pages with placeholder text, profanity, fewer than 5 sentences, etc.
 
 C4 was the **first publicly-released, large-scale, quality-filtered web corpus** and powered T5. It is the baseline against which every later corpus is measured. Variants: C4 (multilingual), C4-NoClean (no quality filter), C4-RealNewsLike.
 
 ### 4.2 The Pile (2020)
 
-**Gao et al., *The Pile: An 800GB Dataset of Diverse Text for Language Modeling*** ([arXiv:2101.00027](https://arxiv.org/abs/2101.00027)). 825 GB, ~300 B tokens, *22 sources* mixed by hand: Common Crawl, Wikipedia, books, code, arXiv, PubMed, FreeLaw, government filings, Stack Exchange, Hacker News. This was the first corpus that *deliberately* mixed many high-quality non-web sources with the web — proving that careful source curation matters.
+**Gao<FN n={2} /> et al., *The Pile: An 800GB Dataset of Diverse Text for Language Modeling*** ([arXiv:2101.00027](https://arxiv.org/abs/2101.00027)). 825 GB, ~300 B tokens, *22 sources* mixed by hand: Common Crawl, Wikipedia, books, code, arXiv, PubMed, FreeLaw, government filings, Stack Exchange, Hacker News. This was the first corpus that *deliberately* mixed many high-quality non-web sources with the web — proving that careful source curation matters.
 
 GPT-J, GPT-NeoX, and Pythia were trained on The Pile. The Pile remains the single best-documented and most-cited open corpus.
 
 ### 4.3 RedPajama (2023)
 
-**Together AI, *RedPajama: An Open Source Recipe to Reproduce LLaMA Training Dataset*** ([togethercomputer.com/redpajama](https://www.together.ai/blog/redpajama)). Open reproduction of the LLaMA-1 data mixture: CommonCrawl-CC-Net (filtered with CCNet), C4, GitHub, books, arXiv, Wikipedia, StackExchange. ~1.2 T tokens. This was the first open-source corpus large enough to retrain a LLaMA-1-class model.
+**Together AI<FN n={3} />, *RedPajama: An Open Source Recipe to Reproduce LLaMA Training Dataset*** ([togethercomputer.com/redpajama](https://www.together.ai/blog/redpajama)). Open reproduction of the LLaMA-1 data mixture: CommonCrawl-CC-Net (filtered with CCNet), C4, GitHub, books, arXiv, Wikipedia, StackExchange. ~1.2 T tokens. This was the first open-source corpus large enough to retrain a LLaMA-1-class model.
 
 ### 4.4 DCLM — *DataComp for Language Models* (2024)
 
-**Li, Fang, Smyrnis, et al., *DataComp-LM: In search of the next generation of training sets for language models*** ([arXiv:2406.11794](https://arxiv.org/abs/2406.11794)). DCLM was the first paper to make the data-curation step *itself* the experimental subject. They built a 240 T-token raw pool from Common Crawl and ran controlled experiments on filtering recipes — what classifier, what threshold, what deduplication strategy — measuring downstream loss at fixed compute. The standardised benchmark drove dataset quality forward.
+**Li<FN n={4} />, Fang, Smyrnis, et al., *DataComp-LM: In search of the next generation of training sets for language models*** ([arXiv:2406.11794](https://arxiv.org/abs/2406.11794)). DCLM was the first paper to make the data-curation step *itself* the experimental subject. They built a 240 T-token raw pool from Common Crawl and ran controlled experiments on filtering recipes — what classifier, what threshold, what deduplication strategy — measuring downstream loss at fixed compute. The standardised benchmark drove dataset quality forward.
 
 Their best recipe, **DCLM-Baseline** (~3.8 T tokens), trains 7B models that match LLaMA-2-7B's performance with $\sim 5\times$ fewer tokens. This was a decisive empirical demonstration that **better data is more valuable than more data** (modulo Chinchilla optimality — Cap 7.12 (Chinchilla)).
 
 ### 4.5 FineWeb and FineWeb-Edu (2024)
 
-**Penedo et al., *The FineWeb Datasets: Decanting the Web for the Finest Text Data at Scale*** ([HuggingFace blog](https://huggingface.co/spaces/HuggingFaceFW/blogpost-fineweb-v1), arXiv:2406.17557). 15 T-token web corpus from 96 Common Crawl snapshots, carefully deduplicated and filtered.
+**Penedo<FN n={5} /> et al., *The FineWeb Datasets: Decanting the Web for the Finest Text Data at Scale*** ([HuggingFace blog](https://huggingface.co/spaces/HuggingFaceFW/blogpost-fineweb-v1), arXiv:2406.17557). 15 T-token web corpus from 96 Common Crawl snapshots, carefully deduplicated and filtered.
 
 **FineWeb-Edu** is a 1.3 T-token subset filtered for *educational quality* using a fastText classifier trained on ~500K LLM-annotated examples. Educational web pages (tutorials, how-tos, encyclopedic explanations) are kept; spam, low-content listings, and noise are dropped. Models trained on FineWeb-Edu beat models trained on raw FineWeb at the same token budget by 5–10% on knowledge-intensive benchmarks.
 
@@ -149,7 +149,7 @@ Frontier labs (OpenAI, Anthropic, Google, Meta) generally do not publish their t
 - **LLaMA-3** (2024): 15 T tokens, ~5% non-English, ~15% code; specifics in the LLaMA-3 paper ([arXiv:2407.21783](https://arxiv.org/abs/2407.21783)) §3.
 - **DeepSeek-V3** (2024): 14.8 T tokens; details in the DeepSeek-V3 tech report.
 
-The open community typically replicates frontier-data quality at within ~10% of closed-model performance, as DCLM and FineWeb-Edu have shown.
+The open community typically replicates frontier-data quality at within ~10% of closed-model performance, as DCLM and FineWeb-Edu have shown.<FN n={13} />
 
 ---
 
@@ -157,14 +157,14 @@ The open community typically replicates frontier-data quality at within ~10% of 
 
 A central tension in 2024–2026 pretraining:
 
-- **The data wall.** The supply of *unique* high-quality text on the open web is roughly fixed. Current estimates put it at $10^{13}$–$10^{14}$ tokens (Villalobos et al., 2022, [arXiv:2211.04325](https://arxiv.org/abs/2211.04325), "Will we run out of data?"). Once a single training run consumes most of it, further scaling on the data side has diminishing returns.
+- **The data wall.** The supply of *unique* high-quality text on the open web is roughly fixed. Current estimates put it at $10^{13}$–$10^{14}$ tokens (Villalobos et al., 2022, [arXiv:2211.04325](https://arxiv.org/abs/2211.04325)<FN n={9} />, "Will we run out of data?"). Once a single training run consumes most of it, further scaling on the data side has diminishing returns.
 - **Quality > quantity.** DCLM and FineWeb-Edu show that *better-filtered* data beats *more* data at fixed compute. A 7B model trained on 4 T DCLM-Baseline tokens outperforms one trained on 10 T plain-CC tokens.
 - **Synthetic data.** Future training runs increasingly use *LLM-generated* synthetic data — pre-existing models generating curated examples for the next generation. This is starting to dominate the post-training regime (instruction tuning, reasoning trajectories) and increasingly bleeds into pretraining (e.g., Phi-3.5's "textbooks are all you need" recipe).
 
 The headline: **the current bottleneck is data quality, not data quantity**. This is why the entire pipeline of §3 — and especially the learned-classifier filter of §3.4 — has become the centre of pretraining work.
 
 <Aside type="note">
-**Repeat-data is a real option.** Muennighoff et al., *Scaling Data-Constrained Language Models* ([arXiv:2305.16264](https://arxiv.org/abs/2305.16264)), show that for fixed compute, repeating high-quality data 4× is roughly equivalent to using 4× more new data of similar quality. Diminishing returns kick in past ~4 repeats. This gives small-data regimes more room than a strict "no repetition" rule would suggest, and is part of why models trained on $10^{13}$-token-class corpora often see each token 1–2 times rather than exactly once.
+**Repeat-data is a real option.** Muennighoff<FN n={10} /> et al., *Scaling Data-Constrained Language Models* ([arXiv:2305.16264](https://arxiv.org/abs/2305.16264)), show that for fixed compute, repeating high-quality data 4× is roughly equivalent to using 4× more new data of similar quality. Diminishing returns kick in past ~4 repeats. This gives small-data regimes more room than a strict "no repetition" rule would suggest, and is part of why models trained on $10^{13}$-token-class corpora often see each token 1–2 times rather than exactly once.
 </Aside>
 
 ---
@@ -193,7 +193,7 @@ The standard near-deduplication algorithm. For each document $d$:
 
 Then **Locality-Sensitive Hashing (LSH)** partitions the $r$ MinHash components into bands and buckets documents that share *any* band exactly. Documents in the same bucket are candidate near-duplicates; compute their Jaccard exactly and drop those above threshold.
 
-For a Common Crawl-scale corpus, this scales to billions of documents in $\sim 100$ CPU-days. Lee et al. (2022) found that:
+For a Common Crawl-scale corpus, this scales to billions of documents in $\sim 100$ CPU-days. Lee et al. (2022)<FN n={8} /> found that:
 
 - 5-gram shingles work well for English.
 - A Jaccard threshold of $0.8$ catches most near-duplicates without false-positives on summarised content.
@@ -219,7 +219,7 @@ A model trained on the corpora above acquires three rough kinds of knowledge:
 2. **Factual / world knowledge.** Wikipedia, news, encyclopedic web pages. Sensitive to data quality and recency.
 3. **Reasoning patterns.** Math derivations (arXiv, math forums), code logic (GitHub), step-by-step explanations (Stack Exchange, tutorial blogs, educational web). FineWeb-Edu's emphasis on educational content is specifically aimed at this third category.
 
-Alignment (Cap 9) builds on top of these capabilities; it does not create them. *A model that doesn't see code in pretraining cannot be made to write code by instruction-tuning alone.* The pretraining mixture decides the *capability ceiling*; alignment shapes how the model uses what it already has.
+Alignment (Cap 9) builds on top of these capabilities; it does not create them. *A model that doesn't see code in pretraining cannot be made to write code by instruction-tuning alone.* The pretraining mixture decides the *capability ceiling*; alignment shapes how the model uses what it already has.<FN n={14} />
 
 ---
 
@@ -250,3 +250,48 @@ $$
 **(e)** The "data wall" argument (§5) says we are nearing the ceiling of unique high-quality web text. What three responses does the field have? Discuss one in detail.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Raffel, C., Shazeer, N., Roberts, A., et al.** (2020). "Exploring the limits of transfer learning with a unified text-to-text transformer" (T5). *JMLR*. [arXiv:1910.10683](https://arxiv.org/abs/1910.10683) — C4 corpus (7.1 §4.1).
+  </FNItem>
+  <FNItem n={2}>
+    **Gao, L., Biderman, S., Black, S., et al.** (2020). "The Pile: An 800GB dataset of diverse text for language modeling". [arXiv:2101.00027](https://arxiv.org/abs/2101.00027) — 22-source mixed corpus (7.1 §4.2).
+  </FNItem>
+  <FNItem n={3}>
+    **Together AI** (2023). "RedPajama: An open source recipe to reproduce LLaMA training dataset". [together.ai](https://www.together.ai/blog/redpajama) — Open reproduction of LLaMA-1 data (7.1 §4.3).
+  </FNItem>
+  <FNItem n={4}>
+    **Li, J., Fang, A., Smyrnis, G., et al.** (2024). "DataComp-LM: In search of the next generation of training sets for language models" (DCLM). [arXiv:2406.11794](https://arxiv.org/abs/2406.11794) — Systematic data-quality experiments; DCLM-Baseline (7.1 §4.4, 7.5).
+  </FNItem>
+  <FNItem n={5}>
+    **Penedo, G., Kydlíček, H., Cappelli, A., et al.** (2024). "The FineWeb Datasets: Decanting the web for the finest text data at scale". [arXiv:2406.17557](https://arxiv.org/abs/2406.17557); HuggingFace blog. — FineWeb and FineWeb-Edu (7.1 §4.5, 7.5).
+  </FNItem>
+  <FNItem n={6}>
+    **Rae, J. W., Borgeaud, S., Cai, T., et al.** (2021). "Scaling language models: Methods, analysis & insights from training Gopher" (MassiveText). [arXiv:2112.11446](https://arxiv.org/abs/2112.11446) — Heuristic data-filtering rules (7.1 §3.3).
+  </FNItem>
+  <FNItem n={7}>
+    **Wenzek, G., Lachaux, M.-A., Conneau, A., et al.** (2020). "CCNet: Extracting high quality monolingual datasets from web crawl data". [arXiv:1911.00359](https://arxiv.org/abs/1911.00359) — Classifier-based filtering pipeline (7.1 §3.4).
+  </FNItem>
+  <FNItem n={8}>
+    **Lee, K., Ippolito, D., Nystrom, A., et al.** (2022). "Deduplicating training data makes language models better". [arXiv:2107.06499](https://arxiv.org/abs/2107.06499) — MinHash deduplication (7.1 §6).
+  </FNItem>
+  <FNItem n={9}>
+    **Villalobos, P., Sevilla, J., Heim, L., et al.** (2022). "Will we run out of data? An analysis of the limits of scaling datasets in machine learning". [arXiv:2211.04325](https://arxiv.org/abs/2211.04325) — The "data wall" argument (7.1 §5).
+  </FNItem>
+  <FNItem n={10}>
+    **Muennighoff, N., Rush, A. M., Barak, B., et al.** (2023). "Scaling data-constrained language models". [arXiv:2305.16264](https://arxiv.org/abs/2305.16264) — Repeating high-quality data up to 4× (7.1 §5, 7.5).
+  </FNItem>
+  <FNItem n={11}>
+    **Welbl, J., Glaese, A., Uesato, J., et al.** (2021). "Challenges in detoxifying language models". [arXiv:2109.07445](https://arxiv.org/abs/2109.07445) — Toxicity filtering trade-offs (7.1 §3.7).
+  </FNItem>
+  <FNItem n={12}>
+    **Barbaresi, A.** (2021). "Trafilatura: a web scraping library and command-line tool for text discovery and extraction". *ACL System Demonstrations*. [aclanthology.org/2021.acl-demo.15](https://aclanthology.org/2021.acl-demo.15) — Reference HTML→text extractor (7.1 §3.1).
+  </FNItem>
+  <FNItem n={13}>
+    **Dubey, A., Jauhri, A., Pandey, A., et al.** (2024). "The Llama 3 herd of models". [arXiv:2407.21783](https://arxiv.org/abs/2407.21783) — LLaMA-3 data-mixing-in-late-stages documentation (7.1 §4.6, 7.5).
+  </FNItem>
+  <FNItem n={14}>
+    **Dao, T., Fu, D. Y., Ermon, S., Rudra, A., & Ré, C.** (2022). "FlashAttention: Fast and memory-efficient exact attention with IO-awareness". [arXiv:2205.14135](https://arxiv.org/abs/2205.14135) — Tiled attention kernel; in-SRAM softmax (7.7 §7.1; full treatment Cap 10.5).
+  </FNItem>
+</Footnotes>

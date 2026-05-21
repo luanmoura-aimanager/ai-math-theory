@@ -9,7 +9,7 @@ prerequisites: ["ch1-linear-models-perceptron/1.8-multiclass-ce-gradient", "ch2-
 
 ## 1. Why this session exists
 
-Backpropagation is the chain rule from 0.3 applied to the MLP composition from 2.1. To organise the computation we introduce a single variable — the **delta**, $\delta^{(\ell)}$ — that propagates gradient signal backwards through the network. The base case of the backward recursion lives at the loss layer. For softmax + cross-entropy, the answer is the identity we already proved in 1.8.
+Backpropagation is the chain rule from 0.3 applied to the MLP composition from 2.1. To organise the computation we introduce a single variable — the **delta**, $\delta^{(\ell)}$ — that propagates gradient signal backwards through the network. The base case of the backward recursion lives at the loss layer. For softmax + cross-entropy, the answer is the identity we already proved in 1.8.<FN n={1} />
 
 ---
 
@@ -112,7 +112,7 @@ All shapes match. This is how we'll spot dimension bugs in 2.6 and 2.7.
 - $\delta^{(\ell)} := \partial L / \partial z^{(\ell)}$ is the central backward-pass variable.
 - For softmax + CE, $\delta^{(L)} = \hat y - y$ (1.8 reused verbatim).
 - Same identity for sigmoid + BCE and for linear + MSE — these are the three "loss-aligned" output heads.
-- Avoid sigmoid + MSE: it leaves a $\sigma'$ multiplier and trains slowly.
+- Avoid sigmoid + MSE: it leaves a $\sigma'$ multiplier and trains slowly.<FN n={2} />
 
 ---
 
@@ -133,3 +133,12 @@ We have $\delta^{(L)}$. Session 2.6 propagates it backwards: $\delta^{(\ell+1)} 
 **(d)** In code, $\Delta^{(L)}$ would be returned by `(logits.softmax(dim=-1) - y_onehot) / B`. Verify the units/scale: if you multiply by the learning rate and update, are the magnitudes sensible?
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Rumelhart, D. E., Hinton, G. E., & Williams, R. J.** (1986). "Learning representations by back-propagating errors". *Nature*, 323(6088), 533–536. — Backpropagation (2.5–2.7).
+  </FNItem>
+  <FNItem n={2}>
+    **Korthikanti, V., Casper, J., Lym, S., et al.** (2022). "Reducing activation recomputation in large transformer models". [arXiv:2205.05198](https://arxiv.org/abs/2205.05198) — Sequence parallelism + selective activation recomputation (7.9 §2.5; also 7.7 §7).
+  </FNItem>
+</Footnotes>

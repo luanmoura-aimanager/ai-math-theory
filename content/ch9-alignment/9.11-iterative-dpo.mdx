@@ -15,7 +15,7 @@ PPO's advantage was the opposite: it samples from the *current* policy, scores w
 
 **Iterative DPO** (sometimes called Online DPO) closes the gap. The idea: after one DPO round, the policy has improved beyond the original SFT model; sample fresh completions from it, preference-label those, and do another DPO round. Repeat. Each round explores the policy's *current* distribution, which is better than the previous one, providing a steady source of fresh preference data that improves with the policy.
 
-The recipe became the open-source default in 2024: **LLaMA-3-Instruct**, **Tülu 3**, **Hermes-3**, and most modern open instruction-tuned models use some form of iterative DPO. The 2024 paper that codified the approach is **Pang, Yuan, Cho, et al., 2024, *Iterative Reasoning Preference Optimization*** ([arXiv:2404.19733](https://arxiv.org/abs/2404.19733)), though the recipe predates the formal paper.
+The recipe became the open-source default in 2024: **LLaMA-3-Instruct**, **Tülu 3**, **Hermes-3**, and most modern open instruction-tuned models use some form of iterative DPO. The 2024 paper that codified the approach is **Pang, Yuan, Cho, et al., 2024<FN n={2} />, *Iterative Reasoning Preference Optimization*** ([arXiv:2404.19733](https://arxiv.org/abs/2404.19733)), though the recipe predates the formal paper.
 
 This session: the iterative loop, the role of the labeller, how it bridges DPO and PPO empirically, and the practical recipe.
 
@@ -160,7 +160,7 @@ A short comparison from public 2024 papers:
 
 The headline: **iterative DPO matches PPO-RLHF on most benchmarks at a fraction of the compute**. The exceptions are at the frontier scale (70B+ for reasoning tasks) where PPO still seems to push further — likely because PPO's per-step exploration is finer-grained than iterative DPO's "once per round" exploration.
 
-LLaMA-3-Instruct used iterative DPO (with rejection-sampling fine-tuning, a small variation) for its instruction tuning. Tülu 3 ([Lambert et al., 2024](https://arxiv.org/abs/2411.15124)) uses iterative DPO with $\sim 8$ rounds and a custom labeller mix. Hermes-3 uses 5 rounds with mixed human/LLM labels.
+LLaMA-3-Instruct used iterative DPO (with rejection-sampling fine-tuning, a small variation) for its instruction tuning. Tülu 3 ([Lambert et al., 2024<FN n={4} />](https://arxiv.org/abs/2411.15124)) uses iterative DPO with $\sim 8$ rounds and a custom labeller mix. Hermes-3 uses 5 rounds with mixed human/LLM labels.
 
 ---
 
@@ -195,9 +195,9 @@ RLOO is a sibling of GRPO ([9.7](/session/ch9-alignment/9.7-grpo)) — same "com
 
 ### 7.3 SPIN: Self-Play
 
-**Chen et al., 2024, *Self-Play Fine-Tuning Converts Weak Language Models to Strong Language Models* (SPIN)** ([arXiv:2401.01335](https://arxiv.org/abs/2401.01335)). A specific form of iterative DPO where the "chosen" $y_c$ is drawn from human-written SFT data, and the "rejected" $y_r$ is drawn from the current model. The policy learns to *imitate* human writing while distinguishing itself from its own outputs.
+**Chen et al., 2024<FN n={3} />, *Self-Play Fine-Tuning Converts Weak Language Models to Strong Language Models* (SPIN)** ([arXiv:2401.01335](https://arxiv.org/abs/2401.01335)). A specific form of iterative DPO where the "chosen" $y_c$ is drawn from human-written SFT data, and the "rejected" $y_r$ is drawn from the current model. The policy learns to *imitate* human writing while distinguishing itself from its own outputs.
 
-SPIN avoids needing fresh preferences at each iteration — the SFT data serves as the perpetual $y_c$ source. Simpler than full iterative DPO; works well for SFT data with high consistency.
+SPIN avoids needing fresh preferences at each iteration — the SFT data serves as the perpetual $y_c$ source. Simpler than full iterative DPO; works well for SFT data with high consistency.<FN n={1} />
 
 ---
 
@@ -224,3 +224,18 @@ Three things:
 **(e)** Read [Pang et al., 2024](https://arxiv.org/abs/2404.19733) §3. Identify the specific task on which iterative DPO is demonstrated. How many iterations were used, and what was the per-iteration improvement?
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Kool, W., van Hoof, H., & Welling, M.** (2019). "Buy 4 REINFORCE samples, get a baseline for free!". *ICLR Workshop*. — Leave-one-out baseline (RLOO precursor) (9.11 §7.2).
+  </FNItem>
+  <FNItem n={2}>
+    **Pang, R. Y., Yuan, W., Cho, K., et al.** (2024). "Iterative reasoning preference optimization". [arXiv:2404.19733](https://arxiv.org/abs/2404.19733) — Iterative DPO recipe (9.11).
+  </FNItem>
+  <FNItem n={3}>
+    **Chen, Z., Deng, Y., Yuan, H., et al.** (2024). "Self-play fine-tuning converts weak language models to strong language models" (SPIN). [arXiv:2401.01335](https://arxiv.org/abs/2401.01335) — Iterative DPO with SFT data as $y_c$ (9.11 §7.3).
+  </FNItem>
+  <FNItem n={4}>
+    **Lambert, N., Morrison, J., Pyatkin, V., et al.** (2024). "Tülu 3: Pushing frontiers in open language model post-training". [arXiv:2411.15124](https://arxiv.org/abs/2411.15124) — Iterative DPO with mixed labellers; open recipe (9.11 §6).
+  </FNItem>
+</Footnotes>

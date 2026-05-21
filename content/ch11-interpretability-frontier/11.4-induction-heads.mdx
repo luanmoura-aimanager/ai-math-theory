@@ -120,7 +120,7 @@ All of these are *generalisations* of the induction-head template. The exact mec
 
 ### 4.2 The connection to in-context learning at scale
 
-Brown et al.'s GPT-3 paper (2020) demonstrated that few-shot in-context learning scaled steeply with model size. Olsson et al. (2022) showed that this scaling is *driven by induction heads*: removing induction heads (by ablation) destroys in-context learning ability; models without induction heads show no in-context learning regardless of size.
+Brown et al.'s GPT-3 paper (2020) demonstrated that few-shot in-context learning scaled steeply with model size. Olsson et al. (2022)<FN n={1} /> showed that this scaling is *driven by induction heads*: removing induction heads (by ablation) destroys in-context learning ability; models without induction heads show no in-context learning regardless of size.
 
 The implication is strong: in-context learning isn't a mysterious emergent property of scaled language models — it's a *specific algorithmic capability* implemented by a *specific circuit*, the induction head, which emerges during training and then powers a wide range of downstream in-context behaviours.
 
@@ -222,3 +222,9 @@ Cap 11.5 next: **superposition**. Why models have *more features than dimensions
 **(f)** A 70B model has dozens of induction-head-like circuits with fuzzy QK patterns. List two reasons why the "clean" 2-head story from a 100M model becomes messier at frontier scale.
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Olsson, C., Elhage, N., Nanda, N., et al.** (2022). "In-context learning and induction heads". *Transformer Circuits Thread.* [transformer-circuits.pub](https://transformer-circuits.pub/2022/in-context-learning-and-induction-heads/index.html) — Induction heads, phase transition (11.4).
+  </FNItem>
+</Footnotes>

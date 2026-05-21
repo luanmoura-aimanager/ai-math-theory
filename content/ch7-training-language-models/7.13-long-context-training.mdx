@@ -93,7 +93,7 @@ This is why simply applying RoPE scaling at inference (no training) only works u
 
 At very long context without training, models often exhibit failure modes:
 
-- **Lost in the middle** (Liu et al., 2023, [arXiv:2307.03172](https://arxiv.org/abs/2307.03172)): performance dips for information in the *middle* of a long context, even when the model technically has access. The "needle in a haystack" benchmark probes for this.
+- **Lost in the middle** (Liu et al., 2023, [arXiv:2307.03172](https://arxiv.org/abs/2307.03172))<FN n={1} />: performance dips for information in the *middle* of a long context, even when the model technically has access. The "needle in a haystack" benchmark probes for this.
 - **Attention sinks misalignment** ([6.13 §2.2](/session/ch6-attention-transformer/6.13-long-context)): models trained at short context concentrate attention disproportionately on early tokens. At long context, this becomes a bottleneck.
 - **Position-OOD repetition**: at lengths well beyond training, models sometimes lapse into repetition or degraded generation.
 
@@ -127,7 +127,7 @@ A 128k-context extension costs roughly $4\%$ of the original pretraining. A 1M-c
 
 Without **sequence parallelism** and **context parallelism** ([7.9 §6](/session/ch7-training-language-models/7.9-tensor-pipeline-parallelism)), training at 128k+ context would not fit in GPU memory at any reasonable batch size. The activation memory (attention scores especially) scales as $T^2 d$ per layer per device, which at $T = 128k$ is GB-per-block-per-device.
 
-Sequence parallelism shards the activation along $T$ across the TP devices. Context parallelism (Liu et al., 2023, *Ring Attention*) shards attention itself, with partial sums passed around in a ring. Together, they make $1$M+ context training memory-feasible.
+Sequence parallelism shards the activation along $T$ across the TP devices. Context parallelism (Liu et al., 2023, *Ring Attention*)<FN n={2} /> shards attention itself, with partial sums passed around in a ring. Together, they make $1$M+ context training memory-feasible.
 
 These are the load-bearing engineering ingredients for stage 2.
 
@@ -206,3 +206,12 @@ Three things:
 **(e)** Read [Liu et al., 2023, "Lost in the Middle"](https://arxiv.org/abs/2307.03172) §3. What is the failure mode they describe, and how does stage-2 long-context training mitigate it?
 
 </SelfTest>
+
+<Footnotes>
+  <FNItem n={1}>
+    **Liu, H., Zaharia, M., & Abbeel, P.** (2023). "Ring Attention with blockwise transformers for near-infinite context". [arXiv:2310.01889](https://arxiv.org/abs/2310.01889) — Context parallelism for 1M+ context training (7.9 §6, 7.13 §5.1).
+  </FNItem>
+  <FNItem n={2}>
+    **Liu, N. F., Lin, K., Hewitt, J., et al.** (2023). "Lost in the middle: How language models use long contexts". [arXiv:2307.03172](https://arxiv.org/abs/2307.03172) — The mid-context performance dip failure mode (7.13 §4.3).
+  </FNItem>
+</Footnotes>
