@@ -38,6 +38,40 @@ export default function HomePage() {
 
       <hr />
 
+      <h2>About</h2>
+      <p>
+        Hi, I&apos;m Luan — a data scientist with an MSc in physics. I built
+        this website with Claude Opus 4.6. During my master&apos;s I studied
+        the mathematical theory of neural networks and image recognition with
+        CNNs (see my{" "}
+        <a
+          href="https://repositorio.ufc.br/bitstream/riufc/40344/1/2019_dis_lmgmoura.pdf"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          dissertation
+        </a>
+        ). Years later, wanting to understand deeply how LLMs work, I decided
+        to write this course on top of that foundation.
+      </p>
+      <p>
+        If you&apos;d like to contribute or have any feedback, reach me on{" "}
+        <a
+          href="https://www.linkedin.com/in/luan-misael-moura-54a87798/"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          LinkedIn
+        </a>{" "}
+        or by email at{" "}
+        <a href="mailto:luanmisaelmoura@gmail.com">
+          luanmisaelmoura@gmail.com
+        </a>
+        .
+      </p>
+
+      <hr />
+
       <p>
         <em>
           MVP demo. Progress is stored in your browser&apos;s
