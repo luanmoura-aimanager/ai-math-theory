@@ -129,7 +129,7 @@ GPT-J, GPT-NeoX, and Pythia were trained on The Pile. The Pile remains the singl
 
 ### 4.4 DCLM — *DataComp for Language Models* (2024)
 
-**Li, Castellanos-Bray, et al., *DataComp-LM: In search of the next generation of training sets for language models*** ([arXiv:2406.11794](https://arxiv.org/abs/2406.11794)). DCLM was the first paper to make the data-curation step *itself* the experimental subject. They built a 240 T-token raw pool from Common Crawl and ran controlled experiments on filtering recipes — what classifier, what threshold, what deduplication strategy — measuring downstream loss at fixed compute. The standardised benchmark drove dataset quality forward.
+**Li, Fang, Smyrnis, et al., *DataComp-LM: In search of the next generation of training sets for language models*** ([arXiv:2406.11794](https://arxiv.org/abs/2406.11794)). DCLM was the first paper to make the data-curation step *itself* the experimental subject. They built a 240 T-token raw pool from Common Crawl and ran controlled experiments on filtering recipes — what classifier, what threshold, what deduplication strategy — measuring downstream loss at fixed compute. The standardised benchmark drove dataset quality forward.
 
 Their best recipe, **DCLM-Baseline** (~3.8 T tokens), trains 7B models that match LLaMA-2-7B's performance with $\sim 5\times$ fewer tokens. This was a decisive empirical demonstration that **better data is more valuable than more data** (modulo Chinchilla optimality — Cap 7.12 (Chinchilla)).
 

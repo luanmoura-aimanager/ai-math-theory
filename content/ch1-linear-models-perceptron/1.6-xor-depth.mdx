@@ -111,7 +111,7 @@ A classical "logic gate" version of this construction uses NAND / AND / OR primi
 The XOR result is the simplest piece of evidence for two structural truths in deep learning.
 
 1. **Depth ≠ width.** A wide *single-layer* perceptron — no matter how many parameters — can only carve $\mathbb{R}^n$ into two half-spaces. It cannot compute the intersection of two half-spaces, which is what XOR requires.
-2. **Composition is the source of expressivity.** Composing two threshold functions yields a *non-convex* decision region. Iterating composition (the MLP of Chapter 2) yields arbitrarily complex piecewise-affine regions; in the limit, MLPs can approximate any continuous function on a compact set — the universal approximation theorem (Hornik 1989), which we'll prove in Chapter 3.
+2. **Composition is the source of expressivity.** Composing two threshold functions yields a *non-convex* decision region. Iterating composition (the MLP of Chapter 2) yields arbitrarily complex piecewise-affine regions; in the limit, MLPs can approximate any continuous function on a compact set — the universal approximation theorem (Cybenko 1989; Hornik 1991), which we'll prove in Chapter 3.
 
 The hidden layer is the *new primitive*. It is the difference between fitting a half-space and fitting a polyhedron, and it is the difference between linear regression and "deep learning". Everything else in this course is engineering on top of that insight.
 

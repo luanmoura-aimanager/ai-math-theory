@@ -181,7 +181,7 @@ This is the dominant test-time strategy for hard-problem benchmarks (AIME, Human
 
 ### 6.2 Inference-time scaling laws
 
-Just as training-time has Kaplan/Chinchilla scaling laws ([7.11](/session/ch7-training-language-models/7.11-scaling-laws-kaplan)–[7.12](/session/ch7-training-language-models/7.12-chinchilla)), inference-time has its own emerging laws. **Snell, Lee, Xu, Choquette-Choo, 2024, *Scaling LLM Test-Time Compute Optimally***  ([arXiv:2408.03314](https://arxiv.org/abs/2408.03314)) and related work characterise the quality return per inference FLOP.
+Just as training-time has Kaplan/Chinchilla scaling laws ([7.11](/session/ch7-training-language-models/7.11-scaling-laws-kaplan)–[7.12](/session/ch7-training-language-models/7.12-chinchilla)), inference-time has its own emerging laws. **Snell, Lee, Xu, Kumar, 2024, *Scaling LLM Test-Time Compute Optimally***  ([arXiv:2408.03314](https://arxiv.org/abs/2408.03314)) and related work characterise the quality return per inference FLOP.
 
 The headline: for hard problems, inference-time compute can match or exceed training-time compute in marginal capability gain. A smaller model with more inference budget often beats a larger model with less. This is the analytic basis for "reasoning-model" deployments where each query may use $\sim 10$K–$100$K extra tokens of "thinking."
 
