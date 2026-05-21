@@ -1,0 +1,218 @@
+---
+title: "10.7 — Test-time scaling: chain-of-thought, thinking tokens, reasoning models"
+chapter: 10
+order: 7
+estimatedMinutes: 28
+goal: "Trace the test-time-scaling paradigm: from chain-of-thought prompting (Wei et al., 2022) to STaR self-bootstrapping to o1/R1's RL-trained 'thinking tokens'. State the inference-time scaling law $\\text{quality} \\sim a + b \\log C_\\text{inf}$ and its trade-off with training-time scaling. Argue why this is the most consequential inference-side development since the KV cache."
+prerequisites: ["ch10-inference-decoding/10.2-sampling-temperature-top-k-top-p", "ch9-alignment/9.7-grpo", "ch9-alignment/9.12-process-reward-models", "ch9-alignment/9.15-inference-time-alignment"]
+---
+
+## 1. Why this session exists
+
+From 2018 to 2023, language-model improvement followed a single recipe: **scale training**. More parameters, more data, more compute, more capability ([7.11](/session/ch7-training-language-models/7.11-scaling-laws-kaplan)–[7.12](/session/ch7-training-language-models/7.12-chinchilla)). Inference was an afterthought — once you'd trained the model, you ran it once per query and read off the answer.
+
+Starting in mid-2024, a different lever emerged. Spending more compute *at inference time* — letting the model "think" by generating an extended internal chain of reasoning before committing to an answer — turned out to be capability-competitive with training-time scaling, *at a fraction of the cost*. A small model with $10\times$ inference compute often beats a $10\times$-larger model with the same per-query cost.
+
+The first public demonstration was OpenAI's **o1** (September 2024); followed by **DeepSeek-R1** ([2025, arXiv:2501.12948](https://arxiv.org/abs/2501.12948)), which is fully open-source and has a published recipe; followed by Anthropic's **Claude 3.7 / Claude 4 with extended thinking** ([2025](https://www.anthropic.com/news/claude-3-7-sonnet)); followed by Google's **Gemini Thinking** ([2025](https://deepmind.google/technologies/gemini/)). All four families build on the same conceptual frame: **train the model to reason before answering** (Chapter 9: SFT on chains-of-thought, then RL with verifiable rewards — GRPO), **then at inference, let it spend tokens on that reasoning**.
+
+This session traces the line from chain-of-thought prompting through STaR to o1/R1, states the inference-time scaling law that justifies the whole approach, and closes with the cost-quality trade-off vs. training-time scaling.
+
+---
+
+## 2. Chain-of-thought prompting (the prehistory)
+
+Wei et al. (2022, [arXiv:2201.11903](https://arxiv.org/abs/2201.11903)) demonstrated that simply prompting the model to "think step by step" — or showing few-shot examples with worked-out reasoning — dramatically improved its math and reasoning accuracy.
+
+The example everyone uses:
+
+> *Q: Roger has 5 tennis balls. He buys 2 more cans of tennis balls. Each can has 3 tennis balls. How many tennis balls does he have now?*
+> 
+> *A (direct): 11.*
+> 
+> *A (chain-of-thought): Roger started with 5 balls. He bought 2 cans × 3 = 6 more. So 5 + 6 = 11. The answer is 11.*
+
+The chain-of-thought variant works for the same model with no fine-tuning. Accuracy on GSM8K (grade-school math) jumped from $\sim 18\%$ to $\sim 57\%$ for the largest PaLM model at the time.
+
+### 2.1 Why it works (the inference-time-compute reframing)
+
+Wei et al. framed CoT as "elicit latent reasoning ability". The 2024 reframing: CoT is **using more inference tokens to compute the answer**. Without CoT, the model has $\sim 1$ token of decode to "think"; with CoT, it has hundreds. The extra tokens are *intermediate computational state* — partial sums, hypotheses, restatements — that condition the final answer.
+
+This frame predicts what *kinds* of problems benefit from CoT: problems where the answer requires *multiple computational steps* (arithmetic, multi-hop reasoning, code generation, formal proof). It also predicts what doesn't benefit: problems where the answer is a simple lookup (factual recall, single-word translation).
+
+### 2.2 Self-consistency
+
+Wang et al. (2022, [arXiv:2203.11171](https://arxiv.org/abs/2203.11171)) added a sampling-based amplifier: generate $N$ chains of thought independently (at $T > 0$), extract the final answer from each, and *majority-vote* the answer. This is "self-consistency" — a Best-of-N over reasoning chains where the "judge" is just consensus.
+
+Self-consistency typically lifts GSM8K accuracy another $\sim 10$–$20$ points over plain CoT, at $N\times$ inference cost. It is the prototype of test-time scaling: trade *more inference compute* for *better answers*, with a curve that flattens at $N \sim 20$–$40$ for most tasks.
+
+### 2.3 The limit of pure prompting
+
+Pure prompting and self-consistency cap out around the model's *baseline reasoning ability*. If the model can't, even once in $N = 100$ samples, follow the right reasoning chain, no amount of sampling will recover it.
+
+The next step — making the model *better* at reasoning, not just prompting it — required training.
+
+---
+
+## 3. STaR: self-bootstrapping reasoning
+
+Zelikman et al. (2022, [arXiv:2203.14465](https://arxiv.org/abs/2203.14465)) proposed **STaR** (Self-Taught Reasoner). The protocol:
+
+1. Take a base LM. Sample chain-of-thought answers on a dataset of problems with known final answers.
+2. Keep only the chains whose *final answer* matches the ground truth.
+3. Fine-tune the LM on those chains.
+4. Repeat — the fine-tuned model produces better chains, more of which are correct, which become the next round of training data.
+
+This is the first concrete recipe for *training a model to reason* using only outcome supervision (no per-step labels). The same trick — sampling rollouts, keeping the ones that solve the problem, training on them — is recognisable from Cap 9.5 (REINFORCE) and Cap 9.7 (GRPO): outcome-conditioned imitation, with the model bootstrapping its own training data.
+
+STaR was promising but limited: by 2022 the base models were too small for the bootstrapping to compound much. The recipe needed (i) larger base models, (ii) RL framing rather than supervised filtering, (iii) better outcome reward design.
+
+---
+
+## 4. o1, R1, and the modern reasoning recipe
+
+OpenAI's o1 was the first public reasoning model. Its system card describes the high-level recipe but no implementation. DeepSeek-R1 ([2025](https://arxiv.org/abs/2501.12948)) is fully open. Their pipeline:
+
+### 4.1 The R1 pipeline
+
+1. **Base model.** DeepSeek-V3 (a $\sim 671$B-parameter MoE; [Cap 8.6](/session/ch8-modern-llm-architectures/8.6-mixture-of-experts)). Pretrained as in Chapter 7.
+2. **SFT on reasoning traces.** A curated dataset of long chain-of-thought traces, partly human-authored, partly machine-generated and filtered. Trains the model to emit `<think> ... </think>` blocks before its final answer.
+3. **R1-Zero step (pure-RL).** Take the SFT'd model and apply GRPO ([Cap 9.7](/session/ch9-alignment/9.7-grpo)) with *verifiable rewards*: for math, a numerical-answer checker; for code, unit tests; for reasoning, a held-out verifier model. *No human preference labels at all.* The model learns by trying many reasoning chains, getting outcome-reward $\in \{0, 1\}$ from the verifier, and updating with GRPO's group-relative advantage.
+4. **R1 step (RLHF on top).** A second round combining the RL-on-verifiable-reward signal with a preference-modelling signal for harmlessness and helpfulness — the standard RLHF pipeline (Cap 9.8) layered on the reasoning model.
+
+The remarkable finding from R1-Zero: even *without* any human preference labels, pure RL on verifiable rewards produces a model that emits long, self-correcting chains of thought. The model spontaneously discovers reasoning behaviours — backtracking, restatement, sub-goal decomposition — that weren't explicitly taught.
+
+### 4.2 What "thinking tokens" are
+
+At inference, an o1/R1-family model emits two kinds of content:
+
+1. **Reasoning tokens** ("thinking tokens"): a long internal monologue, often $1{,}000$–$100{,}000$ tokens, framed in `<think> ... </think>` or model-specific tags. *Hidden* from the end user in o1; *visible* in R1 by default.
+2. **Final answer tokens**: a short, polished response after the reasoning, framed as the user-facing reply.
+
+The model is *trained* (in the SFT step) to use this structure and *reinforced* (in the GRPO step) to use it well.
+
+### 4.3 The inference-time budget
+
+The user-facing knob is the **reasoning budget** — the maximum number of thinking tokens the model can emit before being forced to commit. Cloud APIs expose this as `max_reasoning_tokens` or similar. Typical defaults: $4{\rm k}$–$16{\rm k}$ for routine tasks, up to $64{\rm k}$+ for hard math/research tasks.
+
+The model can also choose to "stop thinking" early if it has converged. In practice the median thinking length on a benchmark like AIME-2024 is $\sim 10{\rm k}$–$30{\rm k}$ tokens — orders of magnitude more than a non-reasoning model would use.
+
+---
+
+## 5. Inference-time scaling laws
+
+Snell, Lee, Xu, Choquette-Choo (2024, [arXiv:2408.03314](https://arxiv.org/abs/2408.03314)) — *Scaling LLM Test-Time Compute Optimally Can Be More Effective than Scaling Model Parameters* — characterised the empirical regularity:
+
+$$
+\boxed{\;\text{accuracy}(C_\text{inf}) \;\approx\; a + b \log C_\text{inf}\;}
+$$
+
+where $C_\text{inf}$ is the per-query inference compute (roughly, number of forward passes × parameter count). The slope $b$ depends on:
+
+- **Problem difficulty.** Hard reasoning problems benefit more from inference compute. Easy problems saturate fast.
+- **Model capability.** Larger / better-trained models have steeper $b$ — they can *use* the extra compute productively.
+- **Search strategy.** Self-consistency, Best-of-N, tree search, sequential CoT all have different slopes; sequential CoT (the reasoning-model style) wins on hard problems; Best-of-N wins on tasks with cheap verifiers.
+
+### 5.1 Sequential vs. parallel inference compute
+
+Two ways to "spend" inference compute:
+
+- **Sequential.** Generate one long chain of thought of length $L$. Total compute: $L \cdot c_\text{forward}$. The chain *conditions on itself* as it grows — late tokens benefit from early reasoning.
+- **Parallel.** Generate $N$ independent chains of length $L_0$ and aggregate (majority vote, judge, or RM-based BoN — Cap 9.15). Total compute: $N \cdot L_0 \cdot c_\text{forward}$. No cross-chain information sharing.
+
+Sequential wins on problems where the reasoning genuinely *compounds*: each step requires the previous step's output. Parallel wins when (a) the verifier is sharper than the model's calibration, or (b) the problem has multiple distinct solution paths and a wrong path can't be corrected mid-chain.
+
+Frontier reasoning models combine both: a long sequential chain, plus $N$ resamples of the chain, with a verifier or judge selecting the best.
+
+### 5.2 Inference compute vs. training compute
+
+Snell et al.'s headline empirical finding: for *medium-difficulty* problems, $10\times$ more inference compute matches or beats $10\times$ more training compute. For very hard problems (top of the difficulty distribution), training-time scaling still wins because inference compute can't compensate for missing knowledge.
+
+The economics flip the architecture decision. Two scenarios delivering equivalent capability:
+
+- **Big-model, single-pass.** $670$B parameters, single forward pass per query. Training cost: $\sim 10^{25}$ FLOPs. Inference cost per query: $\sim 10^{12}$ FLOPs.
+- **Small-model, lots-of-thinking.** $70$B parameters, $30{\rm k}$ reasoning tokens per query. Training cost: $\sim 10^{24}$ FLOPs (smaller pretraining + a GRPO stage). Inference cost per query: $\sim 3 \times 10^{12}$ FLOPs.
+
+The small-model scenario has $10\times$ lower training cost and $3\times$ higher per-query inference cost. If queries are rare (research-grade tasks, hard reasoning challenges), the small-model scenario dominates. If queries are abundant (consumer chat, $10^9$ queries/day), the big-model scenario amortises better.
+
+This is the *economic re-frame* of the test-time-scaling debate: pretrained capability is amortised over queries; inference compute is per-query. The right balance depends on the deployment.
+
+---
+
+## 6. Practical: how to deploy a reasoning model
+
+A few details that matter in practice.
+
+### 6.1 Hidden vs. visible reasoning
+
+OpenAI hides o1's reasoning tokens; users see only the final answer. Anthropic and DeepSeek expose the reasoning. Both are defensible:
+
+- **Hidden.** Cleaner UI; allows the model to "think rude thoughts" without user-visible misalignment; protects against users training competitor models on the leaked reasoning traces.
+- **Visible.** Auditability (the user can verify the chain), debuggability, trust (the user sees the work).
+
+The choice is product-policy, not technical. By 2026 both modes coexist.
+
+### 6.2 Latency
+
+Reasoning models are *slow*. A typical AIME problem might take $30$ seconds to $5$ minutes of model time. This is acceptable for tasks where humans don't expect instant answers (research, coding, math) and unacceptable for chat. Modern deployments offer a *speed/quality dial*: instant mode (no reasoning) for routine queries, thinking mode for hard ones.
+
+### 6.3 Cost
+
+Reasoning tokens are *priced* the same as output tokens. A query that emits $30{\rm k}$ reasoning tokens + a $500$-token answer costs $\sim 60\times$ a non-reasoning query of the same final length. Production deployments meter and bill the reasoning tokens explicitly.
+
+### 6.4 Reasoning-token waste
+
+Reasoning models sometimes "ramble" — emit many tokens of low-value reasoning when a short chain would suffice. Mitigations: budget caps, learned early-stopping heads, RL on a length-penalised reward (the model is rewarded for solving the problem *and* using fewer reasoning tokens).
+
+DeepSeek-R1's paper notes a "length-reward" term that explicitly penalises overly-long reasoning chains. By 2026, length efficiency is a major axis of reasoning-model improvement.
+
+<Aside type="note">
+**The reasoning-model paradigm in one sentence:** train the model (via SFT + GRPO with verifiable rewards) to produce a *long internal chain of thought before answering*, then at inference, give it tokens to spend. Capability scales with the number of tokens spent, up to a problem-specific saturation point.
+</Aside>
+
+---
+
+## 7. Open questions and frontiers
+
+A few open questions as of 2026.
+
+### 7.1 What does the reasoning actually do?
+
+The mechanistic interpretability picture (Chapter 11) is incomplete for reasoning models. The thinking tokens *appear* to do real computation — there's strong empirical evidence that *the contents of the chain causally affect the answer* (ablations show large accuracy drops if you replace the chain with noise of the same length). But the chain is also partly *performative* — the model has been trained to emit reasoning, and some fraction of the chain is the model "showing its work" for the reward model rather than actually computing.
+
+A key question: how much of the chain is genuine computation, and how much is verbal performance? Recent work (Lanham et al., 2023, [arXiv:2307.13702](https://arxiv.org/abs/2307.13702); Turpin et al., 2023, [arXiv:2305.04388](https://arxiv.org/abs/2305.04388)) found that for some models, the *final answer is the same* whether the reasoning chain is correct or replaced with plausible-looking garbage. The reasoning trace is partly post-hoc rationalisation. For o1/R1-family models trained with outcome rewards, this is less true — the chain is more causally relevant — but the question is open at the frontier.
+
+### 7.2 Are there scaling-law limits?
+
+The $\log C_\text{inf}$ law fits empirically, but doesn't tell us where it breaks. Two candidate failure modes: (i) the chain becomes so long that the model loses track of its own work (a "long-context" failure mode within a single chain); (ii) the verifier becomes the bottleneck — verifiable-reward training only helps for problems the verifier can score, which is a small subset of human reasoning tasks.
+
+### 7.3 How does this compose with agents?
+
+Reasoning + tool use ([10.9](/session/ch10-inference-decoding/10.9-agentic-decoding)) is the next frontier. A reasoning model that can call a calculator, run code, or search the web in the middle of its chain is qualitatively more powerful. The agentic-decoding stack ([10.9](/session/ch10-inference-decoding/10.9-agentic-decoding)) and the test-time-scaling stack are converging.
+
+---
+
+## 8. What we keep going forward
+
+Three things.
+
+1. **The CoT-to-reasoning-model line.** Chain-of-thought prompting (Wei 2022) → self-consistency sampling (Wang 2022) → STaR self-bootstrapping (Zelikman 2022) → o1 / R1 with GRPO on verifiable rewards (2024–2025). Each step extended the previous: more reasoning training, more inference compute.
+2. **Inference-time scaling law:** $\text{accuracy} \approx a + b \log C_\text{inf}$. Sequential CoT and parallel BoN are different "spend" mechanisms; sequential wins on compounding-reasoning tasks, parallel wins where a verifier is sharper than the model. For medium-hard tasks, $10\times$ inference compute matches $10\times$ training compute.
+3. **Production reality.** Reasoning models are slow, expensive per query, and require deployment infrastructure that handles long-form generation (continuous batching — Cap 10.8 — is essential). They are also the most important deployment-side capability gain of 2024–2025 and the dominant architecture for hard-reasoning use cases by 2026.
+
+Cap 10.8 next: *continuous batching and PagedAttention*. Reasoning models stress-test the serving infrastructure: their long, variable-length generations break naive batching. vLLM and the techniques in 10.8 are what make reasoning-model serving economical at scale.
+
+<SelfTest>
+
+**(a)** Chain-of-thought prompting changes only the prompt, no fine-tuning. State the inference-compute reframing of why it works.
+
+**(b)** Write the STaR loop in 4 lines of pseudocode. What outcome supervision does it need?
+
+**(c)** Describe DeepSeek-R1's training pipeline: name the four steps and what each step contributes.
+
+**(d)** State the inference-time scaling law $\text{accuracy} \approx a + b \log C_\text{inf}$. Why does the slope $b$ depend on model capability?
+
+**(e)** Sequential CoT vs. parallel Best-of-N: state when each strategy of spending inference compute wins.
+
+**(f)** A team has $10^{25}$ FLOPs to spend. They can either pretrain a $670$B dense model or pretrain a $70$B model and add a GRPO reasoning stage. State two factors that determine which choice is more economical at deployment.
+
+</SelfTest>

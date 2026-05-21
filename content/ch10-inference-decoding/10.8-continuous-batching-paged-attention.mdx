@@ -1,0 +1,234 @@
+---
+title: "10.8 — Continuous batching and PagedAttention (vLLM)"
+chapter: 10
+order: 8
+estimatedMinutes: 24
+goal: "Diagnose why static batching wastes compute on LLM workloads (variable-length sequences finish at different times); derive continuous batching as the fix; explain PagedAttention (vLLM's KV-cache management) as the memory analogue. Understand why these two techniques together deliver $\\sim 10\\times$ higher production throughput than naive serving."
+prerequisites: ["ch10-inference-decoding/10.3-kv-cache-implementation", "ch10-inference-decoding/10.7-test-time-scaling"]
+---
+
+## 1. Why this session exists
+
+[Cap 10.3](/session/ch10-inference-decoding/10.3-kv-cache-implementation) §5.1 established that LLM decode is *memory-bound at batch 1* and becomes *compute-bound at batch $\sim 32$+*. The economic implication: serving at small batch is GPU-idle most of the time; *batching is the throughput lever*.
+
+But naive batching ("static batching" — collect $B$ requests, run them as one fixed batch) is broken for LLM workloads. Three reasons:
+
+1. **Variable prompt length.** Requests arrive with prompt lengths ranging from $10$ tokens (chat turn) to $10^5$ tokens (long-context analysis). A static batch sized for the longest prompt wastes activations on padding for shorter ones.
+2. **Variable response length.** Even with identical prompts, responses can range from $1$ token (a yes/no) to $30{,}000$ tokens (a reasoning chain — Cap 10.7). When request $i$ finishes early, the GPU continues decoding for the other batch members; the $i$-th slot is *idle*.
+3. **KV cache fragmentation.** Each sequence's KV cache is allocated at maximum context length up-front. Most allocations are mostly wasted (a sequence that uses $200$ tokens still pre-allocates $4{\rm k}$ or $32{\rm k}$ worth of cache).
+
+Continuous batching ([Yu et al., Orca, 2022](https://www.usenix.org/system/files/osdi22-yu.pdf)) fixes (1) and (2). PagedAttention ([Kwon et al., vLLM, 2023, arXiv:2309.06180](https://arxiv.org/abs/2309.06180)) fixes (3). Together, in the open-source vLLM stack and its commercial counterparts (TensorRT-LLM, TGI), they deliver $5$–$24\times$ higher throughput than naive static batching — the largest single optimisation in the LLM serving stack.
+
+This session does both.
+
+---
+
+## 2. Static batching, and why it fails
+
+The naive serving loop:
+
+```
+StaticBatching(requests_pending, B):
+    while True:
+        batch = take B requests from queue
+        pad all prompts to max_prompt_len in batch
+        run prefill (batched)
+        while not all done:
+            run one decode step (batched)
+            # if any request finished, the slot is idle for remaining steps
+        return responses
+```
+
+### 2.1 The padding tax
+
+Prefill cost is $\sim L_\text{max} \cdot c_\text{prefill}$ where $L_\text{max}$ is the longest prompt in the batch. A batch of $B = 8$ with prompts $\{10, 12, 8, 14, 9{,}\!500, 11, 13, 9\}$ pays the cost of $8 \times 9{,}\!500$ — most of it on padding. Effective utilisation: $\sim 1\%$ of the prefill work is productive.
+
+### 2.2 The straggler problem
+
+In decode, the batch runs in lock-step: one decode step processes one new token *per active sequence*. When sequence $i$ emits `<EOS>`, its slot becomes idle but the batch continues until *all* sequences finish. With variable response lengths, the long tail of the response-length distribution determines the wall-clock — a $300$-token majority is held hostage by a $30{,}000$-token outlier.
+
+The combined effect: static batching at $B = 8$ on a realistic chat workload achieves $\sim 15\%$ of the throughput of an idealised, perfectly-utilised batched decode.
+
+---
+
+## 3. Continuous batching
+
+The fix: *dynamically* add and remove sequences from the batch as they arrive and finish.
+
+```
+ContinuousBatching(request_queue, max_B):
+    active_sequences = {}
+    while True:
+        # add new requests to fill the batch up to max_B
+        while len(active_sequences) < max_B and request_queue not empty:
+            r = request_queue.pop()
+            active_sequences[r.id] = prefill(r.prompt)
+                # prefill is run individually for the new request
+        # one decode step over current batch
+        for r in active_sequences:
+            y = decode_step(active_sequences[r])
+            emit y to r.client
+            if y == EOS:
+                free r's KV cache slot
+                del active_sequences[r]
+```
+
+Each iteration of the outer loop is one decode step plus any necessary admissions. The batch composition changes step-to-step — *iteration-level scheduling*. Yu et al. (Orca, 2022) showed this gives a $\sim 4\times$ throughput improvement over static batching with no quality change.
+
+### 3.1 Prefill and decode interleaving
+
+In a continuous-batching scheme, the *prefill* of a newly admitted request happens alongside ongoing decode steps for existing sequences. Two strategies:
+
+- **Sequential prefill.** Pause the decode loop, run the new request's prefill, then resume decode. Adds latency to the existing sequences (one prefill cost per new admission).
+- **Chunked prefill.** Split a long prompt's prefill into chunks of $\sim 512$ or $1024$ tokens; interleave chunks with decode steps. Adds minor compute overhead but smooths out the latency spikes.
+
+Chunked prefill is the modern default. It also enables prefill *budgeting*: at most $\sim 2{\rm k}$ prefill tokens per iteration, so admitting a $30{\rm k}$-token prompt doesn't freeze the serving loop.
+
+### 3.2 Iteration-level scheduling
+
+The scheduler decides, every iteration:
+
+1. **Admit?** Are there pending requests and free capacity? If so, admit (which may require prefill chunks this iteration).
+2. **Continue all?** Run a decode step for every active sequence.
+3. **Evict?** If KV cache is full and a new high-priority request arrives, evict a lower-priority sequence (most stacks: don't evict, just queue).
+
+This is *very* different from training-batch scheduling, which is statically planned. Inference scheduling is a soft-real-time problem.
+
+### 3.3 Throughput intuition
+
+Continuous batching turns the LLM serving problem into something like a CPU multi-task scheduler. The throughput at saturation is
+
+$$
+\text{throughput} \;\approx\; \frac{\text{decode tokens/sec at max batch}}{1} \;=\; \frac{c_\text{step}^{-1} \cdot B_\text{eff}}{1},
+$$
+
+where $B_\text{eff}$ is the *average active batch size* (not the maximum). With static batching and variable-length responses, $B_\text{eff}$ is typically $\sim 0.3 B$ (the straggler tail keeps the batch from refilling). With continuous batching, $B_\text{eff} \to B$ — every slot is filled as soon as it frees.
+
+---
+
+## 4. PagedAttention
+
+Continuous batching frees us from the straggler problem, but exposes a new one: **KV cache memory management**.
+
+The naive approach: pre-allocate a contiguous KV cache buffer per sequence, sized to the maximum context length. For a $32{\rm k}$-context Llama-3 with GQA-$8$: $\sim 1.2$ MB per token × $32{\rm k}$ = $\sim 40$ GB per sequence. Even with quantisation, one sequence's KV slot is several GB. A 80 GB GPU fits maybe $\sim 20$ such slots — but only a small fraction of sequences actually use the full context, so most of the pre-allocated memory is wasted.
+
+The waste is *fragmentation*: a 200-token chat response uses $200 / 32{\rm k} \approx 0.6\%$ of its allocated slot.
+
+### 4.1 The OS analogy
+
+PagedAttention borrows directly from virtual memory in operating systems. Instead of contiguous per-sequence allocation, the KV cache is allocated in **blocks** (typical $16$ tokens per block, fp16 KV: a few KB per block per layer). Each block is allocated on-demand as the sequence grows; freed when the sequence ends.
+
+A per-sequence **block table** maps logical positions to physical blocks:
+
+```
+seq_42.block_table:
+    logical block 0 (tokens 0..15)  → physical block 7
+    logical block 1 (tokens 16..31) → physical block 12
+    logical block 2 (tokens 32..47) → physical block 3
+    ...
+```
+
+When the sequence grows past a block boundary, a new physical block is allocated (any free one). The block table is updated.
+
+### 4.2 The attention kernel under PagedAttention
+
+The kernel cannot assume contiguous K and V buffers — they're scattered across physical blocks. PagedAttention is a FlashAttention-derived kernel that takes a *block table* as input and gathers each block's K and V from the physical address. The extra indirection costs ~5% in attention kernel speed, but the memory utilisation gain (and the batch-size headroom it unlocks) far exceeds this.
+
+### 4.3 Memory utilisation
+
+Empirically: vLLM with PagedAttention achieves $\sim 96\%$ KV cache utilisation across a chat workload. Naive contiguous allocation: $\sim 20\%$–$40\%$. The 2–5× memory utilisation gain translates almost directly into 2–5× more concurrent sequences in the batch, which (since decode is memory-bound at batch 1) translates into proportional throughput.
+
+### 4.4 Copy-on-write and prefix sharing
+
+Two extensions enabled by the block-paging abstraction:
+
+**Prefix sharing.** When many sequences share a system prompt, the prompt's KV blocks are *shared* across sequences — the block table for each sequence points to the same physical blocks for the shared prefix. The system prompt is prefill-once, share-many.
+
+**Branch/copy-on-write.** When a sequence forks (e.g., during beam search or self-consistency sampling), the blocks are *not duplicated* — both children share the parent's blocks until one of them writes a new block, at which point the modified block is copied. This is exact OS copy-on-write semantics applied to attention.
+
+In production, these features turn out to matter as much as the basic paging mechanism. A typical chat deployment with a $2{\rm k}$-token system prompt and $32$ concurrent requests saves $\sim 60$ GB of HBM by sharing the system-prompt blocks.
+
+---
+
+## 5. Putting it together: the vLLM serving loop
+
+The end-to-end logical loop of a modern vLLM-style server:
+
+```
+ServingLoop():
+    initialize block allocator (free list of physical blocks)
+    while True:
+        # 1. admissions
+        while pending_queue not empty and KV cache has room:
+            r = pending_queue.pop()
+            block_table[r.id] = allocate prompt blocks
+            chunked_prefill(r)  # interleaved with the rest of this iteration
+        # 2. decode step
+        for each active sequence in batch:
+            attention via PagedAttention(query, block_table)
+            FFN, residual, etc.
+            new_token = sample(logits)
+            if new_token causes a new logical block: allocate a physical block
+            emit new_token to client
+            if new_token == EOS: free all blocks, remove from batch
+        # 3. statistics / heartbeat
+```
+
+Add: prefix caching, speculative decoding ([10.4](/session/ch10-inference-decoding/10.4-speculative-decoding)), quantised weights/KV ([10.6](/session/ch10-inference-decoding/10.6-quantization-gptq-awq)), FlashAttention ([10.5](/session/ch10-inference-decoding/10.5-flashattention)). The result is the rough architecture of every major open-source and proprietary inference server in 2026.
+
+---
+
+## 6. The reasoning-model challenge
+
+Cap 10.7 introduced reasoning models with response lengths up to $30{\rm k}$+ tokens. These stress-test the serving stack:
+
+- **The straggler effect is extreme.** A reasoning response can be $100\times$ longer than a normal response. Without continuous batching, the long tail completely dominates wall-clock.
+- **KV cache pressure is high.** A $30{\rm k}$-token sequence's KV cache is $\sim 12$ GB even with GQA-$8$ and INT8 quantisation. Fewer such sequences fit concurrently — $4$–$8$ per GPU rather than $32$+.
+- **Prefix caching is less effective.** System prompts are still shared, but the actual reasoning chains are unique per request — no inter-request reuse.
+
+Mitigations: chunked prefill, aggressive KV-cache quantisation (INT4 — Cap 10.6 §7), priority scheduling (admit reasoning requests when there's headroom; defer them when latency-critical chat requests are pending). The serving infrastructure for reasoning models is an active 2025–2026 research area.
+
+<Aside type="history">
+**The vLLM moment.** When Kwon et al. published vLLM in 2023, the standard open-source serving stack was HuggingFace's `transformers.generate()` with naive batching — achieving maybe $50$–$200$ tokens/sec on a 13B model on an A100. vLLM at launch hit $\sim 2{,}000$ tokens/sec on the same hardware. The $10\times$ headline number drove rapid adoption — within $6$ months, every major open-source inference deployment had migrated to vLLM or to a fork of it. The two ideas (continuous batching + PagedAttention) are now the *standard* of LLM serving; the question "do you do continuous batching?" no longer makes sense, because the answer is always yes.
+</Aside>
+
+---
+
+## 7. Cost frontiers in 2026
+
+A useful end-to-end stack-cost example. Llama-3 70B + GQA-$8$ + INT4 weights (AWQ) + INT8 KV cache + FlashAttention-3 + PagedAttention + continuous batching + speculative decoding (with an 8B draft model):
+
+- HBM use: $\sim 35$ GB weights + $\sim 35$ GB peak KV cache + activations on an H100.
+- Throughput: $\sim 2{,}000$–$5{,}000$ tokens/sec per H100 at a typical chat workload (saturated batch $\sim 64$).
+- Per-token decode cost: $\sim 0.1$–$0.5$ milliseconds.
+- Tokens per dollar (rough rule of thumb at 2026 cloud prices): $\sim 1\text{--}10$ million output tokens per $\$$ on optimised inference; OpenAI/Anthropic chat-API prices reflect the same order-of-magnitude economics.
+
+For a reasoning model with $30{\rm k}$ thinking tokens per query: $\sim 6$–$30$ seconds per query, $\sim 1$ query per second per H100 at saturation. The economics fundamentally differ from chat: reasoning is a *per-query* cost regime; chat is a *per-token* cost regime.
+
+---
+
+## 8. What we keep going forward
+
+Three things.
+
+1. **Static batching is broken for LLM workloads.** Variable prompt length wastes prefill compute; variable response length leaves slots idle (straggler problem). Naive contiguous KV cache fragments memory.
+2. **Continuous batching solves the dynamic side.** Iteration-level scheduling: admit, decode, evict every step. Chunked prefill smooths admission latency spikes. Average active batch size approaches the maximum.
+3. **PagedAttention solves the memory side.** Block-paged KV cache with a per-sequence block table eliminates fragmentation, enables prefix sharing and copy-on-write across sequences, and unlocks the $\sim 5\times$ memory utilisation that delivers $5\text{--}24\times$ throughput in practice.
+
+Cap 10.9 closes the chapter on *agentic decoding patterns* — self-consistency, Tree of Thoughts, ReAct — where the model orchestrates multi-step plans, tool use, and self-critique on top of the engineering stack we've built across 10.1–10.8.
+
+<SelfTest>
+
+**(a)** Give two reasons static batching wastes compute on a typical LLM workload. Quantify the waste with a concrete batch of mixed-length prompts and responses.
+
+**(b)** Write the continuous-batching scheduler loop in pseudocode. What does iteration-level scheduling mean?
+
+**(c)** Chunked prefill: state the problem it solves and how chunking helps.
+
+**(d)** State the analogy between PagedAttention and OS virtual memory. What is a block, what is a block table, what is a physical block?
+
+**(e)** Prefix sharing in PagedAttention: how does the block-table abstraction enable it, and which class of workload benefits most?
+
+**(f)** A reasoning model emits responses of $30{\rm k}$ tokens. State two ways this stresses the serving stack compared to a chat model with $500$-token responses.
+
+</SelfTest>

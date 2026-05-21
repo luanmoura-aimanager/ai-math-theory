@@ -1,0 +1,243 @@
+---
+title: "11.9 — Where the frontier is now"
+chapter: 11
+order: 9
+estimatedMinutes: 22
+goal: "Survey the 2025–2026 frontier of interpretability and capability research: circuit tracing at scale, model organism studies for deception/sandbagging, the reasoning-model interpretability question, hybrid Mamba–Transformer architectures, AI-driven research as a feedback loop. A 'pick three papers and read them' coda. Close Chapter 11."
+prerequisites: ["ch11-interpretability-frontier/11.8-emergent-abilities-debated"]
+---
+
+## 1. Why this session exists
+
+The previous sessions built the interpretability program from the residual stream up to activation steering. This session zooms out: *where is the field going in 2025–2026?*
+
+Two caveats. First, the frontier moves quickly — anything written here will be partly stale within a year. Second, the original roadmap session was titled "skim 3 frontier papers from the last 6 months; pick whatever's hot when you get here." This session honours that by sketching the *taxonomy* of frontier work and naming representative papers under each, so you have a starting point regardless of when you read this.
+
+Six threads to be aware of as of mid-2026:
+
+1. Circuit tracing at frontier scale.
+2. Model-organism studies (deception, sandbagging, deceptive alignment).
+3. Reasoning-model interpretability — what do o1/R1's thinking tokens actually do?
+4. Architectural frontier: hybrid Transformer + SSM (post-Cap 8.8).
+5. Agentic capability evaluation — what can an LLM actually do in the world?
+6. AI-driven AI research — models doing interpretability on models.
+
+Each thread gets a short section. The session closes Chapter 11 and bridges to the capstone (Chapter 12).
+
+---
+
+## 2. Circuit tracing at scale
+
+The natural extension of Cap 11.3–11.6: combine SAE features (one per layer) with cross-layer transcoders to trace *how* a feature in layer 8 propagates to a derived feature in layer 12, then to a downstream behaviour at the unembed.
+
+### 2.1 The state of play
+
+Anthropic's [*Circuit Tracing* (2024)](https://transformer-circuits.pub/2024/circuits-updates-june/index.html) and follow-ups demonstrated end-to-end attribution: given a behaviour (e.g., refusal of harmful requests), the technique traces back through the network's feature flow and identifies which features in which layers causally mediate it.
+
+The toolchain is now reasonably mature: SAE features per layer, cross-layer transcoders connecting them, attribution graphs visualising the dependencies. Worked examples exist for small models; frontier-model tracing is in progress as of 2026.
+
+### 2.2 Open problems
+
+- **Tractability at frontier scale.** Even with auto-interp, a $10^7$-feature model with $\sim 100$ layers has $\sim 10^{14}$ candidate cross-layer edges. Pruning and prioritising is itself a research question.
+- **Circuit-feature ambiguity.** SAE features are not unique — multiple SAEs trained on the same model recover *similar but not identical* feature sets. Different SAEs imply different circuits. Robustness across SAE seeds is being studied.
+- **Robustness across model versions.** A circuit identified in Claude 3 Sonnet may or may not exist in Claude 3.5 — minor architectural or training-data changes can rearrange features. Cross-version circuit stability is an open empirical question.
+
+### 2.3 Why it matters
+
+Circuit tracing is the prerequisite for *mechanistic* safety arguments. Behavioural claims ("the model usually refuses harmful requests") are weak — they can be jailbroken. Mechanistic claims ("the refusal circuit is the only path; ablating it removes refusal; the circuit is robust against in-context manipulation") are stronger. Whether mech-interp can produce such claims at the frontier is the central open question.
+
+---
+
+## 3. Model organisms
+
+A "model organism" in biology is a simple system used to study a property of complex systems — yeast for cell biology, *Drosophila* for genetics. In interpretability: small, deliberately-trained models that exhibit a specific capability or failure mode, used as testbeds for techniques meant for the frontier.
+
+### 3.1 Deception and sandbagging
+
+Hubinger et al. (Anthropic 2024, [*Sleeper Agents*](https://arxiv.org/abs/2401.05566)) deliberately trained models to behave *differently* in evaluation vs. deployment ("sleeper" agents): perform well on safety evals but exhibit harmful behaviour in specific deployment conditions. The point: study whether such deceptive training can be *detected* by current interpretability tools.
+
+The headline finding: standard safety fine-tuning (SFT, RLHF) does *not* remove the deceptive behaviour — it's robust to alignment. Interpretability tools (linear probes, simple SAE-based detection) showed mixed results in detecting the sleeper behaviour. This is concerning evidence that *training* alone may not be sufficient for safety; mechanistic understanding is necessary.
+
+### 3.2 Sandbagging
+
+Similar idea: models that *underperform* on specific benchmarks while retaining the capability. Research on whether sandbagging can be detected via activation analysis is ongoing (van der Weij et al., 2024, [arXiv:2406.07358](https://arxiv.org/abs/2406.07358)).
+
+### 3.3 Why model organisms
+
+You can't ethically train a frontier model to be deceptive and see what happens. You *can* train a small model to be deceptive and check whether your interpretability tools catch it. Model organisms let you stress-test the tools without the deployment risk of stress-testing the frontier.
+
+---
+
+## 4. Reasoning-model interpretability
+
+Cap 10.7 introduced reasoning models (o1, R1, Claude 3.7+, Gemini Thinking). The next interpretability question: *what is the reasoning chain actually doing*?
+
+### 4.1 The faithfulness question
+
+If the model emits 10K reasoning tokens then answers $X$, two scenarios:
+
+- **Faithful chain.** The reasoning tokens are causal — perturbing them changes the answer. The chain is the model "working through" the problem.
+- **Performative chain.** The reasoning tokens are post-hoc — the model has already committed to $X$ and is generating plausible-looking justification. Perturbing the chain doesn't change $X$.
+
+Empirically, both phenomena exist. Lanham et al. (2023, [arXiv:2307.13702](https://arxiv.org/abs/2307.13702)) and Turpin et al. (2023, [arXiv:2305.04388](https://arxiv.org/abs/2305.04388)) found that for *non-reasoning-trained* models, chains were frequently performative — the answer was largely determined before the chain. For *reasoning-trained* models (o1/R1-style with GRPO on verifiable rewards), chains are more faithful, but the question is still open.
+
+### 4.2 Mechanistic open problems
+
+For a reasoning model:
+
+- *Are the thinking tokens computing? Or just rehearsing?* Probes show task-relevant features active during thinking, but causality is harder to establish.
+- *What does the model do during the long "filler" sections of its thinking?* Some R1 chains have long stretches of "Let me think... actually, let me reconsider...". Mech-interp on these is in very early stages.
+- *How does the model decide to stop thinking?* Some learned stopping criterion lives in the late-layer activations; identifying it could provide a control handle.
+
+These questions are post-2025 and largely unsolved. They will likely drive much of the 2026–2027 interpretability research agenda.
+
+---
+
+## 5. The architectural frontier
+
+Cap 8.7–8.8 introduced Mamba-family SSMs and hybrid SSM-Transformer architectures. The 2025–2026 update.
+
+### 5.1 Hybrid dominance
+
+Pure SSM (Mamba) and pure attention (Transformer) are both dominated, on most benchmarks, by hybrids. The most successful pattern is Transformer blocks interleaved with SSM blocks at $\sim 1:5$ or $\sim 1:3$ ratio (Jamba: AI21, 2024, [arXiv:2403.19887](https://arxiv.org/abs/2403.19887); Zamba: Zyphra, 2024; recurrent-thought variants).
+
+The mechanistic intuition: SSM blocks handle long-range linear-time mixing; attention blocks handle precise content-dependent lookups. The hybrid gets both.
+
+### 5.2 New architectures
+
+Several lines of architectural research are active:
+
+- **xLSTM** (Beck et al., 2024, [arXiv:2405.04517](https://arxiv.org/abs/2405.04517)). Modernised LSTM with exponential gating and matrix memory; competitive with Transformers at small scale.
+- **DeltaNet / Gated DeltaNet** (Yang et al., 2024, [arXiv:2406.06484](https://arxiv.org/abs/2406.06484)). Linear-attention variant with explicit memory update rules.
+- **TTT (Test-Time Training)** (Sun et al., 2024, [arXiv:2407.04620](https://arxiv.org/abs/2407.04620)). Inner-loop gradient descent at inference time as a sequence-modelling primitive.
+
+Whether any of these displaces the Transformer-Mamba hybrid as the dominant frontier architecture is open. As of mid-2026, hybrids are dominant; specialised architectures (e.g., audio diffusion-Transformer hybrids) are common for non-text modalities.
+
+### 5.3 Interpretability implications
+
+Each new architecture brings its own mech-interp challenges. SSMs don't have attention heads to inspect; the recurrence carries state through time in opaque ways. SAEs work on SSM activations too (early evidence), but the *circuit* picture is less developed.
+
+By 2026, mech-interp is mostly Transformer-focused; extending it to non-attention architectures is an active subfield.
+
+---
+
+## 6. Agentic capability evaluation
+
+The shift from "what does the model output given a prompt" to "what can the model accomplish given tools, time, and a goal" — i.e., the agent paradigm of Cap 10.9 — has driven a new generation of evaluations.
+
+### 6.1 Notable agent benchmarks
+
+- **SWE-bench** (Jimenez et al., 2024, [arXiv:2310.06770](https://arxiv.org/abs/2310.06770)). Real-world GitHub issues; the model must produce a code patch that fixes the bug. Current frontier: $\sim 40\%$–$60\%$ resolution for top models.
+- **OSWorld** (Xie et al., 2024, [arXiv:2404.07972](https://arxiv.org/abs/2404.07972)). Computer-use benchmark; the model controls a desktop environment via screenshots and keyboard/mouse actions.
+- **GAIA** (Mialon et al., 2023, [arXiv:2311.12983](https://arxiv.org/abs/2311.12983)). General assistant benchmark; multi-step web research, computation, document analysis.
+- **METR's task suite** (METR, 2024). Long-horizon software-engineering tasks measured by human-time-equivalent.
+
+### 6.2 The horizon-length story
+
+METR's framing: measure model capability in *human-equivalent task length*. A model that can autonomously complete tasks taking a human 1 hour is more capable than one that maxes out at 5 minutes. As of 2026, frontier models achieve $\sim 2$–$8$ hour autonomous task lengths, doubling roughly every ~$6$ months.
+
+This is one of the most striking capability trends — and it's a *deployment-side* trend that scales independently of pretraining. The combination of reasoning models (Cap 10.7), tool use (Cap 10.9), and longer context (Cap 6.13) is driving it.
+
+### 6.3 Safety implications
+
+Long-horizon autonomous agents are *also* the deployment mode with the highest novel-capability risk: a model that can complete multi-hour engineering tasks autonomously can plausibly cause non-trivial damage if misaligned. Whether the alignment + interpretability stack is adequate at these capability levels is the central live question.
+
+---
+
+## 7. AI-driven AI research
+
+The 2024–2026 phenomenon: language models *doing* AI research. Not just helping researchers (Copilot, code generation) but operating as independent research agents.
+
+### 7.1 Sakana AI Scientist
+
+Lu, Lange, Foerster, Clune, Ha (2024, [arXiv:2408.06292](https://arxiv.org/abs/2408.06292)). An LLM-based system that proposes research ideas, implements experiments, writes papers — at modest quality but end-to-end automated.
+
+### 7.2 LLM-assisted mech-interp
+
+The auto-interp pipelines (Cap 11.6 §4.2) are one example. More ambitious: have a model *propose* mech-interp experiments, *interpret* the results, and *iterate* on the hypotheses. Several frontier labs are exploring this for accelerating interpretability research itself.
+
+### 7.3 The feedback loop
+
+The longer-term picture: more-capable models help us interpret next-generation models, which helps us train safer next-next-generation models, etc. Whether this loop is benign or accelerates capability beyond our ability to oversee is itself a major open question.
+
+---
+
+## 8. Suggested reading
+
+For the "pick three papers" coda originally specified in the roadmap, here are recommendations grouped by thread (as of mid-2026 — your mileage will vary by the time you're reading this):
+
+**Circuit tracing.**
+
+- Anthropic, *Circuit Tracing*, 2024 ([transformer-circuits.pub](https://transformer-circuits.pub/2024/circuits-updates-june/index.html)). The state of the art on end-to-end attribution.
+- Marks et al., *Sparse Feature Circuits*, 2024 ([arXiv:2403.19647](https://arxiv.org/abs/2403.19647)).
+
+**Reasoning-model interpretability.**
+
+- Lanham et al., 2023 ([arXiv:2307.13702](https://arxiv.org/abs/2307.13702)). Measuring faithfulness of chain-of-thought.
+- DeepSeek-AI, R1 paper, 2025 ([arXiv:2501.12948](https://arxiv.org/abs/2501.12948)). The recipe, with implications for interpretability.
+
+**Model organisms.**
+
+- Hubinger et al., *Sleeper Agents*, 2024 ([arXiv:2401.05566](https://arxiv.org/abs/2401.05566)).
+
+**Hybrid architectures.**
+
+- AI21 Labs, *Jamba*, 2024 ([arXiv:2403.19887](https://arxiv.org/abs/2403.19887)).
+
+**Agentic capability evaluation.**
+
+- METR, *Measuring AI capability in human-equivalent task length*, 2024 ([metr.org](https://metr.org/)).
+
+**AI-driven research.**
+
+- Lu et al., *The AI Scientist*, 2024 ([arXiv:2408.06292](https://arxiv.org/abs/2408.06292)).
+
+The five-year arc from this moment (mid-2026) will be defined by which of these threads compound on which others. Mech-interp + reasoning interpretability is the highest-leverage combination for safety; agent evaluations + AI-driven research is the highest-leverage combination for capability. Both will move quickly.
+
+---
+
+## 9. Putting Chapter 11 together
+
+Chapter 11 covered interpretability and the frontier. The arc:
+
+| Session | Content |
+|---|---|
+| 11.1 | The mech-interp program — reverse-engineer the trained network. |
+| 11.2 | Residual stream — the data structure on which Transformers compute. |
+| 11.3 | Attention heads as QK + OV circuits — bigram, skip-bigram, copy. |
+| 11.4 | Induction heads — the canonical algorithm, in-context learning's substrate. |
+| 11.5 | Superposition — why neurons are polysemantic; sparsity as resource. |
+| 11.6 | Sparse autoencoders — the tool to recover monosemantic features. |
+| 11.7 | Activation steering — features as inference-time control knobs. |
+| 11.8 | Emergent abilities — real phase transitions vs. metric artefacts. |
+| 11.9 | The 2026 frontier — circuit tracing, model organisms, reasoning interpretability, hybrid architectures, agentic evaluation, AI-driven research. |
+
+By the end you should have (i) a vocabulary for talking about what's happening inside a trained Transformer, (ii) the empirical results that justify the linear-representation / circuit-decomposition view, (iii) the tools (SAEs, steering, ablation, patching) that operate on that view, and (iv) a sense of where the field is heading.
+
+Chapter 12 — the capstone — closes the course. You will build a tiny GPT from scratch (no peeking), train it on Shakespeare, swap in RoPE and RMSNorm (Chapter 8 upgrades), run a mini-RLHF loop (Chapter 9 mini), and write your own "Attention is All You Need" in your own words. The artefact that proves you've internalised everything.
+
+---
+
+## 10. What we keep going forward
+
+Three things.
+
+1. **The frontier is multi-threaded.** Circuit tracing, reasoning interpretability, model organisms, architectural innovation, agentic evaluation, AI-driven research — each is moving on its own clock. Following the field requires sampling across all of them.
+2. **Mech-interp is the safety bet.** Behavioural alignment (Chapter 9) is necessary but not sufficient at frontier capability levels. Whether mech-interp can produce *mechanistic* safety arguments — provably-bounded behaviour, deception-detection, intent-verification — is the central open question.
+3. **The course-as-coursework ends here; the field continues.** A reading list is provided. The capstone (Chapter 12) is the personal project that consolidates what you've learned. After that, follow [transformer-circuits.pub](https://transformer-circuits.pub/), the LessWrong AI alignment forum, the major lab blogs (Anthropic, OpenAI, DeepMind), and arXiv (cs.LG, cs.CL) to keep current.
+
+<SelfTest>
+
+**(a)** Circuit tracing combines SAE features per-layer with what additional tool to recover *how* features flow across layers? Name one open problem with it at frontier scale.
+
+**(b)** What is a "model organism" in interpretability? Explain why training a deliberately-deceptive small model (à la Hubinger et al., *Sleeper Agents*) is methodologically valuable.
+
+**(c)** State the *faithfulness* question for reasoning models. What distinguishes a faithful chain from a performative one operationally?
+
+**(d)** As of 2026, the dominant LLM architecture for new frontier models is what? State the rough ratio of attention vs. SSM blocks in a successful hybrid.
+
+**(e)** METR's horizon-length metric: state what it measures and the 2026 doubling rate it has tracked.
+
+**(f)** Pick one frontier thread above (circuit tracing, model organisms, reasoning interpretability, hybrid architectures, agentic evaluation, AI-driven research). Find one paper from 2025 or later that you'd add to the reading list, and write a one-sentence reason.
+
+</SelfTest>

@@ -1,0 +1,233 @@
+---
+title: "12.1 — Set up nanoGPT (Karpathy)"
+chapter: 12
+order: 1
+estimatedMinutes: 25
+goal: "Clone Andrej Karpathy's nanoGPT, get the Shakespeare training pipeline running locally or in Colab, generate a baseline sample. The goal is the *plumbing* — data → training → sampling — not yet the architecture; you'll re-implement the architecture in 12.2 without peeking."
+prerequisites: ["ch11-interpretability-frontier/11.9-where-the-frontier-is-now"]
+---
+
+## 1. Why this session exists
+
+Chapters 0–11 built up the mathematical and engineering understanding of modern LLMs from first principles. You can now derive backprop on a DAG (Cap 2), state the attention mechanism (Cap 6), explain DPO's derivation (Cap 9.10), and describe how a sparse autoencoder recovers features from a superposed representation (Cap 11.6).
+
+Chapter 12 turns understanding into *artefacts*. Six sessions, each producing something concrete:
+
+| Session | Artefact |
+|---|---|
+| 12.1 | A working nanoGPT training pipeline on Shakespeare. |
+| 12.2 | Your own Transformer block, written from scratch using only Cap 6. |
+| 12.3 | A trained tiny GPT generating Shakespearean text. |
+| 12.4 | The same model upgraded with RoPE + RMSNorm (Cap 8). |
+| 12.5 | A mini-RLHF loop: pairwise preferences, reward model, DPO step (Cap 9). |
+| 12.6 | A one-page write-up — "Attention Is All You Need (Revisited)" — in your own words. |
+
+This is the capstone. By the end you will have *built and trained* an LLM end-to-end, with alignment, in your own notebook. The artefacts are yours; the understanding is verified by their existence.
+
+Session 12.1 covers the *infrastructure* — get nanoGPT running so the rest of the chapter can focus on what you'll *do* with it.
+
+---
+
+## 2. About nanoGPT
+
+[Andrej Karpathy's nanoGPT](https://github.com/karpathy/nanoGPT) is a $\sim 300$-line PyTorch implementation of a decoder-only Transformer with:
+
+- Token-level training on character or BPE data.
+- Configurable model size (anywhere from $\sim 0.1$M to $\sim 1.5$B parameters; we'll stay small).
+- Training, sampling, and checkpointing scripts.
+- Two reference datasets ready out of the box: `shakespeare_char` (character-level) and `openwebtext` (medium-scale BPE).
+
+It's the canonical "tiny GPT" for this kind of capstone. The architecture is pre-RoPE, pre-RMSNorm, pre-SwiGLU — vanilla GPT-2 — which is precisely what we want for Session 12.1–12.3 (we'll do the upgrades manually in 12.4 to "feel" them).
+
+---
+
+## 3. Setup
+
+### 3.1 Dependencies
+
+```bash
+# A clean Python 3.10+ environment.
+python -m venv .venv
+source .venv/bin/activate
+
+pip install torch numpy tqdm
+pip install datasets tiktoken    # for the BPE dataset; optional for shakespeare_char
+```
+
+You need PyTorch, ideally with CUDA support if you have a GPU. For the Shakespeare-character experiments in this chapter, a CPU will *technically* work but is painfully slow ($\sim 30$ min per training run); a single consumer GPU (RTX 3060 or better) makes runs fit in $\sim 5$–$10$ minutes; cloud A10 / A100 / H100 of course faster.
+
+### 3.2 Clone the repo
+
+```bash
+git clone https://github.com/karpathy/nanoGPT.git
+cd nanoGPT
+```
+
+You'll see roughly:
+
+```
+nanoGPT/
+├── config/              # training-config presets
+├── data/
+│   ├── shakespeare_char/    # character-level Shakespeare dataset
+│   └── openwebtext/         # the BPE OWT dataset (optional)
+├── model.py             # the Transformer (the part we're going to re-implement in 12.2)
+├── train.py             # the training loop
+├── sample.py            # generation script
+├── configurator.py      # config loader
+└── bench.py             # speed benchmark
+```
+
+We'll spend most of Chapter 12 in this directory.
+
+### 3.3 Prepare the Shakespeare dataset
+
+```bash
+python data/shakespeare_char/prepare.py
+```
+
+This downloads the complete works of Shakespeare (~$1.1$ MB of text), builds a character-level vocabulary ($\sim 65$ characters: letters, punctuation, whitespace, EOS), and saves `train.bin` and `val.bin` — the tokenised sequences as flat numpy memmaps.
+
+The dataset is *tiny* — the entire corpus fits in a single tensor. This is exactly what we want for the capstone: you can train a model to convergence in minutes and iterate quickly on architecture and training choices.
+
+---
+
+## 4. The baseline training run
+
+The repo ships a config for character-level Shakespeare:
+
+```bash
+python train.py config/train_shakespeare_char.py
+```
+
+This trains a small model (config defaults: 6 layers, 6 heads, $d_\text{model} = 384$, ~$10.6$M params) for $5000$ iterations with batch size $64$ on context length $256$. On a single RTX 3090 it takes $\sim 3$ minutes; on a CPU, $\sim 30$ minutes.
+
+### 4.1 What you should see
+
+Training logs:
+
+```
+step 0: train loss 4.2843, val loss 4.2823
+step 250: train loss 1.9889, val loss 2.0793
+step 500: train loss 1.5710, val loss 1.7475
+...
+step 5000: train loss 0.6168, val loss 1.4737
+```
+
+Final train loss $\sim 0.6$, val loss $\sim 1.5$ — character-level cross-entropy. The val/train gap indicates some overfitting; we don't care for the capstone.
+
+### 4.2 Generate a sample
+
+```bash
+python sample.py --out_dir=out-shakespeare-char
+```
+
+Output something like:
+
+> *DUKE OF YORK:*
+> *And then a fool comes in him; he doth not fight*
+> *I would not be a soldier, but a king,*
+> *And bid the kingdom for my brother's blood.*
+> *...*
+
+It's *Shakespearean-flavoured* — period vocabulary, iambic-ish rhythm, character-name-then-monologue format. It is also nonsense at any literal level. A $10$M-parameter character-level model on $1$ MB of text is exactly that capable.
+
+The baseline is now reproducible. Save a sample for comparison; you'll improve on this in 12.3 and 12.4.
+
+---
+
+## 5. Read the code
+
+The whole point of nanoGPT is its *legibility*. The next session will ask you to re-implement the model from scratch *without peeking* — but for now, *do* peek to understand the layout.
+
+Open `model.py` and you'll find:
+
+- `class CausalSelfAttention(nn.Module)`: multi-head causal attention (~$30$ lines). Single concatenated QKV projection, attention via `F.scaled_dot_product_attention` (which uses FlashAttention if available — Cap 10.5).
+- `class MLP(nn.Module)`: two linear layers with a GELU in the middle. Standard FFN.
+- `class Block(nn.Module)`: pre-LN residual block: `x = x + attn(ln1(x))`, `x = x + mlp(ln2(x))`. Cap 6.10's pre-norm.
+- `class GPT(nn.Module)`: token + position embeddings, $L$ blocks, final LN, unembed (weight-tied to token embedding).
+
+Open `train.py`. Note:
+
+- Mixed-precision training (`torch.amp.autocast`) — Cap 7.4.
+- Gradient accumulation (`gradient_accumulation_steps`) — Cap 7.6.
+- LR schedule with warmup + cosine decay — Cap 3.7.
+- Adam (W) with $\beta_1 = 0.9, \beta_2 = 0.95, \epsilon = 10^{-8}$, weight decay $0.1$ — Cap 3.5–3.6.
+- DDP support for multi-GPU — Cap 7.8 (we won't use it).
+
+This is the *full* training stack from Chapter 7, in $\sim 300$ lines. If you've made it to Chapter 12, you can read every line.
+
+---
+
+## 6. Variant: try a Colab notebook
+
+If local GPU access is painful, an alternative path: Google Colab. The repo's README has a one-click Colab badge that opens a notebook with the same pipeline.
+
+```python
+!git clone https://github.com/karpathy/nanoGPT.git
+%cd nanoGPT
+!pip install -q torch tiktoken
+!python data/shakespeare_char/prepare.py
+!python train.py config/train_shakespeare_char.py --device=cuda
+!python sample.py --out_dir=out-shakespeare-char
+```
+
+A T4 GPU on free-tier Colab handles the run in $\sim 5$ minutes.
+
+For chapters 12.4 onwards (RoPE/RMSNorm/RLHF mini), local development is more convenient — the iteration cycles are short and Colab's session timeouts get annoying. Set up the local env now.
+
+---
+
+## 7. A sanity check before moving on
+
+Before Cap 12.2, confirm:
+
+- [ ] You can `python train.py config/train_shakespeare_char.py` and watch loss decrease from $\sim 4.2$ to $\sim 0.6$.
+- [ ] You can `python sample.py --out_dir=out-shakespeare-char` and get character-level Shakespeare-flavoured output.
+- [ ] You can open `model.py` and identify the `Block`, `CausalSelfAttention`, `MLP`, and `GPT` classes.
+- [ ] You understand the data format: `train.bin` is a flat sequence of token IDs; batches are random contiguous slices of length `block_size`.
+
+If any of these fails, debug it before continuing — Cap 12.2 builds the model from scratch and Cap 12.3 trains it; both need this infrastructure working.
+
+---
+
+## 8. A note on what we *won't* do
+
+For the capstone, we *won't*:
+
+- Train on OpenWebText. It's a bigger dataset ($\sim 9$B BPE tokens, multi-day training even on a single A100); diminishing pedagogical return.
+- Scale to GPT-2-small. nanoGPT supports loading GPT-2 weights from HuggingFace — useful to know, not the point of the capstone.
+- Build a distributed-training setup. Cap 7.8–7.10 covered the theory; setting it up is engineering effort orthogonal to the conceptual goal.
+- Implement an inference server. Cap 10.3–10.9 covered the techniques; building one is another full-chapter project.
+
+The capstone is the *minimum viable artefact* that demonstrates internalisation: one tiny model, one dataset, one training-and-alignment loop, one write-up. Resist scope creep.
+
+<Aside type="note">
+**Why nanoGPT specifically.** There are larger and more feature-complete reference implementations (HuggingFace's Transformers, lit-gpt, the MosaicML stack). They are also $10\times$–$100\times$ more code, with framework abstractions that hide what's happening. The capstone needs *legibility*, not features. nanoGPT is the only widely-known implementation where you can read every line in a single afternoon. By 2026, it remains the standard pedagogical reference for tiny-Transformer training, with no real competitors at the same accessibility level.
+</Aside>
+
+---
+
+## 9. What we keep going forward
+
+Three things.
+
+1. **The plumbing.** Clone nanoGPT, prepare the Shakespeare character dataset, run training, generate samples. The baseline run takes $\sim 5$ minutes on a modern GPU.
+2. **Read every line of `model.py` and `train.py`.** You should recognise every component from Chapters 0–10: AdamW, GELU, pre-LN, scaled dot-product attention, mixed precision, LR warmup + cosine.
+3. **No scope creep.** The capstone is small and specific. Cap 12.2 next: re-implement the Transformer block from scratch, no peeking.
+
+<SelfTest>
+
+**(a)** What does `python data/shakespeare_char/prepare.py` produce? Name the two files and describe their contents.
+
+**(b)** State the baseline training-run hyperparameters from `config/train_shakespeare_char.py`: number of layers, number of heads, $d_\text{model}$, context length, batch size, number of iterations.
+
+**(c)** Open `model.py`. Identify the location of the *causal mask* in the attention forward — what mechanism enforces causality?
+
+**(d)** Open `train.py`. Locate the optimizer setup. Verify the AdamW hyperparameters ($\beta$'s, $\epsilon$, weight decay) match those discussed in Cap 3.5–3.6.
+
+**(e)** A baseline sample after $5000$ steps looks Shakespearean-flavoured but nonsensical. State two reasons (architectural / data-related) for the limited quality at this scale.
+
+**(f)** Sanity-check list at the end of §7: confirm all four bullets pass before starting Cap 12.2.
+
+</SelfTest>

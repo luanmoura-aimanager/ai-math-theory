@@ -39,6 +39,18 @@
     "title": "Chapter 9 — Alignment: SFT, RLHF, DPO, GRPO",
     "order": 9
   },
+  "ch10-inference-decoding": {
+    "title": "Chapter 10 — Inference and decoding",
+    "order": 10
+  },
+  "ch11-interpretability-frontier": {
+    "title": "Chapter 11 — Interpretability and the frontier",
+    "order": 11
+  },
+  "ch12-capstone-tiny-gpt": {
+    "title": "Chapter 12 — Capstone: build and train a tiny GPT",
+    "order": 12
+  },
   "references-bibliography": {
     "title": "References & bibliography",
     "order": 99

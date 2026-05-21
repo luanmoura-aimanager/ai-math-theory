@@ -1,0 +1,199 @@
+---
+title: "11.8 — Emergent abilities, debated"
+chapter: 11
+order: 8
+estimatedMinutes: 20
+goal: "Walk through the emergent-abilities debate: Wei et al. (2022) claimed sharp capability jumps with scale; Schaeffer et al. (2023) argued these are metric artefacts. Form your own view by separating (i) real phase transitions (induction heads, grokking) from (ii) discrete-metric mirages. Establish that some emergence is real and some isn't, and discuss how to tell which is which."
+prerequisites: ["ch11-interpretability-frontier/11.4-induction-heads"]
+---
+
+## 1. Why this session exists
+
+The emergent-abilities debate is one of the most-discussed empirical questions in modern ML. Two papers frame it.
+
+- **Wei et al. (2022, [arXiv:2206.07682](https://arxiv.org/abs/2206.07682), *Emergent Abilities of Large Language Models*).** Plotted benchmark accuracy against model scale across dozens of tasks. Found that for many tasks, accuracy was *near-random* below some scale threshold, then *jumped* to non-trivial accuracy at the threshold. Called this pattern "emergence" — analogous to phase transitions in physics, where qualitative properties appear suddenly.
+- **Schaeffer et al. (2023, [arXiv:2304.15004](https://arxiv.org/abs/2304.15004), *Are Emergent Abilities a Mirage?*).** Argued that the apparent jumps are artefacts of *discontinuous evaluation metrics* (exact-match accuracy, multiple-choice picks). When the same tasks are scored with *smooth* metrics (per-token cross-entropy, partial-credit grading), the curves are *smooth* — gradual improvement with scale, no phase transition.
+
+Both papers are right about different things. The deeper question is: *when is emergence real and when is it metric?* This session works through that question and arrives at a calibrated view.
+
+---
+
+## 2. What "emergence" can mean
+
+The word is overloaded. At least three usages.
+
+### 2.1 Behavioural emergence
+
+A capability is "behaviourally emergent" if its benchmark score is near-random at small scale and substantially above random at large scale, with a sharp threshold.
+
+This is Wei et al.'s usage. Operational, observational, says nothing about mechanism.
+
+### 2.2 Mechanistic emergence
+
+A *circuit* or *algorithm* appears at a specific scale (or training step) and was not present below it. The model now implements a new computation it didn't before.
+
+This is Olsson et al.'s induction-head story (Cap 11.4). Mechanistic claim, supported by causal evidence.
+
+### 2.3 Capability emergence
+
+A *qualitative* shift in what the model can do — not just a quantitative improvement but a step-change in the kind of task that becomes feasible.
+
+This is the philosophical usage — "the model now has theory of mind", "the model can plan multi-step tasks". Mostly intuitive, hard to operationalise.
+
+The Wei vs. Schaeffer debate is mostly about (1) — whether the *benchmark-score* phase transitions are real. Mech-interp (Cap 11.4 + Cap 11.6) deals with (2) — whether *circuit-level* phase transitions are real. The philosophical use (3) is a separate question.
+
+---
+
+## 3. The Wei et al. observation
+
+Wei et al. (2022) plotted scale (training compute or model parameters, log axis) against benchmark accuracy for $\sim 137$ tasks. Many tasks showed near-zero accuracy until $\sim 10^{22}$–$10^{23}$ training FLOPs, then a sharp climb.
+
+Examples:
+
+- **Modular arithmetic** ($a \cdot b \mod p$). Zero accuracy until $\sim 10^{23}$ FLOPs, then $\sim 50\%$ accuracy.
+- **3-digit arithmetic.** Similar pattern, with the threshold around $\sim 10^{22}$ FLOPs.
+- **BIG-Bench commonsense reasoning subsets.** Similar.
+- **Multi-step problem solving with chain-of-thought.** Threshold around $\sim 10^{23}$ FLOPs.
+
+The interpretation: these capabilities are *not* present at small scale, regardless of training-time effort; they require crossing a parameter-or-compute threshold.
+
+This was widely-cited evidence for the "scale is all you need" thesis: there are capabilities you simply cannot get at small scale; the only path is bigger models.
+
+---
+
+## 4. The Schaeffer et al. critique
+
+Schaeffer, Miranda, Koyejo (2023) re-examined the same data and made one point sharply: **the apparent phase transitions are visible only under discontinuous metrics**.
+
+### 4.1 The argument
+
+Consider exact-match accuracy on $4$-digit arithmetic. The model has to produce, character-by-character, the correct answer. Accuracy is $1$ if all $\sim 5$ characters are right; else $0$.
+
+If the per-token correctness probability is $p$, exact-match probability is $p^5$. A model improving from $p = 0.5$ to $p = 0.9$ (modest per-token improvement) sees exact-match accuracy go from $0.03$ to $0.59$ — a nearly $20\times$ jump that looks like an "emergence" on a coarse-grained plot, but corresponds to *smooth* per-token improvement.
+
+Worse, exact-match has a *threshold* — below some $p$, you essentially always fail; above it, you essentially always succeed. The discontinuity is in the metric, not the model.
+
+### 4.2 The remedy
+
+Use smooth metrics. Schaeffer et al. recomputed several Wei-emergent tasks with per-token cross-entropy or partial-credit accuracy. The curves were *smooth* — log-linear or power-law improvement with scale, no phase transitions.
+
+Their conclusion: many of the "emergent" capabilities in Wei et al. are *measurement artefacts*. The model is gradually improving; the discontinuous metric just hides the gradualism.
+
+### 4.3 What Schaeffer doesn't claim
+
+Importantly, Schaeffer et al. do *not* claim there is no scale-driven capability gain. The capabilities are real and they do grow with scale. The disagreement is about *whether the growth is gradual or discontinuous*.
+
+This is a more circumscribed claim than headlines often suggested. The phase-transition framing was an artefact; the underlying capability improvement is real.
+
+---
+
+## 5. What about induction heads?
+
+Induction heads (Cap 11.4) appear in a *sharp phase transition* during training — model goes from no in-context learning to robust in-context learning over a narrow window of training steps. This is real-real emergence: a specific circuit forms, a specific capability becomes available, and the transition is mechanistically identifiable, not just statistically.
+
+So the picture isn't "all emergence is fake" — it's:
+
+- Some emergence is *real and mechanistic* (induction heads; grokking on small algorithmic tasks).
+- Some emergence is *metric artefact* (exact-match jumps on smooth-improvement tasks).
+- Some emergence is somewhere in between — gradual underlying improvement that *enables* a qualitatively new behavioural mode at some threshold, but the threshold isn't a hard wall.
+
+The challenge is *telling which is which*. Mech-interp evidence is one way: if you can identify the responsible circuit and its formation timing, you can distinguish real circuit-emergence from metric-emergence.
+
+---
+
+## 6. Grokking: a microcosm
+
+Power, Burda, Edwards, Babuschkin, Misra (2022, [arXiv:2201.02177](https://arxiv.org/abs/2201.02177)) trained tiny Transformers on modular arithmetic ($a + b \mod p$ for prime $p$). Training loss decreased smoothly; *test* accuracy stayed near random for thousands of steps then suddenly jumped to $100\%$.
+
+This is *grokking* — a phase transition in generalisation. The model wasn't memorising; it was, at some point, *internalising the algorithm* and then could apply it to held-out examples.
+
+### 6.1 The mechanistic story
+
+Nanda, Chan, Lieberum, Smith, Steinhardt (2023, [arXiv:2301.05217](https://arxiv.org/abs/2301.05217)) reverse-engineered the grokked model. The model had learned a beautiful Fourier-basis algorithm: it represents $a$ and $b$ in a frequency basis, multiplies in frequency space (using the trig identity $\cos(a)\cos(b) - \sin(a)\sin(b) = \cos(a + b)$), and reads off the result.
+
+This is a *real* emergent capability — there's a specific algorithm that wasn't present before grokking and is present after. It's also gradual at the circuit level: Nanda et al. identified an intermediate phase where the Fourier circuit is *partially formed* but not yet generalising. The test-accuracy jump happens when the circuit becomes complete enough to actually compute correctly.
+
+So grokking is *both* — a real mechanistic transition *and* a metric artefact (the transition would be smoother if measured by something other than 0/1 test accuracy).
+
+---
+
+## 7. A calibrated view
+
+Synthesising the literature.
+
+### 7.1 Real-emergence list
+
+Cases where there's mechanistic + behavioural evidence for a genuine capability transition:
+
+- **Induction heads** (Olsson et al., 2022). Circuit-formation phase transition during training; in-context learning capability appears.
+- **Grokking** (Power et al., 2022; Nanda et al., 2023). Algorithmic generalisation phase transition; small models on algorithmic tasks.
+- **Multi-digit arithmetic at sufficient scale**. Beyond some scale threshold, dedicated arithmetic circuits form (work by Stolfo et al., 2023; Nikankin et al., 2024).
+- **Some chain-of-thought benefit thresholds**. CoT only helps above a model-scale threshold (Wei 2022); below threshold, CoT *hurts*. This might be a real phase: the model needs enough capacity to use a CoT productively.
+
+### 7.2 Likely-metric-artefact list
+
+Cases where Schaeffer's critique applies:
+
+- **Exact-match accuracy on most generation tasks**. Sharp jumps in accuracy reflect threshold-crossing in cumulative per-token correctness.
+- **Multiple-choice benchmark scores**. Near-chance until cumulative reasoning works; sharp climb thereafter.
+- **Many of the BIG-Bench "emergent" tasks** (re-analysed in Lu et al., 2023, [arXiv:2309.01809](https://arxiv.org/abs/2309.01809)).
+
+### 7.3 Open / contested
+
+- **Theory of mind** in LLMs. Reported as emergent (Kosinski 2023); reanalysed as artefactual (Ullman 2023).
+- **Multi-step reasoning chains**. Threshold-like in some studies, smooth in others.
+- **Tool use and agentic behaviour**. Some tasks show step-changes; mechanistic understanding limited.
+
+The honest position: emergence is *a real phenomenon for some capabilities and a metric artefact for others*. Distinguishing them requires mechanistic evidence, not just benchmark curves.
+
+---
+
+## 8. Why this matters
+
+Three reasons the debate isn't merely academic.
+
+### 8.1 Safety predictions
+
+If capabilities are *smoothly* emergent, we can extrapolate from observed curves to predict future capabilities. If they are *discontinuously* emergent, prediction is much harder — we don't know when the next jump happens or what capability it brings.
+
+The safety implication: scaling-law-based capability forecasting depends on the gradual story. Discontinuous emergence makes safety predictions harder and increases the value of mech-interp tools that can detect circuit-formation events.
+
+### 8.2 Research direction
+
+If everything is gradual, scaling is the only lever. If some things are emergent, *finding the threshold* is also a lever — knowing what training data, what architecture changes, what RL signals trigger circuit formation. The mech-interp + RL-on-reasoning combination (Cap 9.7, Cap 10.7) is one such lever.
+
+### 8.3 The science of intelligence
+
+The phase-transition framing — that intelligence might be a series of qualitative leaps rather than a continuous accumulation — is one of the most important empirical questions in modern cognitive science. The answer is *partly* yes (some real phase transitions, like induction heads) and *partly* no (most capability growth is gradual). The mix matters.
+
+<Aside type="note">
+**The pedagogically honest answer.** "There are sharp things in the loss landscape, but most of what we observe behaviourally is gradual underneath, with sharp-looking surface metrics. Mech-interp finds the genuinely sharp things; benchmark engineering needs smooth metrics to avoid being fooled." This is the synthesis of Wei and Schaeffer — they were each right about a different layer.
+</Aside>
+
+---
+
+## 9. What we keep going forward
+
+Three things.
+
+1. **The Wei–Schaeffer debate is a layer-confusion.** Wei (2022) identified benchmark phase transitions; Schaeffer (2023) showed many of them are metric artefacts (exact-match thresholding). Both correct; talking about different layers.
+2. **Some emergence is genuine.** Induction heads (mechanistic phase transition during training) and grokking (algorithmic generalisation phase transition) are real, not metric. Other examples likely exist; mech-interp is the tool to find them.
+3. **Distinguishing real from artefactual requires mechanistic evidence.** Behavioural curves alone can mislead. Identifying the responsible circuit, its formation timing, and its causal role gives confidence that an emergence is structural rather than measurement-induced.
+
+Cap 11.9 next: the *2026 frontier* of interpretability — what's hot, what's hard, what's coming.
+
+<SelfTest>
+
+**(a)** Wei et al.'s claim: state it in one sentence and give a concrete example task with a phase-transition shape.
+
+**(b)** Schaeffer et al.'s critique: state it in one sentence. Show with a per-token vs. exact-match argument why this critique has bite.
+
+**(c)** Induction-head emergence is *not* a metric artefact. Why? What mechanistic evidence distinguishes it from a smooth improvement disguised as a phase transition?
+
+**(d)** Define grokking. State the mechanistic finding from Nanda et al. (2023) about *what* the grokked model has learned.
+
+**(e)** Give two safety-relevant reasons why distinguishing real from artefactual emergence matters.
+
+**(f)** A 2026 researcher claims "agentic behaviour emerges at $10^{25}$ FLOPs." State two pieces of evidence you'd want before accepting this as a real circuit-emergence claim.
+
+</SelfTest>

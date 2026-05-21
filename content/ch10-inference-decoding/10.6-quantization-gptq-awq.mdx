@@ -1,0 +1,237 @@
+---
+title: "10.6 — Quantization (INT8, INT4): the math of GPTQ and AWQ"
+chapter: 10
+order: 6
+estimatedMinutes: 26
+goal: "Define per-channel symmetric quantisation $Q(x) = \\mathrm{round}(x / s) \\cdot s$; derive GPTQ as a calibrated Hessian-aware error-compensation algorithm; derive AWQ as activation-aware scaling; understand the outlier problem and why naive quantisation collapses below INT8."
+prerequisites: ["ch7-training-language-models/7.4-mixed-precision", "ch10-inference-decoding/10.3-kv-cache-implementation"]
+---
+
+## 1. Why this session exists
+
+Recall the rough memory budget of LLM serving (Cap 10.3): weights + KV cache competes for HBM. A Llama-3 70B in fp16 occupies $\sim 140$ GB of weights alone — already exceeds a single H100. Quantising the same weights to INT4 brings this to $\sim 35$ GB, leaving room for KV cache and activations on a single GPU.
+
+Quantisation is the most leveraged inference optimisation: a $\sim 4\times$ reduction in weight memory, $\sim 2$–$4\times$ reduction in weight-read time (the dominant cost at small batch — Cap 10.3 §5.1), at a typical quality cost of $<1$ perplexity point for INT8 and $1$–$3$ perplexity points for INT4. By 2026, INT8 is universal in production; INT4 is the default for open-source local inference (llama.cpp, MLX).
+
+But naive quantisation — round each weight to its nearest INT8/INT4 grid point — fails catastrophically below INT8 because of *activation outliers*. The two algorithms that made INT4 viable are **GPTQ** (Frantar et al., 2022, [arXiv:2210.17323](https://arxiv.org/abs/2210.17323)) and **AWQ** (Lin et al., 2023, [arXiv:2306.00978](https://arxiv.org/abs/2306.00978)). Both use a small calibration dataset to be smarter than nearest-rounding.
+
+This session does the math of both.
+
+---
+
+## 2. The quantisation primitive
+
+Quantisation maps a continuous (fp16) value to a discrete grid.
+
+### 2.1 Symmetric uniform quantisation
+
+For $b$-bit integers, the grid is $\{-2^{b-1}, \ldots, 2^{b-1} - 1\}$. The mapping for a fp16 tensor $X$:
+
+$$
+\boxed{\;Q_s(X) \;=\; \mathrm{round}\!\left(\mathrm{clip}\!\left(\frac{X}{s},\, -2^{b-1},\, 2^{b-1}-1\right)\right) \cdot s\;}
+$$
+
+The *scale* $s > 0$ is a single fp16 number per tensor (or per channel, per group — see below). The de-quantised approximation $\hat{X} = Q_s(X) \approx X$.
+
+### 2.2 Scale calibration
+
+The standard choice:
+
+$$
+s \;=\; \frac{\max(|X|)}{2^{b-1} - 1}.
+$$
+
+This sets the largest absolute value to the grid endpoint, maximising the use of the integer range. The quantisation error per element is then at most $s/2$ — i.e., at most $\max(|X|) / (2^b - 2)$.
+
+### 2.3 Per-tensor vs. per-channel vs. per-group
+
+- **Per-tensor.** One $s$ for the entire weight matrix $W \in \mathbb{R}^{d_\text{out} \times d_\text{in}}$. Coarse. Cheap.
+- **Per-channel.** One $s_j$ per output channel ($j = 1, \ldots, d_\text{out}$). Better adapts to per-channel scale variation. Standard for weights in INT8.
+- **Per-group.** Divide each row into groups of size $g$ (typical $g = 128$); one $s$ per group. Necessary for INT4 — at $4$ bits, the dynamic range loss from a too-coarse $s$ is catastrophic.
+
+The granularity is a trade-off: finer grids ↔ more scale parameters stored alongside the int weights ↔ slightly larger model. Per-group with $g = 128$ adds $1.5\%$–$3\%$ memory overhead. Standard.
+
+---
+
+## 3. The outlier problem
+
+Naive per-channel weight quantisation works well to INT8. Below that — INT4, INT3 — quality collapses on standard LLMs. The reason is *activation outliers*.
+
+**Empirical observation** (Dettmers et al., 2022, [arXiv:2208.07339](https://arxiv.org/abs/2208.07339)): in Transformer activations, a small number of *channels* carry values $50$–$100\times$ larger in magnitude than the median channel. These are the "outlier channels". They emerge during pretraining and are *systematic* — the same channels carry outliers across most inputs.
+
+The quantisation problem: a per-tensor scale $s$ chosen to cover the outlier-channel range is *too large* for the other channels — most values round to zero. Conversely, a per-tensor scale chosen for the typical channel *clips* the outliers, also catastrophic.
+
+Per-channel weight quantisation doesn't help, because the outliers are in the *activations* (the inputs to each layer), not the weights. The weights are well-behaved; the inputs they multiply are not.
+
+There are two ways out:
+
+1. **Treat the outliers in mixed precision.** Keep outlier-channel activations in fp16; quantise the rest in INT8. This is LLM.int8() (Dettmers et al., 2022). Simple; works to INT8; cumbersome at INT4.
+2. **Compensate for the activation distribution at quantisation time.** Use a calibration dataset to characterise the activation statistics, and choose the weight quantisation to *minimise the output error of the layer*, not the weight error. This is what GPTQ and AWQ do, differently.
+
+---
+
+## 4. GPTQ: Hessian-aware error compensation
+
+The setup: for one linear layer $Y = W X$ with $W \in \mathbb{R}^{d_\text{out} \times d_\text{in}}$, we want to find an integer $\hat W$ minimising $\| W X - \hat W X \|_F^2$ averaged over a *calibration set* of representative $X$'s.
+
+Define the input second-moment matrix:
+
+$$
+H \;=\; \frac{1}{N} \sum_{n=1}^{N} X_n X_n^\top \;\in\; \mathbb{R}^{d_\text{in} \times d_\text{in}}.
+$$
+
+(This is the Hessian of the squared output error w.r.t. each row of $W$, hence the name.)
+
+For each row of $W$ independently — call it $w \in \mathbb{R}^{d_\text{in}}$ — we want
+
+$$
+\hat{w} \;=\; \arg\min_{\hat w \in \text{INT}^{d_\text{in}} \cdot s} \; (w - \hat w)^\top H (w - \hat w).
+$$
+
+This is a quadratic in $\hat w$ with a *discrete* feasibility set (the quantisation grid). NP-hard in general.
+
+### 4.1 The greedy compensation idea (OBS / OBQ)
+
+The Optimal Brain Surgeon / Optimal Brain Quantisation lineage: quantise one weight at a time, and after each rounding, *update the remaining weights* to compensate for the error.
+
+Suppose we have $w$ and we're about to quantise coordinate $i$. The round produces error $\delta = w_i - \hat w_i$. The minimum of the quadratic over the remaining (un-quantised) coordinates $j \ne i$ is achieved by
+
+$$
+w_j \leftarrow w_j - \delta \cdot \frac{H_{ij}}{H_{ii}}, \quad j \ne i.
+$$
+
+(This is the closed-form minimum of $(w - \hat w)^\top H (w - \hat w)$ when only coordinate $i$ is constrained to its rounded value.)
+
+After the update, the *other* coordinates are no longer at their original values — they've been shifted to compensate for the rounding of coordinate $i$. When we later quantise coordinate $j$, we round its *updated* value.
+
+### 4.2 GPTQ's contribution
+
+OBQ was known but too slow: the per-coordinate Hessian inverse is $O(d_\text{in}^3)$, intractable at LLM scales.
+
+GPTQ's trick: process coordinates in a *fixed order* (left-to-right) and exploit the resulting sparsity in the Hessian inverse. The error propagation reduces to a Cholesky-decomposition-based update:
+
+```
+GPTQ(W, H):
+    L = Cholesky(H^{-1})        # H_inv has lower-triangular factor L
+    for each row w of W:
+        for i = 1, ..., d_in:
+            # quantise coordinate i
+            ŵ_i = round(w_i / s) * s
+            δ = w_i - ŵ_i
+            # propagate the error to coordinates > i using L
+            for j = i+1, ..., d_in:
+                w_j -= δ * L_{j, i} / L_{i, i}
+        replace row with ŵ
+    return Ŵ
+```
+
+The Cholesky pre-computation is $O(d_\text{in}^3)$ but is done *once per layer*, not per row. The per-row update is $O(d_\text{in}^2)$. Total cost per layer: $O(d_\text{out} \cdot d_\text{in}^2)$ — minutes to hours per layer on a single GPU, calibrated with $128$–$1024$ samples. Fast enough to quantise a $70$B model in $\sim 4$ GPU-hours.
+
+### 4.3 Empirical quality
+
+GPTQ at INT4 with $g = 128$ group-wise scale typically loses $< 1$ perplexity point on Llama-style models. At INT3, the loss is $2$–$4$ points — usable for some applications, marginal for chat. At INT2, the model breaks. The empirical sweet spot is INT4 with group-wise quantisation.
+
+---
+
+## 5. AWQ: activation-aware weight scaling
+
+GPTQ uses the input statistics $H$ to compensate for *quantisation error*. AWQ uses them differently — to *re-scale* the weights such that high-activation-magnitude channels get more precision.
+
+### 5.1 The key insight
+
+For a linear layer $y = W x$, scale a chosen subset of input channels by $s$ before quantisation:
+
+$$
+y \;=\; W x \;=\; \big(W \cdot \mathrm{diag}(1/s)\big) \cdot \big(\mathrm{diag}(s) \cdot x\big) \;=\; W' \cdot x'.
+$$
+
+The output is identical. But the weights $W'$ now have a different scale per channel. If $s$ is chosen so that high-activation-magnitude channels have *larger* $s$, then $W' = W / s$ has *smaller* values in those channels, and the quantisation error in those columns is also smaller (because the per-channel scale grid is tighter).
+
+The activations $x' = s \cdot x$ are amplified by $s$ — but activations aren't being quantised (at least, not by AWQ; activations stay in fp16 for the matmul), so this is fine.
+
+### 5.2 Finding the right $s$
+
+AWQ's heuristic: pick the top-$\sim 1\%$ of input channels by mean activation magnitude (measured on the calibration set). Set $s_i = \mu_X|_i^\alpha$ where $\mu_X|_i$ is the mean magnitude of input channel $i$ over the calibration set, with $\alpha$ a hyperparameter (typically $\alpha \approx 0.5$).
+
+The scale absorbs the activation magnitude into the weight quantisation: the salient-channel weights are well-quantised, the rest tolerate coarser grids.
+
+### 5.3 Why this matters
+
+GPTQ minimises a fixed *output reconstruction* objective by error compensation; AWQ minimises a *re-parameterised* objective by per-channel scaling. They are complementary: AWQ-then-GPTQ often outperforms either alone.
+
+In practice (2026): AWQ is preferred for its simpler implementation (no Cholesky), comparable INT4 quality, and slightly faster runtime kernels (the per-channel scales can be folded into the previous layer's output normalisation). GPTQ is preferred for INT3 and below, where the error-compensation effect dominates.
+
+---
+
+## 6. Activation quantisation
+
+Beyond weight quantisation, *activations* can also be quantised — meaning matrix multiplication is done in INT8 (or INT4) rather than fp16. This requires int-int GEMM kernels and is more aggressive.
+
+### 6.1 SmoothQuant
+
+Xiao et al. (2022, [arXiv:2211.10438](https://arxiv.org/abs/2211.10438)) observed that activations are hard to quantise (outliers) and weights are easy. *Migrate* the activation difficulty into the weights:
+
+$$
+y \;=\; W x \;=\; \big(W \cdot \mathrm{diag}(s)\big) \cdot \big(\mathrm{diag}(1/s) \cdot x\big).
+$$
+
+Choose $s$ to *flatten* the activation distribution: $s_i = \max(|x_i|)^\alpha / \max(|w_{\cdot,i}|)^{1-\alpha}$, with $\alpha = 0.5$ as a default. Activations after $1/s$ become more uniform; weights after $s$ become slightly less uniform but still well-behaved (because weights start much easier than activations).
+
+After SmoothQuant, both can be quantised to INT8 with $< 0.1$ perplexity-point loss. The kernel runs in INT8 GEMM throughout — $\sim 2\times$ faster than fp16 on H100.
+
+### 6.2 fp8 inference
+
+Hopper (H100) added native fp8 support. INT8 quantisation can be replaced by fp8 weights and activations, with comparable quality and slightly better numerical robustness (the floating-point distribution matches activations better than integer grids do). Production stacks in 2026 increasingly default to **W8A8 fp8** (weights and activations both in fp8) for new deployments on H100/H200.
+
+---
+
+## 7. KV-cache quantisation
+
+The KV cache is the other large fp16 tensor in inference (Cap 10.3). It can be quantised independently of weights:
+
+- **INT8 KV cache.** Halves cache memory; typical perplexity loss $< 0.1$. Standard in modern stacks.
+- **INT4 KV cache.** Quarters cache memory; loss $\sim 0.3$–$0.5$ perplexity points. Used in long-context settings where the cache dominates HBM.
+
+KV cache values have outliers similar to activations. The robust approach: per-token, per-head quantisation with INT8 scales; per-group quantisation for INT4. KIVI (Liu et al., 2024) is one common open-source recipe.
+
+The total memory math: a Llama-3 70B with INT4 weights + INT4 KV cache + GQA-$8$ fits a $32\text{k}$ context at batch $32$ on a single H100. Without quantisation, the same context+batch combination requires $4\times$ the GPU memory.
+
+---
+
+## 8. Practical: which combo to use?
+
+A rough decision tree for production deployment in 2026:
+
+- **fp16 / bf16 weights + fp16 KV cache.** Default for training. For inference, only if you don't care about memory (offline batch jobs at high batch).
+- **INT8 (or fp8) weights + fp16 KV.** Standard baseline for inference. SmoothQuant or AWQ for the weights. Safe.
+- **INT4 (GPTQ or AWQ) weights + INT8 KV.** Production default for chat in 2026. ~$4\times$ weight compression, ~$2\times$ KV compression, $\le 1$ perplexity-point loss.
+- **INT4 weights + INT4 KV cache.** Long-context-heavy deployments. $\sim 1$–$2$ perplexity-point loss; significant savings on long-context HBM.
+- **INT2 / INT3.** Research / hobbyist (llama.cpp's Q3_K, Q2_K). Real quality loss; only worthwhile if HBM is the absolute binding constraint.
+
+---
+
+## 9. What we keep going forward
+
+Three things.
+
+1. **Quantisation maps fp16 → INT4 with a per-channel or per-group scale.** $Q_s(x) = \mathrm{round}(x/s) \cdot s$. Each level of granularity (per-tensor → per-channel → per-group) trades a small memory overhead for a large quality gain.
+2. **Activation outliers break naive INT4 quantisation.** GPTQ compensates greedily via the input Hessian; AWQ rescales channels by activation magnitude before quantising. Both use a small calibration dataset. SmoothQuant migrates outlier difficulty from activations to weights, enabling activation quantisation too.
+3. **The full inference stack in 2026.** INT4 weights (GPTQ/AWQ) + INT8 (or INT4) KV cache + FlashAttention (Cap 10.5). At small batch, weight reads dominate; quantisation directly reduces inference latency. The whole stack pairs with the architectural cache-shrinkage of GQA/MLA from Chapter 8.
+
+Cap 10.7 next: *test-time scaling*. Quantisation cuts cost per token; test-time scaling *spends* more tokens to get higher reasoning quality. The two compose: a quantised reasoning model spends its now-cheaper tokens on longer chains of thought.
+
+<SelfTest>
+
+**(a)** Write the symmetric uniform quantisation primitive $Q_s(x)$. State the scale $s$ chosen by the max-abs rule. What is the maximum per-element quantisation error?
+
+**(b)** Per-tensor vs. per-channel vs. per-group quantisation. State the granularity, the scale-storage overhead, and which is necessary for INT4 (and why).
+
+**(c)** Describe the activation-outlier phenomenon. Why does it break naive per-tensor INT4 weight quantisation?
+
+**(d)** State GPTQ's per-coordinate error-compensation update $w_j \leftarrow w_j - \delta \cdot H_{ij}/H_{ii}$. What does $H$ represent? Why is GPTQ's Cholesky trick necessary?
+
+**(e)** Derive AWQ's invariance: scale input channels by $s$, weights by $1/s$, output unchanged. Why does this enable better per-channel weight quantisation?
+
+**(f)** A production deployment uses Llama-3 70B with INT4 (AWQ) weights + INT8 KV cache + GQA-$8$. Estimate the weight memory and per-token KV-cache memory. How much $32\text{k}$-context batch fits in 80 GB HBM?
+
+</SelfTest>

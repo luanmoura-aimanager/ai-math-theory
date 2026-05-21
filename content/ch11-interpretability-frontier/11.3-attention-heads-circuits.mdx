@@ -1,0 +1,240 @@
+---
+title: "11.3 — Attention heads as bigram, skip-bigram, and copying circuits"
+chapter: 11
+order: 3
+estimatedMinutes: 24
+goal: "Derive the QK and OV circuits of a single attention head in a 1-layer attention-only Transformer. Show that the QK and OV circuits compose into recognisable algorithmic primitives: bigram (look at previous token, predict next), skip-bigram (look at a related token earlier in context, copy or transform), copying (look at a previous token, write its embedding). The first 'algorithm we can read'."
+prerequisites: ["ch11-interpretability-frontier/11.2-residual-stream"]
+---
+
+## 1. Why this session exists
+
+[Cap 11.2](/session/ch11-interpretability-frontier/11.2-residual-stream) gave us the language: residual stream, additive contributions, QK and OV circuits per head. This session puts that language to work on the simplest possible Transformer — *one layer, attention-only, no MLPs* — and shows that even this minimal model implements *recognisable algorithms* in its heads.
+
+The framework is from Elhage et al. (Anthropic, 2021, [*A Mathematical Framework for Transformer Circuits*](https://transformer-circuits.pub/2021/framework/index.html) §2). It is the cleanest possible setting for mech-interp: no MLPs, no inter-layer composition, no MoE, no residual stream chemistry. Just the matrices $W^E, W^Q, W^K, W^V, W^O, W^U$ and the softmax.
+
+By the end of this session you should be able to look at a 1-layer attention-only model and *read off* what each head is computing by inspecting two matrices per head — the QK matrix and the OV matrix — and recognise the bigram, skip-bigram, and copying algorithms.
+
+---
+
+## 2. The 1-layer attention-only Transformer
+
+The minimal model. Token $x_t$ at position $t$. Single attention head with parameters $W^Q, W^K, W^V \in \mathbb{R}^{d_\text{head} \times d_\text{model}}$ and $W^O \in \mathbb{R}^{d_\text{model} \times d_\text{head}}$. Token embedding $W^E \in \mathbb{R}^{d_\text{model} \times |V|}$ (columns = embeddings); unembedding $W^U \in \mathbb{R}^{|V| \times d_\text{model}}$.
+
+Forward pass (ignoring positional encodings and LayerNorm for clarity):
+
+$$
+\begin{aligned}
+h_t^{(0)} &= W^E_{:,x_t} \\
+q_t &= W^Q h_t^{(0)}, \quad k_t = W^K h_t^{(0)}, \quad v_t = W^V h_t^{(0)} \\
+P_{t,s} &= \mathrm{softmax}_s(q_t^\top k_s / \sqrt{d_\text{head}}) \quad \text{(causal mask: } s \le t \text{)} \\
+a_t &= W^O \sum_s P_{t,s} v_s \\
+h_t^{(1)} &= h_t^{(0)} + a_t \\
+\text{logit}_t &= W^U \cdot h_t^{(1)}
+\end{aligned}
+$$
+
+Two "paths" from the input to the logit:
+
+- **Direct path.** $W^U W^E_{:,x_t}$. Logit contribution of the *current token's embedding* alone. Implements a constant "bigram" component — what would the model predict if it only looked at the current token?
+- **Attention path.** $W^U W^O \sum_s P_{t,s} W^V W^E_{:,x_s}$. Logit contribution mediated by attention to other tokens.
+
+This is the *path decomposition* of the model: the logit is a sum of paths through different components.
+
+---
+
+## 3. The OV circuit
+
+The OV ("output-value") circuit is the matrix product
+
+$$
+\boxed{\;W^{OV} \;:=\; W^O W^V \;\in\; \mathbb{R}^{d_\text{model} \times d_\text{model}}\;}
+$$
+
+It tells you: *if token $x_s$ is attended to with weight $1$, what gets written to the residual stream?* The contribution to $h_t^{(1)}$ from attending to position $s$ with weight $P_{t,s} = 1$ is $W^{OV} W^E_{:,x_s}$.
+
+### 3.1 The OV-to-logit composition
+
+To understand the *effect* of attending to $x_s$ on the prediction of $x_{t+1}$, we compose with the unembed:
+
+$$
+\boxed{\;W^{U} \cdot W^{OV} \cdot W^E \;\in\; \mathbb{R}^{|V| \times |V|}\;}
+$$
+
+This is the "OV-output" matrix: entry $(v, w)$ tells you "*if the model attends to a token $w$, how much does the logit for token $v$ change?*"
+
+If the OV-output matrix were diagonal ($\delta_{vw}$), the head would *copy*: attending to token $w$ predicts token $w$ as the next token. If it were the bigram-frequency matrix of natural language, the head would *bigram-predict*: attending to token $w$ predicts whatever statistically follows $w$.
+
+### 3.2 What the OV circuit is *not*
+
+The OV circuit doesn't choose *which* token to attend to. That's the QK circuit's job. OV only says: *given* that some token is attended to, what gets written.
+
+Two heads with the same OV circuit but different QK circuits are computing very different functions — they're applying the same "what" to different "where" choices. Pre-2021 interpretability conflated these; the QK/OV factorisation cleanly separates them.
+
+---
+
+## 4. The QK circuit
+
+The QK ("query-key") circuit is the *bilinear* matrix
+
+$$
+\boxed{\;W^{QK} \;:=\; (W^Q)^\top W^K \;\in\; \mathbb{R}^{d_\text{model} \times d_\text{model}}\;}
+$$
+
+The attention-score between positions $t$ and $s$ is
+
+$$
+q_t^\top k_s \;=\; (W^Q h_t)^\top (W^K h_s) \;=\; h_t^\top \big( (W^Q)^\top W^K \big) h_s \;=\; h_t^\top W^{QK} h_s.
+$$
+
+Pre-softmax, the score is a bilinear form in $(h_t, h_s)$.
+
+### 4.1 The token-token QK score
+
+Composing with embeddings:
+
+$$
+\boxed{\;\text{score}(x_t, x_s) \;=\; (W^E_{:,x_t})^\top W^{QK} (W^E_{:,x_s}) \;\in\; \mathbb{R}\;}
+$$
+
+A $|V| \times |V|$ matrix of pairwise token-token scores. The QK circuit *says*: "score the query position's token against the key position's token using this bilinear form, before softmax."
+
+If this matrix is *highest on the diagonal* ($x_s = x_t$), the head looks for *repetitions* of the current token.
+
+If it is *highest off-diagonal* with specific patterns ("$x_t$ = surname, $x_s$ = matching first name"), the head looks for *related* tokens.
+
+If it is *near-uniform*, the head attends roughly equally to all tokens — a "global summary" head.
+
+### 4.2 Position-token interactions
+
+In models with positional embeddings, the QK score has additional terms. With learned absolute PEs:
+
+$$
+h_t = W^E_{:,x_t} + p_t,
+$$
+
+so
+
+$$
+h_t^\top W^{QK} h_s \;=\; \underbrace{e_{x_t}^\top W^{QK} e_{x_s}}_{\text{token-token}} + \underbrace{e_{x_t}^\top W^{QK} p_s}_{\text{token-position}} + \underbrace{p_t^\top W^{QK} e_{x_s}}_{\text{position-token}} + \underbrace{p_t^\top W^{QK} p_s}_{\text{position-position}}.
+$$
+
+Different "components" of attention live in different terms. The position-position term gives *positional patterns* like "always attend to the previous token" (which a model can implement via a QK matrix that scores $p_{t-1}$ highly when queried by $p_t$).
+
+For RoPE-based models (Cap 6.7), the position-position interactions are baked into a rotation; the decomposition still goes through but with rotation matrices in the bilinear form.
+
+---
+
+## 5. Bigram heads
+
+The simplest algorithmic primitive: **bigram** = "predict the next token from the current token alone".
+
+A head $h$ implements bigram-prediction if:
+
+- Its QK circuit attends almost exclusively to the *current* position ($P_{t,t} \approx 1$).
+- Its OV-output matrix is approximately the empirical bigram-transition matrix of the corpus.
+
+Operationally: the head doesn't really "attend" to anything except itself; the OV-output then writes the most-likely-next-token distribution into the logits.
+
+In a 1-layer attention-only model, you often find $1$–$2$ such heads. They implement the conditional next-token distribution $p(x_{t+1} \mid x_t)$ — exactly the bigram baseline (Cap 5.4).
+
+### 5.1 The direct path is also a bigram
+
+Note: the *direct path* $W^U W^E$ is itself a $|V| \times |V|$ matrix giving "if the input is token $x_t$, what logit boost does each next token get directly from the embedding/unembedding?" In weight-tied models ($W^U = W^E^\top$), this is approximately the inner-product matrix of the embeddings — and the highest-inner-product token to $x_t$ is *itself* (the embedding of $x_t$ is similar to itself). So the direct path's biggest contribution is to predict the *same token repeats*, which is a degenerate bigram.
+
+This is one reason 1-layer models are *bad* at generation — they have nowhere to put a real bigram circuit except in attention heads, and those heads must compete with the direct path's repeat-prediction.
+
+---
+
+## 6. Skip-bigram heads
+
+A **skip-bigram** is a pattern $A \ldots B$ where $A$ and $B$ are *not adjacent*. E.g., "Once upon a time, in a faraway kingdom, there lived a $\_\_$" — the model wants to predict "princess" because "kingdom" is in scope, even though several tokens intervened.
+
+A skip-bigram head implements this:
+
+- Its QK circuit attends from position $t$ to some position $s < t-1$ where $x_s$ is *related* to $x_t$.
+- Its OV-output writes something like *$x_s$* into the logit (or a transformation of it).
+
+Concretely, in Elhage et al.'s 1-layer attention-only model trained on text:
+
+- Several heads attend strongly to the *previous occurrence of the current token* — what you might call a "duplicate-token-detector". When the input has a repeated token $x_t = x_s$ for some earlier $s$, the head fires.
+- Other heads attend to *semantically related* tokens (e.g., from "Paris" to "France" earlier in context).
+
+The OV-output then writes the relevant continuation. For a duplicate-token-detector + copy OV, the algorithm is "if the current token appeared before, predict whatever followed it last time" — a skip-bigram of order 1.
+
+### 6.1 Why this matters
+
+Skip-bigram heads are the *primitive* from which induction heads (Cap 11.4) are built. A 2-layer model can compose a duplicate-token-detector head (in layer 1) with a copy head (in layer 2) to form an induction circuit — a general-purpose mechanism for in-context learning. The composition is the whole point of stacking layers.
+
+---
+
+## 7. Copying heads
+
+A **copying head** is one whose OV-output matrix is approximately diagonal: attending to token $w$ predicts $w$.
+
+Concretely: $W^U W^{OV} W^E \approx \alpha I$ for some scalar $\alpha > 0$. Then attending to $x_s$ adds $\alpha \cdot \mathbb{1}_{x_s}$ to the logit — i.e., the logit of "the next token = $x_s$" is boosted.
+
+Whether the model *predicts* $x_s$ depends on the size of the boost relative to the rest of the logit landscape. Often the boost is large enough that, when the head fires (i.e., the QK circuit selects a specific $s$), the prediction is essentially "copy the attended-to token."
+
+### 7.1 Identifying copying heads empirically
+
+Two diagnostic tests:
+
+- **Eigenvalue structure of $W^U W^{OV} W^E$.** Copying heads have large positive eigenvalues on the diagonal — the matrix is dominated by an identity-like component. Numerically: extract the trace and compare to the spectral norm.
+- **OV-output behaviour on synthetic prompts.** Construct prompts where attending to a specific token is forced (e.g., by token rarity). Check what the head's contribution to the logit is. A copy head boosts the attended-to token's logit.
+
+Both tests are routine in mech-interp toolkits (TransformerLens, Penzai, the Anthropic interpretability stack).
+
+---
+
+## 8. Composition in deeper models
+
+Everything above is for 1-layer attention-only models. The story compounds in deeper models.
+
+### 8.1 K-composition, Q-composition, V-composition
+
+In a 2-layer model, the residual stream after layer 1 contains the embeddings *plus* whatever layer-1 heads wrote. Layer-2 heads read this enriched stream. Three composition modes (Elhage et al., 2021 §4):
+
+- **K-composition.** A layer-2 head's *key* projection reads a layer-1 head's output. The layer-2 head's QK pattern depends on what layer 1 wrote.
+- **Q-composition.** Same, but for *query*.
+- **V-composition.** A layer-2 head's *value* projection reads a layer-1 head's output. The layer-2 head's OV writes are partly built from layer-1 features.
+
+These compositions are the substrate for *circuits*. Induction heads (Cap 11.4) are a K-composition: a layer-2 head's keys read a "previous-token" feature written by a layer-1 head.
+
+### 8.2 Read-write subspace alignment
+
+Whether a layer-1 head's output is *visible* to a layer-2 head depends on whether the layer-1 head's writer subspace overlaps with the layer-2 head's reader subspace. With $d_\text{model} = 4096$ and $d_\text{head} = 128$, each head's writer/reader subspace is $\sim 3\%$ of the total. Most pairs of heads have small overlap; specific *composition pairs* have learned-to-align subspaces and communicate strongly.
+
+Identifying these "communication channels" is one of the structural tools mech-interp uses to find circuits. The subspace-overlap of all pairs (or triples) of heads, computed once per model, gives a sparse graph of likely composition.
+
+<Aside type="note">
+**Why heads end up specialising.** Training pressure encourages heads to find useful and *distinct* roles — if two heads compute the same thing, one of them can be ablated without loss, so gradient pressure pushes them apart. Empirically, heads in trained Transformers tend to spread across the *space of useful functions* — bigram heads, induction heads, name-mover heads, copy-suppression heads, syntactic dependency heads, etc. The specialisation isn't perfect (some heads are polysemantic — they do several things at once) but it's strong enough that you can usually attach a one-sentence functional description to each head in a small model.
+</Aside>
+
+---
+
+## 9. What we keep going forward
+
+Three things.
+
+1. **A head = QK circuit + OV circuit.** QK chooses *what to attend to*; OV chooses *what to write* given an attended-to position. Both are matrices in $\mathbb{R}^{d_\text{model} \times d_\text{model}}$ (or their token-space images, $|V| \times |V|$, via the embeddings).
+2. **Three algorithmic primitives** identifiable in 1-layer attention-only models: bigram (attend to self, predict next), skip-bigram (attend to a related earlier token, predict its continuation), copy (attend to a token, write that token's embedding back).
+3. **Composition in deeper models.** Layer-$\ell$ heads can read what layer-$(\ell-1)$ heads wrote, via K/Q/V-composition. This is the substrate for circuits across layers — the topic of Cap 11.4 (induction heads as the canonical example).
+
+Cap 11.4 next: induction heads. The first identified, *general-purpose*, *cross-layer* algorithm — the 2-head circuit that does in-context pattern matching `A B … A → B`.
+
+<SelfTest>
+
+**(a)** Write the forward pass of a 1-layer attention-only Transformer. Identify the direct path and the attention path through to the logit.
+
+**(b)** Define the OV circuit $W^{OV} = W^O W^V$ and the OV-output matrix $W^U W^{OV} W^E$. What does the $(v, w)$ entry mean?
+
+**(c)** Define the QK circuit $W^{QK} = (W^Q)^\top W^K$ and the token-token score $(W^E_{:,x_t})^\top W^{QK}(W^E_{:,x_s})$. What does a *diagonal-dominant* QK matrix mean operationally?
+
+**(d)** A bigram head: state the QK pattern and the OV-output structure that characterise it.
+
+**(e)** A copying head: state the OV-output structure that characterises it. Give an eigenvalue-based diagnostic test.
+
+**(f)** K-composition between a layer-1 and a layer-2 head: state what it means structurally and why subspace alignment determines whether composition actually happens.
+
+</SelfTest>

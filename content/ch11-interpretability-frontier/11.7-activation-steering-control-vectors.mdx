@@ -1,0 +1,229 @@
+---
+title: "11.7 — Activation steering and control vectors"
+chapter: 11
+order: 7
+estimatedMinutes: 22
+goal: "Turn SAE features into inference-time control: given a feature direction $v \\in \\mathbb{R}^{d_\\text{model}}$, add $\\alpha v$ to the residual stream at chosen layers to steer model behaviour. State the steering recipe, the Golden-Gate-Claude demonstration, and the engineering-vs-alignment trade-off vs RLHF/DPO."
+prerequisites: ["ch11-interpretability-frontier/11.6-sparse-autoencoders"]
+---
+
+## 1. Why this session exists
+
+Cap 11.6 ended with the SAE: a tool for recovering interpretable feature directions $v_i \in \mathbb{R}^{d_\text{model}}$ from trained models. The natural next question: if a feature direction encodes a concept, can we *manipulate* the model's behaviour by manipulating that direction at inference time?
+
+The answer turns out to be *yes, often dramatically*. **Activation steering** — adding a scalar multiple of a feature vector to the residual stream during inference — works as a direct control knob over identified features. The most famous demonstration is **Golden Gate Claude**: Anthropic took the SAE feature for "Golden Gate Bridge" found in Claude 3 Sonnet, multiplied it by a positive scalar, and added it to the residual stream during every forward pass. The resulting model believes it *is* the Golden Gate Bridge and weaves it into every response.
+
+This session derives the technique, places it in the activation-steering literature (Turner et al. 2023 and predecessors), and contrasts it with training-time alignment (RLHF, DPO).
+
+---
+
+## 2. The steering primitive
+
+Given:
+
+- A trained model with residual stream $h^{(\ell)}_t \in \mathbb{R}^{d_\text{model}}$ at layer $\ell$, position $t$.
+- A feature direction $v \in \mathbb{R}^{d_\text{model}}$.
+- A scalar steering coefficient $\alpha \in \mathbb{R}$.
+
+The steering operation is simply:
+
+$$
+\boxed{\;h^{(\ell)}_t \;\leftarrow\; h^{(\ell)}_t \;+\; \alpha \cdot v\;}
+$$
+
+applied at one or more chosen layers $\ell$ and one or more chosen positions $t$ (often all of them).
+
+Equivalently: implement a *forward hook* on the model that injects $\alpha v$ into the residual stream at the chosen layer. Any inference framework supports this (HuggingFace `register_forward_hook`, vLLM custom kernels, Anthropic's API in some configurations).
+
+### 2.1 Three knobs
+
+- **$v$ (which feature).** Chosen from SAE features (Cap 11.6), from probing directions (linear regression of activations against a target label), or from contrast pairs (mean activation on positive examples minus mean activation on negative examples — see §3.2).
+- **$\alpha$ (steering strength).** Sign chooses direction (positive = amplify the feature, negative = suppress); magnitude controls intensity. Typical ranges $\alpha \in [-10, +10]$ at residual-stream scale.
+- **$\ell$ (which layer).** Middle layers (50–70% depth) tend to work best for high-level semantic features; early layers for syntactic; late layers for behavioural/refusal.
+
+### 2.2 Multiple features at once
+
+Steering composes linearly: adding several $\alpha_i v_i$ at the same layer combines their effects. This is the *linear-representation* hypothesis in action — the model treats the residual stream as a vector space, so linear injections compose linearly into the downstream computation.
+
+In practice, composition works well for $\le 5$ features; more starts to interfere with the model's normal computation and produces incoherent output.
+
+---
+
+## 3. Where the steering directions come from
+
+The space of techniques.
+
+### 3.1 SAE features
+
+The cleanest source: a feature recovered by an SAE (Cap 11.6). Each SAE decoder column $W_d[:, i] \in \mathbb{R}^{d_\text{model}}$ *is* a feature direction with a known interpretation. Steering with $\alpha W_d[:, i]$ amplifies (or suppresses) that feature in the model's residual stream.
+
+Templeton et al.'s Golden Gate Claude was the canonical demo. The feature was an SAE decoder column found by their interpretability pipeline; steering it with a large positive $\alpha$ produced the Golden-Gate-obsessed behaviour.
+
+### 3.2 Contrastive activations (CAA)
+
+An older, simpler technique (Rimsky et al., 2023, [arXiv:2312.06681](https://arxiv.org/abs/2312.06681)): no SAE needed.
+
+1. Collect pairs of contrasting prompts (e.g., refusal vs. non-refusal of the same harmful request).
+2. Run the model on both, record residual-stream activations at the chosen layer.
+3. Compute the *difference of means*:
+
+$$
+v_\text{steer} \;=\; \mathbb{E}_{x \in \text{positive}}[h^{(\ell)}(x)] \;-\; \mathbb{E}_{x \in \text{negative}}[h^{(\ell)}(x)].
+$$
+
+The direction $v_\text{steer}$ encodes "the difference between positive and negative examples" in the residual stream — by construction, the direction that maximally separates them.
+
+CAA was the dominant activation-steering technique before SAEs scaled. It still works well for behavioural axes (e.g., sycophancy, refusal, formality) where contrast pairs are easy to construct.
+
+### 3.3 Probing directions
+
+Train a linear probe (logistic regression) to predict a target label from activations:
+
+$$
+y = \sigma(w^\top h^{(\ell)}).
+$$
+
+The weight vector $w$ is the direction along which the target label is decodable. Steering by $\alpha w$ pushes activations along that direction.
+
+Useful for *fine-grained* axes (e.g., "more vs. less formal", "more vs. less confident") where SAE features aren't crisp.
+
+### 3.4 Comparison of sources
+
+| Source | Pros | Cons |
+|---|---|---|
+| SAE feature | Interpretable, fine-grained, recovered without label supervision | Requires training an SAE |
+| Contrastive activations (CAA) | Cheap, no SAE needed | Coarse; requires good contrast-pair dataset |
+| Linear probe direction | Targets specific labels | Requires labelled data |
+
+Production steering work in 2026 typically combines all three — SAE for the most-studied features, CAA for novel behaviours, probes for fine-grained control.
+
+---
+
+## 4. The Golden Gate Claude demonstration
+
+In May 2024, Anthropic released **Golden Gate Claude** as a public demo (briefly, on claude.ai). It was Claude 3 Sonnet with $\alpha \approx 10$ on the SAE feature for "Golden Gate Bridge". The result was theatrical:
+
+User: "What is the meaning of life?"
+Golden Gate Claude: "The meaning of life is to cross the Golden Gate Bridge at sunset. The bridge spans the entrance to San Francisco Bay, and crossing it represents the journey from the everyday into the sublime..."
+
+User: "Write me a recipe for chocolate cake."
+Golden Gate Claude: "Sure! First, gather your ingredients while standing on the Golden Gate Bridge. The fog rolls in over the suspension cables..."
+
+The model's behaviour was *transformed* — every output now revolved around the Golden Gate Bridge — but its other capabilities were *largely intact*. It could still do math, write code, answer factual questions; the answers just got Golden-Gate-flavoured.
+
+### 4.1 What the demo showed
+
+Three things, beyond the entertainment value.
+
+- **Features are causal.** The SAE feature wasn't just a correlate of "Golden Gate Bridge mentions"; manipulating it caused the model to behave as if it were obsessed with the bridge. The feature has *causal role*, not just statistical association.
+- **Behaviour is feature-shaped.** Complex behaviours (an obsession with a topic) can be driven by single feature directions. This is non-obvious; one might have expected such complex behaviour to require many coordinated features.
+- **Steering is composable with normal operation.** The model didn't break; it just got monomaniacal. Math worked, code worked, just everything was Golden-Gate-flavoured. This suggests the feature lives in a relatively independent subspace of the residual stream.
+
+### 4.2 What it didn't show
+
+Steering doesn't reliably produce *useful* behaviour. Golden Gate Claude was deliberately silly; *helpful* steering — making the model more honest, less sycophantic, better at math — is much harder, because the relevant features are less crisp and have stronger interactions with other capabilities.
+
+---
+
+## 5. Steering vs. RLHF/DPO
+
+Steering competes (and composes) with training-time alignment. The comparison.
+
+### 5.1 Training-time alignment (RLHF, DPO — Chapter 9)
+
+- Modifies the *weights*. Effect baked in.
+- Requires substantial training compute (hours to days of GPU time, large preference datasets).
+- Behaviour is averaged over the alignment dataset; per-query tuning is limited.
+- Has reward-hacking failure modes (Cap 9.14).
+
+### 5.2 Inference-time steering
+
+- Modifies the *activations*. Effect is per-query.
+- Zero training cost. Add a forward hook.
+- Behaviour is per-query controllable — different users / queries can get different steering.
+- Can be undone trivially (remove the hook).
+
+### 5.3 When each wins
+
+| | Steering | RLHF/DPO |
+|---|---|---|
+| Persistent behavioural change | Hard (must re-apply every query) | Easy (baked in) |
+| Per-user customisation | Easy | Hard (need separate model per user) |
+| Fine-grained, recoverable | Yes | No (training is destructive) |
+| Robust against jailbreaks | Weakly (can be disabled by hook removal) | Stronger (weights are altered) |
+| Compute cost | Free at inference | Substantial training cost |
+| Quality at fixed quality target | Lower (no fine-tuning) | Higher (weights tuned) |
+
+Production use in 2026:
+
+- **RLHF/DPO** for the *default* behaviour of the model.
+- **Steering** for *modifications* on top: per-user personality, content-policy customisation, A/B testing of behaviours without re-training.
+
+The combination — aligned base + inference-time steering — is the modern shape.
+
+---
+
+## 6. Limits and failure modes
+
+Three.
+
+### 6.1 Steering breaks at large $\alpha$
+
+For $|\alpha|$ above some feature-specific threshold, the model's output becomes incoherent. The injection overwhelms the rest of the residual stream's signal; downstream layers can't compute coherently anymore. Golden Gate Claude at $\alpha = 10$ was theatrical; at $\alpha = 50$ the output would be word salad.
+
+Empirical threshold: typically $|\alpha| \le 5\sigma$ where $\sigma$ is the typical residual-stream norm at that layer. Beyond that, coherence degrades fast.
+
+### 6.2 Subspace overlap creates side effects
+
+Feature directions are not perfectly orthogonal (superposition, Cap 11.5). Steering along $v_i$ also moves the activation along directions correlated with $v_i$. If the "honesty" feature and the "verbosity" feature happen to overlap, amplifying honesty also amplifies verbosity. Disentangling these requires *orthogonalised* steering directions or careful subspace projection.
+
+This is one reason simple steering recipes work less well for nuanced behavioural changes than for crisp identifiable concepts like "Golden Gate Bridge".
+
+### 6.3 Steering doesn't add new capabilities
+
+You can steer behaviour the model *already has* — emphasise it, suppress it, redirect it. You cannot use steering to give the model a capability it doesn't possess: there's no "do correct math" feature to amplify if the model can't do math.
+
+Steering is a *control* tool, not a *capability* tool. RLHF, fine-tuning, and reasoning-model training (Cap 9.7, Cap 10.7) are the capability tools.
+
+<Aside type="note">
+**Why steering is interesting for safety.** It provides a *low-cost*, *reversible*, *per-query* way to test what happens when you turn dials on the model. Researchers can ask: "what if we amplify the deception feature?" and *see what the model would do*, without retraining anything. The same techniques can be used (potentially) to *detect* deception by monitoring the relevant feature's activation. Both are active research areas. Whether steering will scale to high-stakes safety guarantees — versus being a useful research tool — is one of the bigger open questions in mech-interp.
+</Aside>
+
+---
+
+## 7. The 2026 landscape
+
+A snapshot of where activation steering sits in the toolkit.
+
+- **Production deployments.** Mostly internal tools / research, not user-facing. Some commercial APIs expose limited steering (e.g., adjusting "creativity" or "formality" levels via under-the-hood activation-based knobs).
+- **Open-source.** `nnsight`, `TransformerLens`, `EleutherAI/sae-lens` provide steering hooks for LLaMA-family models. The Apollo / Goodfire stacks specialise in commercial steering services.
+- **Mech-interp research.** Steering is the standard validation tool for SAE features. "If our feature for $X$ is real, steering it should produce $X$-flavoured behaviour" is the gold-standard test.
+- **Safety research.** Activation-based detection (monitor whether harmful-intent features fire) and activation-based prevention (suppress them on suspicious inputs) are early-stage but actively developed.
+
+---
+
+## 8. What we keep going forward
+
+Three things.
+
+1. **Activation steering = add $\alpha v$ to the residual stream.** Where $v$ is a feature direction (from SAEs, CAA, or probes) and $\alpha$ is a per-query control coefficient. Implemented as a forward hook; zero training cost.
+2. **The Golden Gate demo proves features are causal.** Manipulating an SAE feature transforms model behaviour in interpretable, predictable ways. This is the strongest evidence that SAE features are *real* — not just statistical correlates but causal handles.
+3. **Steering complements, doesn't replace, alignment.** RLHF/DPO sets defaults; steering modulates per-query. Steering is a *control* tool, limited to behaviours the model already has and limited in magnitude by coherence breakdown at large $\alpha$.
+
+Cap 11.8 next: the *emergent abilities* debate. Are capability jumps real or measurement artefacts? With induction heads (Cap 11.4) as the canonical real-emergence story and the broader debate (Wei vs Schaeffer) as the controversy.
+
+<SelfTest>
+
+**(a)** Write the steering operation $h^{(\ell)}_t \leftarrow h^{(\ell)}_t + \alpha v$. State the three knobs and what each controls.
+
+**(b)** State three sources of steering directions (SAE features, CAA, linear probes). Give one strength and one weakness of each.
+
+**(c)** Describe the Golden Gate Claude demo and the three things it demonstrated about features.
+
+**(d)** Compare activation steering to RLHF on five axes: compute cost, persistence, per-user customisation, robustness against jailbreaks, capability gain.
+
+**(e)** Steering at large $|\alpha|$ breaks coherence. State the rough threshold rule and the mechanism (subspace overload).
+
+**(f)** A team wants to use steering for *safety*: detect harmful intent by monitoring a "harmful-intent" feature's activation. List two practical challenges that complicate this.
+
+</SelfTest>

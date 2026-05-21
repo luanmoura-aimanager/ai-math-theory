@@ -1,0 +1,212 @@
+---
+title: "11.6 — Sparse autoencoders for feature extraction (and scaling to frontier models)"
+chapter: 11
+order: 6
+estimatedMinutes: 26
+goal: "Derive the sparse autoencoder (SAE) as the tool that recovers monosemantic features from superposed activations: encoder $f = \\sigma(W x + b)$ + decoder $x \\approx W^\\top f$ + L1 sparsity penalty. Cover the training-time choices that matter (sparsity weight, expansion factor, dead features) and the scaling story from toy models (Bricken et al., 2023) to Claude 3 Sonnet (Templeton et al., 2024)."
+prerequisites: ["ch11-interpretability-frontier/11.5-superposition"]
+---
+
+## 1. Why this session exists
+
+[Cap 11.5](/session/ch11-interpretability-frontier/11.5-superposition) established the problem: trained networks pack more features than dimensions, using oblique directions and sparsity. Neurons are polysemantic; the right unit of analysis is *features* — directions in activation space.
+
+This session covers the *tool* that extracts those features: the **sparse autoencoder** (SAE). Conceptually simple: train a one-hidden-layer autoencoder on the model's activations, with a sparsity penalty on the hidden activations. The hidden units of the SAE become candidate features.
+
+The pipeline:
+
+1. Run the model on a large dataset. Collect activations $x \in \mathbb{R}^d$ at some chosen layer.
+2. Train an SAE: encoder $f = \mathrm{ReLU}(W_e x + b_e)$, decoder $\hat x = W_d f + b_d$, loss $\|x - \hat x\|^2 + \lambda \|f\|_1$.
+3. Set the hidden dimension $k > d$ — typically $k = 8 d$ to $k = 64 d$ — so the SAE *has room* for more features than the activation has dimensions.
+4. Interpret each hidden unit as a candidate feature; check its activation patterns across inputs.
+
+Bricken et al. ([2023, Anthropic, *Towards Monosemanticity*](https://transformer-circuits.pub/2023/monosemantic-features/index.html)) demonstrated the tool on a $1$-layer Transformer; Templeton et al. ([2024, *Scaling Monosemanticity*](https://transformer-circuits.pub/2024/scaling-monosemanticity/index.html)) scaled to Claude 3 Sonnet and extracted $\sim 10^7$ features. The technique is now standard in mech-interp.
+
+---
+
+## 2. The autoencoder primitive
+
+An autoencoder learns to reconstruct its input through a bottleneck. The standard form:
+
+$$
+\hat x \;=\; \text{Decoder}(\text{Encoder}(x)),
+$$
+
+with parameters trained by $\min \mathbb{E}_x \|x - \hat x\|^2$. The encoder compresses; the decoder reconstructs.
+
+For superposition recovery, we want *expansion*, not compression — the hidden dimension is *larger* than the input. The bottleneck is replaced by a **sparsity bottleneck**: the hidden activations are constrained to be sparse, so most hidden units are zero on any given input.
+
+### 2.1 The SAE architecture
+
+Standard sparse autoencoder (Bricken et al., 2023):
+
+$$
+\begin{aligned}
+f &= \mathrm{ReLU}(W_e (x - b_d) + b_e) \quad \text{(encoder; tied bias)} \\
+\hat x &= W_d f + b_d \quad \text{(decoder)}
+\end{aligned}
+$$
+
+with $W_e \in \mathbb{R}^{k \times d}$, $W_d \in \mathbb{R}^{d \times k}$, $k > d$. The decoder columns $W_d[:, i]$ are unit-norm in most implementations (constrained during training).
+
+The objective:
+
+$$
+\boxed{\;\mathcal{L} \;=\; \underbrace{\|x - \hat x\|_2^2}_{\text{reconstruction}} \;+\; \lambda \underbrace{\|f\|_1}_{\text{sparsity penalty}}\;}
+$$
+
+The L1 penalty pushes most $f_i$ to zero, leaving only a few active per input. This is the classical sparse-coding setup (Olshausen & Field, 1996).
+
+### 2.2 Why this should work
+
+The hypothesis: the network's true feature dictionary $V \in \mathbb{R}^{d \times k_\text{true}}$ is the matrix whose columns are the directions in activation space corresponding to the model's features. If we set the SAE's $k > k_\text{true}$ and train to reconstruct activations sparsely, the optimum has $W_d$ approximating $V$ (up to column reordering and scaling), and $f$ approximating the sparse code of the active features.
+
+This is conjectural — there are degeneracies and ambiguities — but empirically the result is striking: SAE columns *do* recover interpretable feature directions for the vast majority of trained units. The "majority of trained units" caveat is real (some columns are dead, some are duplicates), and is the subject of much practical engineering.
+
+---
+
+## 3. Training details that matter
+
+The naive recipe works but underperforms. Several practical refinements have been adopted.
+
+### 3.1 Dead features
+
+A feature is *dead* if its encoder bias $b_e[i]$ has become so negative that $\mathrm{ReLU}$ never fires for any input. Once dead, it gets no gradient updates and stays dead.
+
+In a naive SAE, a substantial fraction of features die during training — often $30$–$60\%$. The countermeasures:
+
+- **Ghost gradients** (Bricken et al., 2023). For each dead feature, periodically re-initialise its decoder direction in a high-error region of activation space, allowing it to be useful again.
+- **Resampling.** Periodically zero out dead features and re-initialise them with random vectors aligned with reconstruction errors.
+
+Both reduce dead-feature rates to $< 5\%$ in practice.
+
+### 3.2 Sparsity weight $\lambda$
+
+The hyperparameter $\lambda$ controls the L1 strength. The Pareto front:
+
+- Small $\lambda$: high reconstruction quality, low sparsity — many features active per input, polysemantic.
+- Large $\lambda$: low reconstruction quality, high sparsity — few features active, monosemantic but lossy.
+
+The sweet spot depends on the application. For interpretability ("what is this feature?"), sparser is better. For downstream use ("steer the model"), reconstruction quality matters more. Production SAEs target ~$10$–$100$ active features per input.
+
+### 3.3 The expansion factor
+
+$k / d$. Bricken et al. used $k = 8 d$ initially; later work scaled to $k = 64 d$. Larger expansion gives finer-grained features but at higher training cost. Templeton et al. (2024) used $k$ up to $\sim 30$M for Claude 3 Sonnet's residual-stream activations of $d \approx 4096$ — i.e., $k \approx 7300 d$.
+
+Diminishing returns: doubling $k$ above $\sim 16 d$ tends to *split* existing features into finer sub-features (e.g., one "code" feature becomes "Python code", "C code", "JavaScript code") rather than discover entirely new ones. The frontier-model SAE literature is partly about this *feature-splitting* phenomenon.
+
+### 3.4 Top-k vs. L1
+
+A variant — Top-$k$ SAE (Gao et al., 2024, [arXiv:2406.04093](https://arxiv.org/abs/2406.04093)) — replaces the L1 penalty with an explicit constraint: keep only the top-$k$ activations per input, zero the rest.
+
+$$
+f = \mathrm{TopK}(W_e (x - b_d) + b_e, K).
+$$
+
+Top-$k$ SAEs train more reliably (no dead-feature problem; no $\lambda$ tuning), achieve comparable reconstruction at similar sparsity, and have become the default in 2024–2026 production interpretability work.
+
+### 3.5 JumpReLU and other activations
+
+Refinement: the JumpReLU (Rajamanoharan et al., 2024) replaces standard ReLU with a *thresholded* ReLU, $\sigma(x) = x \cdot \mathbb{1}[x > \theta]$, learning the threshold $\theta$ per feature. This decouples the sparsity decision (binary: active or not) from the magnitude (continuous: how much). Empirically tighter Pareto frontier than standard ReLU SAEs.
+
+---
+
+## 4. Interpreting features
+
+Once trained, the SAE has $k$ candidate features. How do you interpret them?
+
+### 4.1 Activation-based naming
+
+For each feature $i$, find the inputs $x$ in the training set that *maximally activate* feature $i$. Examine the top-$N$ activating inputs (typical $N = 20$–$100$) and look for a common theme.
+
+Example feature in GPT-2 small (Bricken-style analysis):
+
+> *Feature 12389: Activates on tokens that are inside a Python list comprehension's expression part. Top examples: `[x**2 for x in ...]`, `[name.upper() for name in ...]`, ...*
+
+The feature has a one-sentence description that captures most of its activations. *Monosemantic* — it does one identifiable thing.
+
+### 4.2 Auto-interpretation
+
+For frontier-scale SAEs (millions of features), manual interpretation is infeasible. Instead, use an LLM (e.g., Claude) to read top-activating examples and propose a description (Bills et al., OpenAI, 2023). The LLM's description is then validated by predicting which novel inputs will activate the feature.
+
+This is "auto-interp"; it's the only way to make SAE analysis tractable at frontier scale. Reliability is imperfect (the LLM sometimes misses subtleties or over-generalises), but good enough to triage millions of features into broad categories.
+
+### 4.3 Causal validation
+
+A feature's *interpretation* must match its *causal role*. A feature labelled "code-related" should, if activated artificially, push the model towards code-like outputs. This is the bridge to activation steering (Cap 11.7).
+
+If the interpretation and the causal effect disagree, the interpretation is wrong (or incomplete). This is the strongest validation tool for SAE features.
+
+---
+
+## 5. The Anthropic scaling story
+
+Bricken et al. (2023) trained SAEs on a $1$-layer Transformer; identified thousands of interpretable features. The natural question: does this work at scale?
+
+Templeton et al. ([2024, Anthropic, *Scaling Monosemanticity*](https://transformer-circuits.pub/2024/scaling-monosemanticity/index.html)) answered yes. They trained SAEs on the residual stream of Claude 3 Sonnet — a frontier model. Headlines:
+
+- $\sim 1$M features at $k = 4{\rm M}$, scaling to $\sim 34$M features at $k = 34{\rm M}$.
+- Features for: famous people (Steve Jobs, Beyoncé), countries (USA, Japan), concepts (deception, persuasion, internal conflict), syntactic patterns (function arguments, dialogue), languages, file types, and many more.
+- The famous "Golden Gate Bridge" feature: a single direction that activates whenever the Golden Gate Bridge is mentioned. Activated artificially, it makes the model write about the Golden Gate Bridge regardless of the prompt — leading to "Golden Gate Claude", a deliberately mis-steered model variant released as a demo.
+
+The scale of feature discovery matched what the toy-model superposition theory predicted. The frontier model is *also* in superposition; SAEs *also* recover the features; the same techniques transfer.
+
+### 5.1 Cross-layer transcoders
+
+A 2024 extension: train SAE-like decoders that read activations at one layer and *predict* activations at a later layer, exposing the *transformations* a network performs on features (not just the features themselves). These "transcoders" expose pieces of circuits — how a feature in layer 8 gets transformed into a derived feature in layer 12.
+
+This is the bridge from feature-extraction (one SAE per layer) to *circuit identification* (an end-to-end feature-flow story). The 2024–2026 frontier is integrating these.
+
+---
+
+## 6. What SAEs can and can't do
+
+### 6.1 What they do well
+
+- Recover *thousands to millions* of interpretable features from arbitrary trained models.
+- Provide a *causal handle* (via activation steering) for many of those features.
+- Identify *behaviour-relevant* features for safety analysis: which features mediate harmful behaviour, jailbreak resistance, deception detection, etc.
+- Scale to frontier models (Claude 3 Sonnet, GPT-4-class models).
+
+### 6.2 What they don't (yet) do
+
+- **Recover all features.** SAEs miss features the network represents but the SAE's loss isn't sensitive to. Especially: features that are *important for computation* but rarely active have low L1 footprint and get under-represented.
+- **Identify circuits.** A feature is a vertex; a circuit is a graph. SAEs find vertices; circuit-tracing tools layer on top.
+- **Provide complete coverage.** Even at $k = 30M$, frontier-model SAEs are estimated to recover $50\%$–$90\%$ of the model's features. The long tail of rare, computation-specific features remains hidden.
+- **Generalise across distributions.** An SAE trained on web text recovers different features than one trained on code. Multi-distribution SAEs are an active research area.
+
+### 6.3 The cost
+
+Training an SAE for a frontier model is not cheap. Templeton et al. (2024) describe SAE training runs that cost a substantial fraction of a model-pretraining run — on the order of $10^{22}$–$10^{23}$ FLOPs. This is a real engineering investment, on the same order as a fine-tuning run.
+
+By 2026, frontier labs treat SAE training as a standard step in the model-evaluation pipeline — every major model release includes an SAE analysis.
+
+<Aside type="note">
+**Why SAEs matter for safety.** The promise: once you can name features for "deception", "harmful intent", "Wuhan-coronavirus-genome-synthesis", you can monitor whether these features are active on a given input, and you can causally steer the model away from them. Cap 11.7 covers activation steering, the engineering payoff. The safety story still requires (i) you've recovered the right features, (ii) the features really mediate the behaviour you care about, (iii) the steering doesn't have unwanted side effects. Each of these is an active research question; none is solved. But SAEs make the right-shaped question *answerable*, which is the precondition for any answer at all.
+</Aside>
+
+---
+
+## 7. What we keep going forward
+
+Three things.
+
+1. **A sparse autoencoder is the right tool for superposition recovery.** Encoder + decoder + L1 (or top-$k$) sparsity, expansion factor $k > d$. Trained on a model's activations, it recovers interpretable features as encoder rows / decoder columns.
+2. **Scaling works.** Bricken et al. (2023) on toy models → Templeton et al. (2024) on Claude 3 Sonnet. Frontier-scale models can be SAE-analysed; millions of interpretable features can be extracted.
+3. **SAEs find features, not circuits.** A feature is one direction; a circuit is a graph of feature-to-feature transformations. Cross-layer transcoders and circuit-tracing tools layer on top of SAEs to recover the *flow* of computation. Cap 11.7 next: with features identified, *activation steering* turns features into control knobs.
+
+<SelfTest>
+
+**(a)** Write the standard SAE architecture: encoder, decoder, loss. State the dimensions of $W_e$, $W_d$, and the relationship between $k$ and $d$.
+
+**(b)** Why is the expansion factor $k > d$ essential? Why is reconstruction-only training insufficient (i.e., why the L1 penalty)?
+
+**(c)** State two practical problems in SAE training (dead features, sparsity-vs-reconstruction trade-off) and a mitigation for each.
+
+**(d)** Top-$k$ SAEs: state the architectural change and one reason they have largely replaced L1 SAEs in 2024–2026.
+
+**(e)** Auto-interpretation pipeline: state how an LLM is used to label SAE features. What's the validation step that checks the label is correct?
+
+**(f)** Templeton et al. (2024) extracted $\sim 10^7$ features from Claude 3 Sonnet with $d \approx 4096$. State the expansion factor and the implication for superposition severity in frontier models.
+
+</SelfTest>

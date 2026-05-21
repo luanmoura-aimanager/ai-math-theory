@@ -1,0 +1,249 @@
+---
+title: "10.2 — Sampling: temperature, top-k, top-p (nucleus)"
+chapter: 10
+order: 2
+estimatedMinutes: 22
+goal: "Derive the temperature-rescaled softmax; state and contrast top-k and top-p (nucleus) truncation; show why nucleus sampling solves the heavy-tail problem that beam search exposes; give the practical defaults used in production LLM serving."
+prerequisites: ["ch10-inference-decoding/10.1-greedy-beam", "ch1-linear-models-perceptron/1.7-softmax"]
+---
+
+## 1. Why this session exists
+
+[Cap 10.1](/session/ch10-inference-decoding/10.1-greedy-beam) closed with the beam search curse: the argmax of a calibrated LM is degenerate; the *typical set* of the distribution is where the interesting samples live. The fix is to *sample* from the model rather than maximise.
+
+But naive sampling from the full softmax has its own pathology: a small probability mass on the *tail* of $|V| = 32\text{k}$ tokens is, in aggregate, large. Each step has a non-trivial chance of emitting a low-quality, off-topic token, and conditioning on it can derail the entire continuation.
+
+The classical fix has three controls, each correcting a different failure mode:
+
+- **Temperature** $T$ — sharpens or flattens the distribution before sampling.
+- **Top-$k$** — restricts sampling to the $k$ most-probable tokens.
+- **Top-$p$ (nucleus)** — restricts sampling to the smallest set whose cumulative probability is $\ge p$.
+
+This session derives all three from the next-token logits, characterises when each fails, and arrives at the modern default: **temperature + top-$p$**.
+
+---
+
+## 2. The base distribution
+
+Recall ([1.7](/session/ch1-linear-models-perceptron/1.7-softmax), [5.3](/session/ch5-sequence-modeling/5.3-language-modeling-objective)): the LM produces logits $z = f_\theta(x, y_{<t}) \in \mathbb{R}^{|V|}$ and the next-token probability is the softmax
+
+$$
+\pi_\theta(v \mid x, y_{<t}) \;=\; \frac{\exp(z_v)}{\sum_{v' \in V} \exp(z_{v'})}.
+$$
+
+For a well-trained LM at any given step, the empirical shape is heavy-tailed: a handful of tokens carry, say, $60$–$90\%$ of the mass; the remaining $|V| - O(10)$ tokens share the rest. The tail is what we need to truncate.
+
+---
+
+## 3. Temperature
+
+Insert a scalar $T > 0$ into the softmax:
+
+$$
+\boxed{\;\pi_\theta^{(T)}(v) \;=\; \frac{\exp(z_v / T)}{\sum_{v'} \exp(z_{v'} / T)}\;}
+$$
+
+### 3.1 Limits
+
+- $T \to 0^+$: $\pi^{(T)}$ concentrates on $\arg\max_v z_v$. Sampling becomes greedy.
+- $T = 1$: the model's calibrated distribution. The default.
+- $T \to \infty$: $\pi^{(T)}$ approaches the uniform distribution over $V$. Each token equally likely.
+
+### 3.2 Effect on entropy
+
+The entropy of $\pi^{(T)}$ is a monotonically increasing function of $T$:
+
+$$
+\frac{d}{dT} H\big(\pi^{(T)}\big) \;\ge\; 0,
+$$
+
+with equality only when the distribution is uniform. (This follows from the fact that the softmax with temperature is the maximum-entropy distribution given a fixed *expected* energy $\mathbb{E}[z_V]$; the energy decreases as $T$ grows, so entropy grows.) The practical interpretation: higher $T$ means more uncertain, more diverse, more creative; lower $T$ means more confident, more deterministic, more conservative.
+
+### 3.3 Calibration
+
+If the LM is *well-calibrated* (a strong empirical property of pretrained LLMs — see [Cap 7](/session/ch7-training-language-models/7.14-gpt3-paper-read)), then $T = 1$ samples in proportion to the LM's belief about the data distribution. Deviating from $T = 1$ deliberately *miscalibrates* the model — for good reasons (control over creativity, conservatism for facts) but with an explicit cost.
+
+For *aligned* (RLHF/DPO-trained) models, calibration is partially broken — the policy is sharper than the underlying distribution, so $T = 1$ already behaves somewhat greedy. Production deployments often use $T \in [0.5, 1.0]$ for chat and $T \in [0.0, 0.3]$ for code/math.
+
+<Aside type="note">
+**Why temperature alone isn't enough.** Suppose the next-token distribution has $0.7$ on "Paris", $0.2$ on "the capital", and $0.0001$ spread across $30{,}000$ junk tokens. With $T = 1$, the junk tail has $\approx 3\%$ aggregate mass. Over $T = 1024$ generation tokens, the probability of *at least one* junk emission is $1 - 0.97^{1024} \approx 1$. Pure temperature sampling on a long generation is essentially guaranteed to emit at least one off-distribution token. Hence the need for *truncation*: top-$k$ and top-$p$.
+</Aside>
+
+---
+
+## 4. Top-$k$ sampling
+
+Restrict to the $k$ tokens with the largest logits and renormalise:
+
+```
+Top-k(π, k):
+    S = indices of top-k entries of π
+    π̃_v = π_v / sum_{v' ∈ S} π_{v'} for v ∈ S
+    π̃_v = 0 otherwise
+    return π̃
+```
+
+Then sample $v \sim \pĩ$. With temperature, the pipeline is *logits → temperature → top-$k$ → renormalise → sample*.
+
+### 4.1 Cost
+
+Top-$k$ over $|V|$ logits with $k \ll |V|$ is $O(|V| \log k)$ via a min-heap, or $O(|V|)$ via partial selection (`torch.topk`). Negligible compared to a forward pass through a multi-billion-parameter model.
+
+### 4.2 The failure mode
+
+Top-$k$ is *context-insensitive*: the same $k$ is applied whether the distribution is sharp ("Paris" with $0.95$) or flat (next token in mid-sentence with no strong continuation).
+
+- **Sharp distribution.** $k = 50$ is overkill; the top $\sim 3$ tokens carry all the mass; tokens $4$–$50$ are tail noise that we'd rather exclude.
+- **Flat distribution.** $k = 50$ may be too restrictive; the *real* distribution puts non-trivial mass on tokens $51$–$200$ (think: a list-item continuation where many words are equally plausible).
+
+Top-$k$ is the right shape (truncate the tail) with the wrong threshold rule (fixed $k$). Top-$p$ fixes the threshold rule.
+
+---
+
+## 5. Top-$p$ (nucleus) sampling
+
+Holtzman et al. ([2019, arXiv:1904.09751](https://arxiv.org/abs/1904.09751)) — the paper that named the beam search curse — proposed *nucleus sampling*. The truncation set is the smallest subset whose cumulative probability is $\ge p$:
+
+$$
+\boxed{\;S_p \;=\; \arg\min_{S \subseteq V} \big\{|S| : \pi_\theta(v) \text{ sorted descending,} \sum_{v \in S} \pi_\theta(v) \ge p \big\}\;}
+$$
+
+Algorithmically:
+
+```
+TopP(π, p):
+    sort π descending: π_(1) ≥ π_(2) ≥ ...
+    find smallest m such that ∑_{i=1}^m π_(i) ≥ p
+    π̃_(i) = π_(i) / ∑_{j=1}^m π_(j) for i ≤ m
+    π̃_(i) = 0 for i > m
+    return π̃
+```
+
+### 5.1 Context-sensitivity
+
+The size $|S_p|$ adapts to the shape of $\pi_\theta$:
+
+- **Sharp distribution.** "Paris" with $0.95$: $|S_{0.9}| = 1$. Only "Paris" is in the nucleus.
+- **Flat distribution.** $1000$ tokens each at $\approx 10^{-3}$: $|S_{0.9}| \approx 900$.
+
+The truncation set is *small when the model is confident* and *large when uncertain*. This matches the linguistic intuition we want — never sample from the tail when the model is sure, but allow exploration when the model genuinely has multiple options.
+
+### 5.2 Cost
+
+Sort once per step: $O(|V| \log |V|)$. Modern implementations use radix sort or selective sort, making this comparable to a softmax forward pass — still negligible.
+
+### 5.3 Defaults
+
+Production deployments converged on roughly:
+
+- $p \in [0.9, 0.95]$ for general chat.
+- $p \in [0.95, 1.0]$ with low temperature for creative writing.
+- $p = 1$ with $T = 0$ (i.e., greedy) for tasks demanding determinism.
+
+---
+
+## 6. Combining the knobs
+
+The standard pipeline at inference:
+
+$$
+z \;\xrightarrow{\;/T\;}\; z/T \;\xrightarrow{\;\text{top-}k\;}\; \text{mask tail} \;\xrightarrow{\;\text{top-}p\;}\; \text{mask further} \;\xrightarrow{\;\text{softmax}\;}\; \pĩ \;\xrightarrow{\;\sim\;}\; v.
+$$
+
+Top-$k$ and top-$p$ are typically applied *together*: top-$k$ caps the maximum candidate set size (a safety rail against the pathological flat distribution where top-$p$ alone would allow $1000$+ candidates), top-$p$ does the adaptive truncation within that cap.
+
+A typical OpenAI-API-style invocation: $T = 0.7$, top-$p = 0.95$, top-$k = 50$.
+
+### 6.1 Min-$p$ sampling
+
+A more recent variant ([Nguyen et al., 2024, arXiv:2407.01082](https://arxiv.org/abs/2407.01082)): set a *floor* $p_{\min}$ relative to the maximum probability. Token $v$ is in the candidate set iff
+
+$$
+\pi_\theta(v) \;\ge\; p_{\min} \cdot \max_{v'} \pi_\theta(v').
+$$
+
+This is even more adaptive than top-$p$: a token with $0.0001$ absolute probability is *kept* if the max is $0.001$, but *dropped* if the max is $0.9$. Min-$p$ is now the default in some open-source serving stacks (LM Studio, llama.cpp); top-$p$ remains the default in the OpenAI API and HuggingFace.
+
+---
+
+## 7. Repetition penalties and bans
+
+Sampling does not by itself eliminate repetition — only reduces it. Two post-hoc patches:
+
+**Repetition penalty.** Multiply the logits of tokens that have appeared in the recent context by a factor:
+
+$$
+z_v' \;=\; \begin{cases} z_v / \rho & v \in \text{recent context, } z_v > 0 \\ z_v \cdot \rho & v \in \text{recent context, } z_v \le 0 \\ z_v & \text{otherwise} \end{cases}
+$$
+
+with $\rho \in [1.0, 1.5]$ (the sign-dependent formulation, due to Keskar et al. CTRL, 2019, handles both positive and negative logits correctly). At $\rho = 1$ this is a no-op; larger $\rho$ more aggressively suppresses repetition. Common in narrative-text generation.
+
+**N-gram blocking.** Disallow tokens whose continuation would form an $n$-gram that already appeared in the context. Used in summarisation (where verbatim copying is undesirable beyond short spans) and translation.
+
+Both are crude — they manipulate the distribution *outside* the model's calibrated belief — but cheap and effective. RLHF/DPO models often need less of this than pretrained models.
+
+---
+
+## 8. Sampling and the typical set
+
+Tying back to [10.1 §5.1](/session/ch10-inference-decoding/10.1-greedy-beam): the argmax of a high-entropy distribution is atypical; the typical set is where mass concentrates. Sampling from $\pi_\theta$ produces sequences whose per-token log-probability is approximately $-H(\pi_\theta)$ — i.e., from the typical set.
+
+Truncation (top-$k$/top-$p$) re-shapes the sampling distribution to *exclude* the implausible tail (which is the source of low-quality emissions) while *preserving* the typical-set property (the result still has high entropy on the candidate set).
+
+This is the right mental model: sampling stays in the typical set; beam search exits it towards the mode; truncation trims a *small* tail that is responsible for most of the catastrophic failures.
+
+<Aside type="history">
+**Why nucleus sampling caught on.** Holtzman et al. (2019) presented top-$p$ alongside the beam search curse. Their plots compared beam, greedy, pure sampling, top-$k$, top-$p$, and human text on three axes: perplexity (likelihood under the LM), Zipf coefficient (vocabulary distribution shape), and self-BLEU (diversity). Pure sampling matched human text on perplexity; top-$p$ matched human text on Zipf and self-BLEU *and* preserved fluency. Greedy/beam matched human text on none. The community switched within a year — GPT-2 release in 2019 already used top-$p$ defaults.
+</Aside>
+
+---
+
+## 9. Worked example: a single step
+
+Suppose the model gives raw logits
+
+$$
+z = (4.0, 3.0, 1.0, 0.5, 0.0, -1.0, \ldots),
+$$
+
+with the rest of the $|V|$ logits at or below $-2$.
+
+**Step 1: temperature.** With $T = 0.7$, $z/T = (5.71, 4.29, 1.43, 0.71, 0.0, -1.43, \ldots)$. The softmax peaks more sharply.
+
+**Step 2: softmax.** Compute $\exp(z/T)$ and normalise. The top-6 probabilities (rounded) are $\pi = (0.660, 0.159, 0.009, 0.004, 0.002, 0.0005)$ plus the tail.
+
+**Step 3: top-$k = 50$.** The top-50 contains all of the displayed tokens and 44 tail entries. Total mass $\approx 0.835 + \text{tail}$. After renormalisation, the top-2 dominate.
+
+**Step 4: top-$p = 0.9$.** Cumulative sums: $0.660, 0.819, 0.828, 0.832, \ldots$. We need cumulative $\ge 0.9$, so we keep going until we reach $0.9$. With sharp distributions the nucleus typically ends up at $|S_p| = 2$ or $3$.
+
+**Step 5: sample.** Sample from the (re-normalised) nucleus. With probability $\approx 0.80$ we emit the top token; with $\approx 0.19$ the second; with the residual the third or beyond.
+
+The whole pipeline is $O(|V|)$ or $O(|V| \log |V|)$ per step — milliseconds per token even at $|V| = 128\text{k}$.
+
+---
+
+## 10. What we keep going forward
+
+Three things.
+
+1. **Sampling, not argmax.** Calibrated LMs have heavy-tailed next-token distributions; the argmax is atypical and degenerate; sampling stays in the typical set. This is the empirical and information-theoretic answer to the beam search curse.
+2. **Temperature scales sharpness; top-$k$ and top-$p$ truncate the tail.** The standard pipeline is $T \in [0.5, 1.0]$, top-$p \in [0.9, 0.95]$, top-$k \in [40, 100]$ as a safety rail. Min-$p$ is a newer alternative.
+3. **Repetition penalties are post-hoc patches.** Useful in narrative generation; RLHF/DPO models need less of them than raw pretrained LMs.
+
+The remaining sessions in this chapter are *engineering*: how to run a forward pass quickly enough to sample at scale. Cap 10.3 starts with the KV cache, the foundation of every modern inference stack.
+
+<SelfTest>
+
+**(a)** Write the temperature-rescaled softmax. State its $T \to 0$ and $T \to \infty$ limits in one sentence each.
+
+**(b)** Why does pure temperature sampling almost-surely emit a tail token over a $1024$-token generation? Give the order-of-magnitude calculation.
+
+**(c)** Define top-$p$ truncation by formula. Contrast with top-$k$ on (i) a sharp distribution (mass concentrated on 2 tokens) and (ii) a flat distribution (mass spread across 1000 tokens).
+
+**(d)** A production stack uses $T = 0.7$, top-$p = 0.95$, top-$k = 50$. Walk through one decode step on logits $z = (5, 4, 2, 1, 0, -1, \ldots)$, computing the candidate set at each stage.
+
+**(e)** Explain why "sampling stays in the typical set" while "beam search exits it towards the mode". Use the entropy of the source as the reference scale.
+
+**(f)** Min-$p$ keeps tokens with $\pi_\theta(v) \ge p_{\min} \cdot \max_{v'} \pi_\theta(v')$. State one case where min-$p$ is more adaptive than top-$p$ and one where top-$p$ is fine.
+
+</SelfTest>

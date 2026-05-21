@@ -1,0 +1,299 @@
+---
+title: "12.2 — Re-implement the Transformer block from scratch"
+chapter: 12
+order: 2
+estimatedMinutes: 35
+goal: "Write a Transformer block — embeddings, causal multi-head attention, FFN, residual + pre-norm, unembed — from scratch in PyTorch, using only Chapter 6 as your reference. Do not peek at nanoGPT. The artefact is your own `tiny_gpt.py` that is functionally compatible with nanoGPT's `model.py`."
+prerequisites: ["ch12-capstone-tiny-gpt/12.1-nanogpt-setup", "ch6-attention-transformer/6.11-transformer-block-aiayn"]
+---
+
+## 1. Why this session exists
+
+This is the consolidation exercise of the entire course. You will write — in your own words, your own variable names, your own structure — a working decoder-only Transformer block from scratch. No peeking at `nanoGPT/model.py`, no peeking at HuggingFace `modeling_gpt2.py`, no peeking at code search.
+
+The rules:
+
+1. Reference material: Chapters 6.1–6.11 (attention, multi-head, FFN, residual, pre/post-norm), Cap 5.3 (LM objective), Cap 2.1 (MLP composition). Nothing else.
+2. Output: a Python file `tiny_gpt.py` that implements `class TinyGPT(nn.Module)` with the same input/output signature as nanoGPT's `GPT` class (token IDs in, logits out).
+3. Verification: at the end of the session, your model should be droppable into nanoGPT's `train.py` and train to comparable loss in comparable time.
+
+If you can do this, you understand the architecture. If you can't — review Chapter 6, then try again. *Do not skip this exercise.*
+
+---
+
+## 2. The spec
+
+You're implementing a decoder-only Transformer with:
+
+- Token embedding: $V \times d_\text{model}$.
+- Learned positional embedding: $n_\text{ctx} \times d_\text{model}$. (We'll swap to RoPE in 12.4.)
+- $L$ identical blocks, each with:
+  - LayerNorm before attention (pre-norm).
+  - Multi-head causal self-attention with $H$ heads.
+  - Residual add.
+  - LayerNorm before FFN.
+  - Feed-forward with hidden dim $d_\text{ff} = 4 d_\text{model}$ and GELU activation.
+  - Residual add.
+- Final LayerNorm.
+- Unembedding (weight-tied to token embedding).
+
+Output: logits of shape $(B, T, V)$.
+
+Public interface:
+
+```python
+class TinyGPT(nn.Module):
+    def __init__(self, config): ...
+    def forward(self, idx, targets=None):
+        """
+        idx: (B, T) long tensor of token IDs
+        targets: optional (B, T) long tensor for computing loss
+        returns: (logits, loss) where loss is None if targets is None
+        """
+        ...
+    def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None):
+        """Autoregressive sampling. (B, T) → (B, T + max_new_tokens)."""
+        ...
+```
+
+Use a `config` namespace (e.g., a small dataclass) with: `vocab_size, block_size, n_layer, n_head, n_embd, dropout, bias`. Match nanoGPT's `GPTConfig` for drop-in compatibility.
+
+---
+
+## 3. Recipe (the things you should derive, not look up)
+
+Don't read the recipe below as a fill-in-the-blanks. Try the implementation cold first; consult the recipe only if stuck.
+
+### 3.1 The embedding layer
+
+Two `nn.Embedding`s: token embedding `wte` of shape $(V, d_\text{model})$ and positional embedding `wpe` of shape $(n_\text{ctx}, d_\text{model})$.
+
+In forward: `tok = wte(idx)`, `pos = wpe(torch.arange(T))`, sum them, dropout.
+
+### 3.2 The attention layer
+
+The interface: input $x$ of shape $(B, T, d_\text{model})$, output of shape $(B, T, d_\text{model})$.
+
+Internals:
+
+- One linear projection $W^{QKV}: \mathbb{R}^{d_\text{model}} \to \mathbb{R}^{3 d_\text{model}}$, split into $Q$, $K$, $V$ each of shape $(B, T, d_\text{model})$.
+- Reshape into $(B, H, T, d_\text{head})$ with $d_\text{head} = d_\text{model} / H$.
+- Scaled dot product: $S = Q K^\top / \sqrt{d_\text{head}}$. Shape $(B, H, T, T)$.
+- Causal mask: $S \leftarrow S + M$ where $M_{ij} = 0$ if $j \le i$ else $-\infty$. (You can use `torch.tril` to build the mask once.)
+- Softmax along the last dim: $P = \text{softmax}(S)$.
+- Attention output: $A = P V$. Shape $(B, H, T, d_\text{head})$.
+- Reshape back to $(B, T, d_\text{model})$.
+- One output projection $W^O$. Dropout.
+
+Alternative for the attention itself: PyTorch ≥ 2.0 has `F.scaled_dot_product_attention(q, k, v, is_causal=True)` which uses FlashAttention (Cap 10.5) when available. *Use it once you have the manual version working*, for speed.
+
+### 3.3 The FFN
+
+Two linear layers with GELU between:
+
+```python
+class FFN(nn.Module):
+    def __init__(self, d_model, d_ff, dropout):
+        super().__init__()
+        self.fc1 = nn.Linear(d_model, d_ff)
+        self.fc2 = nn.Linear(d_ff, d_model)
+        self.act = nn.GELU()
+        self.drop = nn.Dropout(dropout)
+    def forward(self, x):
+        return self.drop(self.fc2(self.act(self.fc1(x))))
+```
+
+$d_\text{ff} = 4 d_\text{model}$ is the standard ratio. (Cap 6.8.)
+
+### 3.4 The block
+
+```python
+class Block(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.ln1 = nn.LayerNorm(config.n_embd)
+        self.attn = CausalSelfAttention(config)
+        self.ln2 = nn.LayerNorm(config.n_embd)
+        self.mlp = FFN(config.n_embd, 4 * config.n_embd, config.dropout)
+    def forward(self, x):
+        x = x + self.attn(self.ln1(x))
+        x = x + self.mlp(self.ln2(x))
+        return x
+```
+
+Pre-norm (Cap 6.10) — LayerNorm is applied inside the residual branch, not on the residual stream itself.
+
+### 3.5 The full model
+
+```python
+class TinyGPT(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.wte = nn.Embedding(config.vocab_size, config.n_embd)
+        self.wpe = nn.Embedding(config.block_size, config.n_embd)
+        self.drop = nn.Dropout(config.dropout)
+        self.blocks = nn.ModuleList([Block(config) for _ in range(config.n_layer)])
+        self.ln_f = nn.LayerNorm(config.n_embd)
+        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+        # Weight tying
+        self.lm_head.weight = self.wte.weight
+        # Init
+        self.apply(self._init_weights)
+    def _init_weights(self, module):
+        if isinstance(module, nn.Linear):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            if module.bias is not None:
+                torch.nn.init.zeros_(module.bias)
+        elif isinstance(module, nn.Embedding):
+            torch.nn.init.normal_(module.weight, mean=0.0, std=0.02)
+    def forward(self, idx, targets=None):
+        B, T = idx.shape
+        assert T <= self.config.block_size
+        pos = torch.arange(0, T, dtype=torch.long, device=idx.device)
+        x = self.drop(self.wte(idx) + self.wpe(pos))
+        for block in self.blocks:
+            x = block(x)
+        x = self.ln_f(x)
+        logits = self.lm_head(x)
+        loss = None
+        if targets is not None:
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
+        return logits, loss
+```
+
+(Weight initialisation: GPT-2's recipe uses $\mathcal{N}(0, 0.02^2)$ for linears and embeddings. Cap 2.10 covers init theory; the $0.02$ specifically is GPT-2's convention.)
+
+### 3.6 The `generate` method
+
+Greedy + temperature + top-$k$ sampling, per Cap 10.2:
+
+```python
+def generate(self, idx, max_new_tokens, temperature=1.0, top_k=None):
+    for _ in range(max_new_tokens):
+        idx_cond = idx if idx.size(1) <= self.config.block_size else idx[:, -self.config.block_size:]
+        logits, _ = self(idx_cond)
+        logits = logits[:, -1, :] / temperature
+        if top_k is not None:
+            v, _ = torch.topk(logits, top_k)
+            logits[logits < v[:, [-1]]] = -float('inf')
+        probs = F.softmax(logits, dim=-1)
+        idx_next = torch.multinomial(probs, num_samples=1)
+        idx = torch.cat((idx, idx_next), dim=1)
+    return idx
+```
+
+Simpler than nanoGPT's full version (no top-$p$, no KV cache); enough for Cap 12.3.
+
+---
+
+## 4. Verification
+
+Drop your `tiny_gpt.py` into `nanoGPT/`. Edit `train.py`'s import line from `from model import GPTConfig, GPT` to:
+
+```python
+from tiny_gpt import GPTConfig, TinyGPT as GPT
+```
+
+(Or rename your classes to match.) Run:
+
+```bash
+python train.py config/train_shakespeare_char.py
+```
+
+You should see:
+
+- The model has $\sim 10.6$M parameters (matching the baseline).
+- Initial loss $\sim 4.2$ (random softmax over $\sim 65$-char vocab gives $-\log(1/65) \approx 4.17$).
+- Loss decreases similarly to the baseline run from Cap 12.1.
+- After $5000$ steps, val loss $\sim 1.5$.
+- `python sample.py --out_dir=out-shakespeare-char` produces Shakespeare-flavoured output.
+
+If any of these fail, the bug is in your implementation. Common bugs:
+
+- **Wrong causal mask shape.** Should be $(T, T)$ broadcast across $(B, H, T, T)$. Off-by-one (masking the diagonal instead of above-diagonal) is the classic error.
+- **Forgot to divide by $\sqrt{d_\text{head}}$.** Loss won't decrease; gradients blow up.
+- **Reshape ordering wrong.** When splitting $(B, T, 3 d_\text{model})$ into $Q$, $K$, $V$ and then heads, the order of reshape vs. transpose matters. The standard order: `(B, T, 3, H, d_head) → permute → (3, B, H, T, d_head) → split → Q, K, V each (B, H, T, d_head)`.
+- **Weight-tying not applied.** Model trains, but parameter count is wrong and quality is slightly worse. Re-check `self.lm_head.weight = self.wte.weight`.
+- **Wrong init scale.** Trains but slowly. Use $\sigma = 0.02$ for linears and embeddings.
+
+Don't move on until your model trains.
+
+---
+
+## 5. The "no peeking" rule, taken seriously
+
+The whole point of this session is that you write the code from understanding, not from copying. If you find yourself reading `nanoGPT/model.py`, *stop*. Close the file. Re-read Cap 6.1–6.11 instead.
+
+Two reasons:
+
+1. **The retention effect.** Code copied is forgotten; code derived is remembered. If you want this material to stick, the only way is to *produce* it under self-evaluation.
+2. **The bug-finding effect.** When your implementation is wrong, you have to *understand why* to fix it. Reading reference code doesn't teach this; debugging your own does.
+
+If your code differs *structurally* from nanoGPT after you're done — different naming, different organisation, different `generate` design — *that's fine*. The reference is canonical for the architecture, not for the code organisation.
+
+---
+
+## 6. The hardest part
+
+Empirically, the hardest single step in this exercise is the *shapes*. PyTorch broadcasting rules and the multiple equivalent ways to reshape $(B, T, H \cdot d_\text{head})$ create many opportunities to get the heads in the wrong axis.
+
+The trick that works for most people:
+
+```python
+# Input: x ∈ (B, T, d_model)
+q = self.q_proj(x).view(B, T, self.n_head, self.d_head).transpose(1, 2)
+# now q ∈ (B, n_head, T, d_head)
+# similarly for k, v
+attn = (q @ k.transpose(-2, -1)) / math.sqrt(self.d_head)
+attn = attn.masked_fill(self.mask[:T, :T] == 0, float('-inf'))
+attn = F.softmax(attn, dim=-1)
+out = attn @ v
+# out ∈ (B, n_head, T, d_head)
+out = out.transpose(1, 2).contiguous().view(B, T, self.d_model)
+out = self.out_proj(out)
+```
+
+Walk through each shape on paper before running. If you can write down the shape at each line, the code is correct.
+
+---
+
+## 7. Optional refinements
+
+Once your model trains, optional improvements:
+
+- **Use `F.scaled_dot_product_attention`.** Three lines shorter, $\sim 2\times$ faster (FlashAttention under the hood). Cap 10.5.
+- **Use `nn.Linear(bias=False)` for the projections.** GPT-2 uses biases; modern (Llama-style) doesn't. Both work.
+- **Use `nn.Embedding` weight initialisation matching GPT-2's NORM $\sigma$ of $0.02$.** Already in the recipe.
+
+Don't refactor beyond legibility — you'll want to read this code in 12.3, 12.4, and 12.5.
+
+<Aside type="note">
+**Why "from scratch" matters more for this than for, say, Adam.** You don't need to implement Adam from scratch to *use* Adam well — `torch.optim.AdamW` is fine, and the math you derived in Cap 3.5 is enough conceptual ownership. But the Transformer is the *core* of everything Chapters 6–11 discuss. If you can write it without looking, you've completed the loop from theory to artefact. If you can't, the theory hasn't quite landed.
+</Aside>
+
+---
+
+## 8. What we keep going forward
+
+Three things.
+
+1. **`tiny_gpt.py` is your own.** Drop-in compatible with nanoGPT's training scaffold, written from scratch using only Chapter 6 as reference. The artefact that proves you can derive the architecture, not just describe it.
+2. **Standard architecture choices.** Pre-norm, GELU, weight-tied unembed, $d_\text{ff} = 4 d_\text{model}$, learned positional embedding. These are the GPT-2 defaults; you'll upgrade to RoPE + RMSNorm in 12.4.
+3. **Verification by training.** Your model should train to comparable loss in comparable time to the baseline. If it doesn't, the bug is yours to find. Cap 12.3 next: train it for real, sample, and inspect what it has learned.
+
+<SelfTest>
+
+**(a)** Without looking at your code, write the four lines of attention computation: $S = Q K^\top / \sqrt{d_\text{head}}$, causal mask, softmax, $A = P V$. State the shape of each intermediate.
+
+**(b)** Why does pre-norm (LayerNorm inside the residual branch) train more stably than post-norm? (Cap 6.10.)
+
+**(c)** Weight tying: state the relationship $W_U = W_E^\top$. Why does it reduce parameter count, and why is it considered to help quality on character-level tasks?
+
+**(d)** Initial training loss should be $\sim 4.2$ for a $65$-character vocabulary. Derive that number from the expected per-position cross-entropy of a uniform softmax.
+
+**(e)** A common bug: forgetting to divide by $\sqrt{d_\text{head}}$ before the softmax. What pathology does this produce in training? (Cap 6.2.)
+
+**(f)** Verify your implementation trains to val loss $\sim 1.5$ in $\sim 5000$ steps. If not, identify and fix the bug *without* peeking at `nanoGPT/model.py`.
+
+</SelfTest>

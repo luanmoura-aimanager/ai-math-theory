@@ -1,0 +1,215 @@
+---
+title: "12.3 — Train on tinyshakespeare"
+chapter: 12
+order: 3
+estimatedMinutes: 25
+goal: "Train your `TinyGPT` from 12.2 on the Shakespeare character dataset. Watch the loss curve, sample from intermediate checkpoints to feel the qualitative progression, and characterise what a $10$M-parameter character-LM does and doesn't learn."
+prerequisites: ["ch12-capstone-tiny-gpt/12.2-reimplement-transformer-block"]
+---
+
+## 1. Why this session exists
+
+You have working infrastructure (12.1) and your own model (12.2). Now train it, watch the loss go down, and look at what it produces along the way.
+
+The training itself is mechanical. The point of this session is *what you observe* — the qualitative progression of model capability as loss decreases, the per-checkpoint sampling that lets you "feel" the architecture working. This is the closest you'll get in this course to *seeing* a language model learn.
+
+By the end you should have a sense of: how long a tiny model takes to train to fluent character-level Shakespeare, what plateaus on the loss curve correspond to behaviourally, and what categories of error a $10$M-parameter character LM exhibits.
+
+---
+
+## 2. Setup
+
+Assuming Cap 12.2's `tiny_gpt.py` is in the `nanoGPT/` directory and wired into `train.py`. Confirm:
+
+```bash
+cd nanoGPT
+python -c "from tiny_gpt import TinyGPT; print('ok')"
+```
+
+Use the existing Shakespeare-char config but tighten the eval cadence so you can sample more often:
+
+```python
+# config/train_shakespeare_char.py — edit these lines
+eval_interval = 250        # eval every 250 steps (default 250 — ok)
+eval_iters = 200           # 200 batches to compute val loss
+log_interval = 10          # log every 10 steps
+always_save_checkpoint = False  # only save when val loss improves
+n_layer = 6
+n_head = 6
+n_embd = 384
+block_size = 256
+batch_size = 64
+max_iters = 5000
+lr_decay_iters = 5000
+warmup_iters = 100
+learning_rate = 1e-3       # the GPT-2-style 6e-4 also works; 1e-3 is faster for tiny models
+min_lr = 1e-4
+```
+
+Run training:
+
+```bash
+python train.py config/train_shakespeare_char.py
+```
+
+On a $\sim 30$xx-series GPU: $\sim 3$ minutes. On a CPU: $\sim 30$ minutes.
+
+---
+
+## 3. Watching the loss curve
+
+A reference training trajectory (your exact numbers will vary):
+
+| Step | Train loss | Val loss |
+|---|---|---|
+| 0 | 4.27 | 4.27 |
+| 100 | 2.71 | 2.74 |
+| 500 | 1.74 | 1.83 |
+| 1000 | 1.35 | 1.55 |
+| 2000 | 1.03 | 1.49 |
+| 3500 | 0.79 | 1.48 |
+| 5000 | 0.62 | 1.47 |
+
+A few things to notice.
+
+### 3.1 The early steep drop
+
+From step 0 to step ~$500$, val loss drops from $4.27$ to $\sim 1.83$. This is the model learning *unigram* and *bigram* statistics of the corpus — which characters are common, which character pairs are common. About $50\%$ of the total achievable loss reduction happens here.
+
+The dominant feature is the per-character entropy of English text, $\sim 1$–$2$ bits per character ($\sim 0.7$–$1.4$ nats). A unigram model would hit $\sim 3.0$ val loss; a bigram model $\sim 2.3$; a 4-gram $\sim 1.8$. So the model has reached approximately *4-gram* statistics by step 500.
+
+### 3.2 The slower middle
+
+From step ~$500$ to step ~$2000$, val loss drifts down to $\sim 1.5$. This is the model learning *longer-range* statistics: word completion, simple syntactic patterns, character-name conventions ("DUKE OF YORK:" formatting).
+
+### 3.3 The plateau
+
+After step ~$2000$, val loss is essentially flat at $\sim 1.5$. Training loss continues to decrease (it reaches $\sim 0.6$); the gap is overfitting. The model is *memorising* the training corpus rather than learning new structure.
+
+This is the limit of what a $10$M-parameter character model can learn from $1$ MB of Shakespeare. Bigger models or more data would extend the curve; we won't.
+
+---
+
+## 4. Sampling along the trajectory
+
+Modify `sample.py` to load a checkpoint by step. The cleanest way: configure `train.py` to save checkpoints at $\{500, 1000, 2000, 5000\}$ steps (look for the `save_checkpoint` logic and add intermediate saves). Then:
+
+```bash
+python sample.py --out_dir=out-shakespeare-char --checkpoint=ckpt_step500.pt --start="ROMEO:" --max_new_tokens=200
+```
+
+### 4.1 Step 500 (val loss $\sim 1.83$, ~bigram level)
+
+> *ROMEO: he the his and the of the for to the so and a thes of and the andd the the the and an*
+
+Recognisable English-ish character distribution. No word boundaries enforced beyond what the model picked up. Lots of "the", spaces look syntactically random.
+
+### 4.2 Step 1000 (val loss $\sim 1.55$)
+
+> *ROMEO: I shall not be the king of the lord that is the day of the world, and the king of the king, and the lord of the king of the king...*
+
+Words now well-formed. Articles, pronouns, common nouns. No coherent meaning, but the local statistics are clearly working. Repetition is a problem — model is greedy-trapped on high-frequency words.
+
+### 4.3 Step 2000 (val loss $\sim 1.49$)
+
+> *ROMEO: O, what a sight is this! my lord, I am not so unhappy as I am, and the king is not so much as a king.*
+
+Multi-clause structure appearing. Some flavour of Shakespearean diction ("O, what a sight"). Still no coherent argument across sentences, but local coherence is high. Repetition still present but less severe.
+
+### 4.4 Step 5000 (val loss $\sim 1.47$)
+
+> *ROMEO: I am not the man that I was, for I have been a fool. The world is full of strange things, and I cannot find the way to my home. JULIET: Why, my lord, what is the matter? ROMEO: Nothing, my dear; only a thought that came to me as I was reading the play.*
+
+Inter-character dialogue is now well-formed. Period-correct vocabulary, multiple speakers, plausible turn-taking. Still no coherent plot, but the *format* of Shakespeare is solidly internalised.
+
+---
+
+## 5. Failure modes to characterise
+
+Spend $\sim 15$ minutes sampling from your trained model with various prompts. Catalogue the failure modes — useful both for understanding what character-level models can/can't do and for setting up the Chapter 12.4 / 12.5 upgrades.
+
+### 5.1 Pathology checklist
+
+- **Repetition loops.** The model emits the same phrase repeatedly. Especially at low temperature. (Cap 10.1 §5: the beam-search curse, also relevant to greedy decoding.)
+- **Character drift.** The model starts as one character and gradually becomes another. No persistent identity tracking.
+- **Inconsistent facts.** "King of France" → "queen of France" → "King of England" within a paragraph. The model has no consistent world model.
+- **Verbatim corpus copying.** Especially with very low temperature. The model has memorised chunks of the training text. (Detect by grepping outputs against the training corpus.)
+- **Off-corpus tokens.** Characters outside the training vocabulary appear in completions. Rare with character-level (~$65$-char vocab); more common with BPE.
+
+### 5.2 What works well
+
+- Local fluency. Word formation, common-collocation patterns, basic sentence structure.
+- Genre/format mimicry. The "Shakespeare-flavour" is convincing in surface texture.
+- Common-word distribution. The output's word frequencies roughly match Shakespeare's.
+
+### 5.3 What doesn't
+
+- Plot coherence.
+- Cross-paragraph reference resolution.
+- Factual consistency.
+- Long-range arithmetic, logic, or planning.
+
+These limits are not patches you can apply at $10$M parameters. They are *structural* — character LMs at this scale don't have the capacity for what we'd call "understanding." Scale (Cap 7.11–7.12), better architecture (Cap 12.4 RoPE/RMSNorm/GQA), better data, and alignment (12.5 mini-RLHF) all help; none individually changes the qualitative picture.
+
+---
+
+## 6. Comparing to nanoGPT's baseline
+
+Re-run the baseline (`nanoGPT/model.py`) for comparison. With the same config and seed, your `TinyGPT` should produce nearly identical loss curves — within $\sim 5\%$ of the baseline val loss. If yours is *substantially worse*, something is wrong with your implementation; debug.
+
+A useful diagnostic: param count. Both implementations should report the same number ($\sim 10.6$M for the default config). If yours is different, you've miscounted weight-tying or layer construction.
+
+Sampling should also be qualitatively similar — same Shakespeare-flavoured pseudo-text, same failure modes.
+
+---
+
+## 7. Optional experiment: scale comparison
+
+If you have GPU time, try a smaller and a larger variant:
+
+- **Tiny** ($n_\text{layer}=2$, $n_\text{embd}=128$): ~$0.4$M params. Val loss caps around $1.9$. Output is much less coherent — barely word-level.
+- **Medium** ($n_\text{layer}=12$, $n_\text{embd}=768$): ~$85$M params. Val loss reaches $\sim 1.3$. Output noticeably more coherent — multi-paragraph structure, occasional plausible narratives.
+
+This is your own miniature scaling law (Cap 7.11). Two data points won't give you a clean curve, but the trend is visible: more parameters → lower loss → better output. The slope flattens; the absolute level keeps improving.
+
+---
+
+## 8. Saving the artefact
+
+For Cap 12.4, you'll modify the architecture. For Cap 12.5, you'll fine-tune. Both will compare against the trained baseline. So save:
+
+- `out-shakespeare-char/ckpt.pt` — the trained model.
+- A `baseline_samples.txt` with $\sim 10$ sample generations at temperature 0.8, top-$k$ = 50, max new tokens = 500. The "before" state for 12.4.
+- The loss curve as a plot (matplotlib is fine). Useful for the write-up in 12.6.
+
+These are the *artefacts* of the capstone. They will be improved on by the next two sessions.
+
+<Aside type="note">
+**The pedagogical payoff of watching the curve.** You've now seen loss go from $4.27$ to $1.47$, and you've sampled the model at multiple points along the way. You can say, with first-hand knowledge, what character-level Shakespearean text looks like at $1.83$ vs. $1.49$ val loss. This grounds every cross-entropy number you've encountered in the course (Chapters 0.7, 5.3, 7.11–7.14) in a *feeling*. The Chinchilla scaling-law graph (Cap 7.12) is no longer abstract — you've now run *one point* on it yourself.
+</Aside>
+
+---
+
+## 9. What we keep going forward
+
+Three things.
+
+1. **The training curve has structure.** Early steep drop (unigram/bigram), slower middle (longer-range syntax and format), final plateau (overfitting). Sampling at intermediate checkpoints reveals the qualitative progression.
+2. **Character-LM failure modes are structural.** Repetition loops, character drift, factual inconsistency, lack of plot coherence. These don't go away with more steps at fixed scale; they require scale, architecture, or alignment improvements.
+3. **The baseline is now an artefact.** Trained model + samples + loss curve. Cap 12.4 next: upgrade to RoPE and RMSNorm and feel the difference.
+
+<SelfTest>
+
+**(a)** A reference val-loss trajectory ends at $\sim 1.47$. Compute the rough perplexity ($e^{1.47}$). What does this mean operationally for character-level prediction?
+
+**(b)** Why does val loss plateau while train loss continues to decrease? Name the standard mitigation (Cap 3.A) and explain why it isn't applied here.
+
+**(c)** Sampling at step 500 vs. step 5000: describe the qualitative differences in three observable axes (word formation, multi-sentence coherence, format).
+
+**(d)** List four failure modes characteristic of $10$M-parameter character LMs. For each, state whether scale alone, architecture, alignment, or data is the most likely cure.
+
+**(e)** A scale comparison ($0.4$M vs $10.6$M vs $85$M) gives a miniature scaling-law data point. Estimate the val-loss slope per $\log_{10}$ parameters from these three points.
+
+**(f)** Save the artefacts (checkpoint, samples, loss curve plot). These will be compared against Cap 12.4's upgraded model and Cap 12.5's fine-tuned model.
+
+</SelfTest>

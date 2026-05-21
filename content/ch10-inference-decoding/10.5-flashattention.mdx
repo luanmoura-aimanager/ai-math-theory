@@ -1,0 +1,233 @@
+---
+title: "10.5 — FlashAttention: I/O-aware attention"
+chapter: 10
+order: 5
+estimatedMinutes: 26
+goal: "Derive the FlashAttention algorithm: a tiled, online-softmax formulation of exact attention that avoids materialising the $n \\times n$ score matrix. Understand the GPU memory hierarchy (HBM vs SRAM), the I/O complexity argument, and the empirical $2$–$4\\times$ wall-clock speedup with $O(n)$ SRAM."
+prerequisites: ["ch6-attention-transformer/6.2-scaled-dot-product-attention", "ch6-attention-transformer/6.12-compute-and-memory"]
+---
+
+## 1. Why this session exists
+
+Standard scaled dot-product attention ([6.2](/session/ch6-attention-transformer/6.2-scaled-dot-product-attention)) for sequence length $n$, head dimension $d$:
+
+$$
+\text{Attn}(Q, K, V) \;=\; \text{softmax}\!\left(\frac{Q K^\top}{\sqrt{d}}\right) V \;\in\; \mathbb{R}^{n \times d}.
+$$
+
+The textbook implementation materialises the score matrix $S = Q K^\top / \sqrt{d} \in \mathbb{R}^{n \times n}$ and the softmax-normalised matrix $P = \text{softmax}(S) \in \mathbb{R}^{n \times n}$ in GPU memory.
+
+Two problems:
+
+1. **Memory.** $n \times n$ floats. At $n = 8\text{k}$, $P$ is $64$M entries — $128$ MB in fp16 *per head per layer*. With $16$ heads × $32$ layers × batch $4$, the attention matrices alone occupy $\sim 256$ GB. Larger than any single GPU.
+2. **Memory bandwidth.** Even when $P$ fits, writing it to HBM and reading it back is the dominant cost. The actual matmul FLOPs are *fast*; moving $P$ through the GPU's $\sim 2$ TB/s HBM bandwidth is the wall.
+
+FlashAttention (Dao et al., 2022, [arXiv:2205.14135](https://arxiv.org/abs/2205.14135); FlashAttention-2: Dao, 2023, [arXiv:2307.08691](https://arxiv.org/abs/2307.08691); FlashAttention-3: Shah et al., 2024, [arXiv:2407.08608](https://arxiv.org/abs/2407.08608)) reformulates the attention computation to *never materialise* $S$ or $P$ in HBM. Instead, it tiles the computation in on-chip SRAM, using an *online softmax* that updates a running maximum and sum as it streams through key/value blocks.
+
+The result: exact attention (same numerical output as the standard implementation, up to rounding), $O(n)$ HBM memory, and $2$–$4\times$ wall-clock speedup on H100 / A100. By 2026, every production inference and training stack uses FlashAttention as the default attention kernel.
+
+---
+
+## 2. The GPU memory hierarchy
+
+The cost model. An NVIDIA A100 SXM has roughly:
+
+| Level | Size | Bandwidth |
+|---|---|---|
+| Registers | per-thread | — |
+| SRAM (shared memory + L1) | $\sim 192$ KB per SM × 108 SMs = $\sim 20$ MB | $\sim 19$ TB/s aggregate |
+| L2 cache | $40$ MB | $\sim 9$ TB/s |
+| HBM (GPU global memory) | $80$ GB | $\sim 2$ TB/s |
+
+H100 is similar, with $\sim 228$ KB SRAM per SM, $50$ MB L2, $80$ GB HBM, and $\sim 3$ TB/s HBM bandwidth.
+
+The hierarchy is steeper than CPUs: SRAM is $\sim 10\times$ faster than HBM but $4000\times$ smaller. **Any algorithm that fits its working set in SRAM runs roughly an order of magnitude faster than one that bounces through HBM.**
+
+Standard attention fits its working set in HBM: it has to, because $n \times n$ doesn't fit in SRAM for any non-trivial $n$.
+
+FlashAttention's bet: *tile the computation so each tile's working set fits in SRAM, and stream the inputs/outputs from/to HBM only at tile boundaries*. The tile loads cost something — but at most $O(n)$ total HBM I/O per attention head, instead of $\Theta(n^2)$.
+
+---
+
+## 3. Online softmax
+
+The mathematical core of FlashAttention is **online softmax** — computing $\text{softmax}(x)$ in a streaming fashion, processing one block at a time.
+
+### 3.1 The numerically stable softmax
+
+The standard numerically stable computation:
+
+$$
+m \;=\; \max_i x_i, \quad \ell \;=\; \sum_i \exp(x_i - m), \quad p_i \;=\; \exp(x_i - m) / \ell.
+$$
+
+Subtracting $m$ avoids overflow in the exponentials. Two passes over $x$: one to find $m$, one to compute $\ell$ and $p$.
+
+### 3.2 The online (one-pass) form
+
+Suppose we receive $x$ in blocks $x^{(1)}, x^{(2)}, \ldots$. Maintain a running max $m$ and running normaliser $\ell$:
+
+$$
+\begin{aligned}
+m^{(0)} &= -\infty, \quad \ell^{(0)} = 0, \\
+m^{(b)} &= \max\big(m^{(b-1)}, \max_i x_i^{(b)}\big), \\
+\ell^{(b)} &= \ell^{(b-1)} \cdot \exp(m^{(b-1)} - m^{(b)}) + \sum_i \exp(x_i^{(b)} - m^{(b)}).
+\end{aligned}
+$$
+
+The update rule: when the max grows from $m^{(b-1)}$ to $m^{(b)}$, the old normaliser must be *rescaled* by $\exp(m^{(b-1)} - m^{(b)})$ — because all earlier exponentials were computed with the smaller max as the reference.
+
+After processing all blocks, $m^{(B)}$ is the true max and $\ell^{(B)}$ is $\sum_i \exp(x_i - m^{(B)})$. One pass; same answer as the two-pass form.
+
+### 3.3 Online softmax for the attention output
+
+In attention, we don't actually need $P = \text{softmax}(S)$ as an explicit matrix — we need $O = P V$. So we extend the online softmax to also update a running *output*:
+
+$$
+\begin{aligned}
+O^{(0)} &= 0, \\
+O^{(b)} &= O^{(b-1)} \cdot \frac{\ell^{(b-1)}}{\ell^{(b)}} \cdot \exp(m^{(b-1)} - m^{(b)}) + \sum_i \exp(x_i^{(b)} - m^{(b)}) v_i^{(b)} / \ell^{(b)}.
+\end{aligned}
+$$
+
+After all blocks, $O^{(B)} = \sum_i p_i v_i = O$.
+
+The rescaling factor $\exp(m^{(b-1)} - m^{(b)})$ accumulates the correction every time a block raises the max. **This is the trick that makes FlashAttention work**: streaming attention output, no intermediate score matrix.
+
+---
+
+## 4. FlashAttention: the algorithm
+
+Tile $Q \in \mathbb{R}^{n \times d}$ into row-blocks of size $B_r$: $Q^{(1)}, \ldots, Q^{(T_r)}$ with $T_r = \lceil n / B_r \rceil$.
+Tile $K, V \in \mathbb{R}^{n \times d}$ into row-blocks of size $B_c$: $K^{(1)}, \ldots, K^{(T_c)}$ and $V^{(1)}, \ldots, V^{(T_c)}$.
+
+Block sizes are chosen so that one $Q^{(i)}$ block plus one $K^{(j)}$ block plus one $V^{(j)}$ block fits in SRAM: $B_r \cdot d + 2 B_c \cdot d + B_r \cdot B_c + B_r \le M_\text{SRAM}/p$, where $M_\text{SRAM}$ is the SRAM budget per program. Typical $B_r = B_c = 64$ or $128$ on A100.
+
+```
+FlashAttention(Q, K, V):
+    initialize O, ℓ, m  in HBM
+    for j = 1, ..., T_c:                     # outer loop over KV blocks
+        load K^{(j)}, V^{(j)} to SRAM
+        for i = 1, ..., T_r:                  # inner loop over Q blocks
+            load Q^{(i)} to SRAM
+            load O^{(i)}, ℓ^{(i)}, m^{(i)} (the running stats for Q block i)
+            compute S^{(i,j)} = Q^{(i)} K^{(j)⊤} / √d   in SRAM
+            apply causal mask if applicable
+            m_new = max(m^{(i)}, rowmax(S^{(i,j)}))
+            P̃ = exp(S^{(i,j)} - m_new)
+            ℓ_new = exp(m^{(i)} - m_new) ℓ^{(i)} + rowsum(P̃)
+            O_new = (exp(m^{(i)} - m_new) ℓ^{(i)} / ℓ_new) * O^{(i)} + (1/ℓ_new) * P̃ V^{(j)}
+            write back O^{(i)} = O_new, ℓ^{(i)} = ℓ_new, m^{(i)} = m_new
+    return O
+```
+
+Note: the *outer* loop is over $K, V$ blocks; the *inner* loop is over $Q$ blocks. (FlashAttention-2 reverses this — see §6.) Each output block $O^{(i)}$ is updated $T_c$ times (once per $K, V$ block).
+
+### 4.1 I/O complexity
+
+How many HBM bytes are read/written?
+
+- $Q$ loaded once per $K, V$ block: $T_c \cdot n \cdot d$ bytes total (each $Q^{(i)}$ is $B_r d$, summed over $i$ gives $n d$; that's per outer iter; $T_c$ outer iters).
+- $K, V$ loaded once each: $2 n d$ bytes.
+- $O, \ell, m$ loaded and written $T_c$ times: $\sim 3 T_c n d$ bytes.
+
+Total HBM I/O: $\Theta(T_c \cdot n \cdot d) = \Theta(n^2 d / B_c)$.
+
+Compare to standard attention, which reads/writes $\Theta(n^2)$ bytes for the score matrix and $\Theta(nd)$ for $Q$, $K$, $V$, $O$ — total $\Theta(n^2 + nd)$.
+
+For $B_c \sim 64$ and $d \sim 128$, FlashAttention's I/O is roughly $2\times$ smaller than standard. That's the lower bound. The *actual* speedup is larger ($2$–$4\times$ measured) because the avoided I/O is the dominant cost — the matmul FLOPs were never the bottleneck.
+
+<Aside type="note">
+**The I/O lower bound.** Dao et al. proved that any algorithm computing exact attention to $\sim$ machine precision requires $\Omega(n^2 d^2 / M)$ HBM accesses, where $M$ is the SRAM size. FlashAttention's $\Theta(n^2 d^2 / M)$ matches this lower bound — it is *I/O-optimal* for exact attention.
+</Aside>
+
+### 4.2 SRAM working-set sanity check
+
+One outer-loop iteration loads $K^{(j)}, V^{(j)}$ ($2 B_c d$ floats) and one inner-loop iteration loads $Q^{(i)}, O^{(i)}, \ell^{(i)}, m^{(i)}$ ($B_r d + B_r d + 2 B_r$ floats) and computes $S^{(i,j)} \in \mathbb{R}^{B_r \times B_c}$ and $P̃ \in \mathbb{R}^{B_r \times B_c}$.
+
+Total floats in SRAM: $2 B_c d + 2 B_r d + 2 B_r B_c + 2 B_r$.
+
+For $B_r = B_c = 128$, $d = 64$ (typical head dim), fp16 (2 bytes): $\sim (2 \cdot 128 \cdot 64 + 2 \cdot 128 \cdot 64 + 2 \cdot 128 \cdot 128 + 2 \cdot 128) \cdot 2 \approx 130$ KB. Fits in an A100 SM's $\sim 164$ KB SRAM. Tuning $B_r, B_c$ is the hot loop of any FlashAttention implementation.
+
+---
+
+## 5. Backward pass
+
+Training needs gradients. Backprop through standard attention is straightforward but expensive — it requires the full $P \in \mathbb{R}^{n \times n}$.
+
+FlashAttention's backward pass *recomputes* $S$ and $P$ on-the-fly per tile, the same way the forward did, rather than caching them. This is the "recomputation" half of "FlashAttention: tiling + recomputation". The backward needs only $O, \ell, m$ from the forward pass (saved per row-block of $Q$, $O(n)$ total memory), plus $Q, K, V$ themselves.
+
+### 5.1 Activation memory savings
+
+The activation memory of standard attention training scales as $\Theta(n^2)$ (the full $P$ is saved for backprop). FlashAttention drops this to $\Theta(n)$. At long context $n = 16\text{k}$+, this is the *enabling* property — long-context training is feasible only because the attention activation memory is $O(n)$.
+
+---
+
+## 6. FlashAttention-2 and FlashAttention-3
+
+The original FlashAttention had two known inefficiencies on modern GPUs: low GPU occupancy (one program per attention head, with not enough threads to fill the SM) and non-matmul overhead (rescaling, exp, comparisons).
+
+**FlashAttention-2** (Dao, 2023, [arXiv:2307.08691](https://arxiv.org/abs/2307.08691)) fixes both:
+
+- Loop order swapped — outer over $Q$, inner over $K, V$. Each $Q^{(i)}$ block now produces its final output before moving on, eliminating the running-update overhead per outer iteration.
+- Parallelisation across the sequence dimension as well as batch and heads, to better fill the SM.
+- Non-matmul work reduced via algebra.
+
+Result: $\sim 2\times$ throughput vs. FlashAttention-1 on A100; $\sim 50$–$70\%$ of theoretical peak FLOPs.
+
+**FlashAttention-3** (Shah et al., 2024, [arXiv:2407.08608](https://arxiv.org/abs/2407.08608)) targets H100. Adds asynchronous warp specialisation (some warps load while others compute), low-precision (fp8) intermediates, and fine-grained pipelining of the GEMM and softmax steps. Reaches $\sim 75\%$ of H100 peak — roughly $740$ TFLOP/s in fp16, $1.2$ PFLOP/s in fp8.
+
+---
+
+## 7. FlashAttention at inference
+
+FlashAttention is most commonly thought of as a *training* speedup, but it matters at inference too — particularly during **prefill** ([10.3 §3](/session/ch10-inference-decoding/10.3-kv-cache-implementation)), where the model processes a long prompt in one forward.
+
+At prefill, the score matrix is $L_\text{prompt} \times L_\text{prompt}$ — exactly the $n \times n$ problem FlashAttention was designed for. Without FlashAttention, prompt processing for an $8\text{k}$ prompt would materialise $64$M-entry softmax matrices per head per layer; with it, it tiles through SRAM.
+
+At **decode**, the query is a single token; the *score matrix* is $1 \times t$, not $t \times t$. FlashAttention still wins because the $K, V$ matrix is large ($t \times d$) and FlashAttention's I/O-aware reads of the cache are faster than the textbook implementation. FlashDecoding (a variant tuned for decode) reorganises the kernel further for the $1 \times t$ shape.
+
+---
+
+## 8. Variants and what they cover
+
+FlashAttention spawned a family of variants:
+
+- **FlashDecoding** (Tri Dao et al., 2023): decode-specialised kernel, splits the KV cache across SMs for better parallelism on long-context decode.
+- **FlashAttention-Causal** (early variant, now folded into FA-2): exploits the causal mask to skip half the work.
+- **PagedAttention** ([10.8](/session/ch10-inference-decoding/10.8-continuous-batching-paged-attention), Kwon et al., vLLM, 2023): combines block-paged KV cache with FlashAttention-style kernel for non-contiguous cache layouts.
+- **FlexAttention** (PyTorch 2.5, 2024): a compiler-style API allowing custom mask functions while inheriting FlashAttention's I/O properties — used for sliding-window, prefix-LM, ALiBi, etc.
+
+By 2026 the abstraction has stabilised: every modern attention kernel is some derivative of FlashAttention's tiling + online-softmax recipe.
+
+<Aside type="history">
+**Why this paper changed the field.** FlashAttention was the moment the community accepted that *I/O complexity*, not FLOPs, was the binding constraint on Transformer training and inference. The paper's analysis frame — the GPU memory hierarchy as a first-class object, attention as an I/O problem — became standard. By 2024, "I/O-aware" was a required adjective in any new kernel paper.
+</Aside>
+
+---
+
+## 9. What we keep going forward
+
+Three things.
+
+1. **The GPU memory hierarchy is the cost model.** HBM is $\sim 10\times$ slower than SRAM and $4000\times$ larger. Standard attention pays the HBM cost on the $n \times n$ score matrix; FlashAttention pays only $\Theta(n^2 d / M)$ HBM I/O — I/O-optimal.
+2. **Online softmax + tiling = exact attention without materialising $P$.** The running $(m, \ell, O)$ state per $Q$-block is updated as $K, V$ blocks stream by. Rescaling factor $\exp(m_\text{old} - m_\text{new})$ keeps the running output consistent across blocks.
+3. **Activation memory drops from $\Theta(n^2)$ to $\Theta(n)$.** This is what makes long-context training feasible. Backward recomputes $S, P$ tile-by-tile using only the saved $(O, \ell, m)$.
+
+Cap 10.6 next: *quantisation*. Reduce the precision of weights and activations from fp16/bf16 to int8 or int4 — cutting memory by $2$–$4\times$ and freeing budget for the KV cache. With FlashAttention handling the kernel side and quantisation handling the storage side, the modern inference stack is ready.
+
+<SelfTest>
+
+**(a)** Sketch the GPU memory hierarchy of an A100: SRAM, L2, HBM. State the size and bandwidth of each. Why does this hierarchy favour I/O-aware algorithms?
+
+**(b)** Write the two-pass numerically stable softmax. Then write the online (one-pass) form, including the rescaling rule when the max changes.
+
+**(c)** Extend the online softmax to compute $O = PV$ in one streaming pass over the blocks of $S$ and $V$. Include the rescaling of $O$.
+
+**(d)** State FlashAttention's HBM I/O complexity. Compare to standard attention. For $n = 8192$, $d = 64$, $B_c = 64$, give the rough ratio.
+
+**(e)** A team finds their attention kernel hits $\sim 30\%$ of theoretical peak FLOPs on H100. Suggest two FlashAttention-3 techniques that could push this towards $\sim 75\%$.
+
+**(f)** FlashAttention's activation-memory benefit during training: state the activation memory of standard attention vs. FlashAttention. Why does long-context training depend on this?
+
+</SelfTest>

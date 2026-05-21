@@ -460,9 +460,124 @@ prerequisites: []
 
 ---
 
-## Chapters 10–12
+## Chapter 10 — Inference and decoding
 
-*To be populated as those chapters are written.*
+**Textbooks / canonical references.**
+
+- **Jurafsky, D., & Martin, J. H.** (2025, draft 3rd ed.). *Speech and Language Processing.* Ch 9 covers greedy/beam decoding (10.1) and modern sampling (10.2). [stanford.edu/~jurafsky/slp3](https://web.stanford.edu/~jurafsky/slp3/)
+
+**Primary papers — sampling and decoding.**
+
+- **Holtzman, A., Buys, J., Du, L., Forbes, M., & Choi, Y.** (2019). "The curious case of neural text degeneration". [arXiv:1904.09751](https://arxiv.org/abs/1904.09751) — Beam search curse + nucleus (top-$p$) sampling (10.1, 10.2).
+- **Wu, Y., Schuster, M., Chen, Z., et al.** (2016). "Google's neural machine translation system: Bridging the gap between human and machine translation". [arXiv:1609.08144](https://arxiv.org/abs/1609.08144) — Length-normalisation in beam search (10.1).
+- **Keskar, N. S., McCann, B., Varshney, L. R., et al.** (2019). "CTRL: A conditional transformer language model for controllable generation". [arXiv:1909.05858](https://arxiv.org/abs/1909.05858) — Repetition penalty (10.2).
+- **Nguyen, M., Baker, A., Neo, C., et al.** (2024). "Turning up the heat: Min-$p$ sampling for creative and coherent LLM outputs". [arXiv:2407.01082](https://arxiv.org/abs/2407.01082) — Min-$p$ sampling (10.2).
+
+**Primary papers — speculative decoding.**
+
+- **Leviathan, Y., Kalman, M., & Matias, Y.** (2023). "Fast inference from transformers via speculative decoding". [arXiv:2211.17192](https://arxiv.org/abs/2211.17192) — Speculative decoding protocol and rejection-sampling correctness (10.4).
+- **Chen, C., Borgeaud, S., Irving, G., et al.** (2023). "Accelerating large language model decoding with speculative sampling". [arXiv:2302.01318](https://arxiv.org/abs/2302.01318) — Parallel discovery of the same technique (10.4).
+- **Cai, T., Li, Y., Geng, Z., et al.** (2024). "Medusa: Simple LLM inference acceleration framework with multiple decoding heads". [arXiv:2401.10774](https://arxiv.org/abs/2401.10774) — Medusa head-based drafting (10.4).
+- **Li, Y., Wei, F., Zhang, C., & Zhang, H.** (2024). "EAGLE: Speculative sampling requires rethinking feature uncertainty". [arXiv:2401.15077](https://arxiv.org/abs/2401.15077) — EAGLE draft architecture (10.4).
+
+**Primary papers — FlashAttention.**
+
+- **Dao, T., Fu, D., Ermon, S., Rudra, A., & Ré, C.** (2022). "FlashAttention: Fast and memory-efficient exact attention with IO-awareness". [arXiv:2205.14135](https://arxiv.org/abs/2205.14135) — FlashAttention-1 (10.5).
+- **Dao, T.** (2023). "FlashAttention-2: Faster attention with better parallelism and work partitioning". [arXiv:2307.08691](https://arxiv.org/abs/2307.08691) — FlashAttention-2 (10.5).
+- **Shah, J., Bikshandi, G., Zhang, Y., et al.** (2024). "FlashAttention-3: Fast and accurate attention with asynchrony and low-precision". [arXiv:2407.08608](https://arxiv.org/abs/2407.08608) — FlashAttention-3 on H100 (10.5).
+
+**Primary papers — quantisation.**
+
+- **Frantar, E., Ashkboos, S., Hoefler, T., & Alistarh, D.** (2022). "GPTQ: Accurate post-training quantization for generative pre-trained transformers". [arXiv:2210.17323](https://arxiv.org/abs/2210.17323) — GPTQ (10.6).
+- **Lin, J., Tang, J., Tang, H., et al.** (2023). "AWQ: Activation-aware weight quantization for LLM compression and acceleration". [arXiv:2306.00978](https://arxiv.org/abs/2306.00978) — AWQ (10.6).
+- **Dettmers, T., Lewis, M., Belkada, Y., & Zettlemoyer, L.** (2022). "LLM.int8(): 8-bit matrix multiplication for transformers at scale". [arXiv:2208.07339](https://arxiv.org/abs/2208.07339) — The outlier problem and INT8 with mixed-precision fallback (10.6).
+- **Xiao, G., Lin, J., Seznec, M., et al.** (2022). "SmoothQuant: Accurate and efficient post-training quantization for large language models". [arXiv:2211.10438](https://arxiv.org/abs/2211.10438) — Activation-weight scaling for INT8-everywhere inference (10.6).
+- **Liu, Z., Yuan, J., Jin, H., et al.** (2024). "KIVI: A tuning-free asymmetric 2bit quantization for KV cache". [arXiv:2402.02750](https://arxiv.org/abs/2402.02750) — KV-cache quantisation recipe (10.6).
+
+**Primary papers — test-time scaling and reasoning models.**
+
+- **Wei, J., Wang, X., Schuurmans, D., et al.** (2022). "Chain-of-thought prompting elicits reasoning in large language models". [arXiv:2201.11903](https://arxiv.org/abs/2201.11903) — Chain-of-thought (10.7, 10.9).
+- **Wang, X., Wei, J., Schuurmans, D., et al.** (2022). "Self-consistency improves chain of thought reasoning in language models". [arXiv:2203.11171](https://arxiv.org/abs/2203.11171) — Self-consistency / majority vote over reasoning chains (10.7, 10.9).
+- **Zelikman, E., Wu, Y., Mu, J., & Goodman, N.** (2022). "STaR: Bootstrapping reasoning with reasoning". [arXiv:2203.14465](https://arxiv.org/abs/2203.14465) — Self-bootstrapping reasoning training (10.7).
+- **DeepSeek-AI** (2025). "DeepSeek-R1: Incentivizing reasoning capability in LLMs via reinforcement learning". [arXiv:2501.12948](https://arxiv.org/abs/2501.12948) — R1 / R1-Zero reasoning-model recipe (10.7).
+- **Snell, C., Lee, J., Xu, K., & Choquette-Choo, C.** (2024). "Scaling LLM test-time compute optimally can be more effective than scaling model parameters". [arXiv:2408.03314](https://arxiv.org/abs/2408.03314) — Inference-time scaling laws (10.7).
+- **Lanham, T., Chen, A., Radhakrishnan, A., et al.** (2023). "Measuring faithfulness in chain-of-thought reasoning". [arXiv:2307.13702](https://arxiv.org/abs/2307.13702) — Faithfulness of CoT (10.7, 11.9).
+- **Turpin, M., Michael, J., Perez, E., & Bowman, S.** (2023). "Language models don't always say what they think". [arXiv:2305.04388](https://arxiv.org/abs/2305.04388) — Performative vs faithful chains (10.7, 11.9).
+
+**Primary papers — serving infrastructure.**
+
+- **Yu, G.-I., Jeong, J. S., Kim, G.-W., et al.** (2022). "Orca: A distributed serving system for transformer-based generative models". *OSDI 2022*. [usenix.org](https://www.usenix.org/system/files/osdi22-yu.pdf) — Iteration-level scheduling / continuous batching (10.8).
+- **Kwon, W., Li, Z., Zhuang, S., et al.** (2023). "Efficient memory management for large language model serving with PagedAttention". [arXiv:2309.06180](https://arxiv.org/abs/2309.06180) — vLLM and PagedAttention (10.8).
+
+**Primary papers — agentic decoding.**
+
+- **Yao, S., Yu, D., Zhao, J., et al.** (2023). "Tree of Thoughts: Deliberate problem solving with large language models". [arXiv:2305.10601](https://arxiv.org/abs/2305.10601) — ToT (10.9).
+- **Yao, S., Zhao, J., Yu, D., et al.** (2022). "ReAct: Synergizing reasoning and acting in language models". [arXiv:2210.03629](https://arxiv.org/abs/2210.03629) — ReAct (10.9).
+- **Shinn, N., Cassano, F., Berman, E., et al.** (2023). "Reflexion: Language agents with verbal reinforcement learning". [arXiv:2303.11366](https://arxiv.org/abs/2303.11366) — Reflexion (10.9).
+
+---
+
+## Chapter 11 — Interpretability and the frontier
+
+**Anthropic-Circuits thread (canonical references).**
+
+- **Elhage, N., Nanda, N., Olsson, C., et al.** (2021). "A mathematical framework for transformer circuits". *Transformer Circuits Thread.* [transformer-circuits.pub](https://transformer-circuits.pub/2021/framework/index.html) — Residual stream, QK/OV decomposition, K/Q/V composition (11.2, 11.3).
+- **Olsson, C., Elhage, N., Nanda, N., et al.** (2022). "In-context learning and induction heads". *Transformer Circuits Thread.* [transformer-circuits.pub](https://transformer-circuits.pub/2022/in-context-learning-and-induction-heads/index.html) — Induction heads, phase transition (11.4).
+- **Elhage, N., Hume, T., Olsson, C., et al.** (2022). "Toy models of superposition". *Transformer Circuits Thread.* [transformer-circuits.pub](https://transformer-circuits.pub/2022/toy_model/index.html) — Superposition theory (11.5).
+- **Bricken, T., Templeton, A., Batson, J., et al.** (2023). "Towards monosemanticity: Decomposing language models with dictionary learning". *Transformer Circuits Thread.* [transformer-circuits.pub](https://transformer-circuits.pub/2023/monosemantic-features/index.html) — SAEs for feature extraction (11.6).
+- **Templeton, A., Conerly, T., Marcus, J., et al.** (2024). "Scaling monosemanticity: Extracting interpretable features from Claude 3 Sonnet". *Transformer Circuits Thread.* [transformer-circuits.pub](https://transformer-circuits.pub/2024/scaling-monosemanticity/index.html) — Frontier-scale SAEs; Golden Gate Claude (11.6, 11.7).
+- **Anthropic** (2024). "Circuit tracing and updates". *Transformer Circuits Thread.* [transformer-circuits.pub](https://transformer-circuits.pub/2024/circuits-updates-june/index.html) — End-to-end circuit attribution (11.9).
+
+**Primary papers — circuit analysis.**
+
+- **Wang, K., Variengien, A., Conmy, A., et al.** (2023). "Interpretability in the wild: A circuit for indirect object identification in GPT-2 small". [arXiv:2211.00593](https://arxiv.org/abs/2211.00593) — IOI circuit (11.2, 11.3).
+- **Nanda, N., Chan, L., Lieberum, T., et al.** (2023). "Progress measures for grokking via mechanistic interpretability". [arXiv:2301.05217](https://arxiv.org/abs/2301.05217) — Fourier-basis modular-arithmetic circuit (11.8).
+- **Power, A., Burda, Y., Edwards, H., et al.** (2022). "Grokking: Generalization beyond overfitting on small algorithmic datasets". [arXiv:2201.02177](https://arxiv.org/abs/2201.02177) — Grokking phenomenon (11.8).
+
+**Primary papers — sparse autoencoders and steering.**
+
+- **Gao, L., Goh, G., Hoffman, J., et al.** (2024). "Scaling and evaluating sparse autoencoders". [arXiv:2406.04093](https://arxiv.org/abs/2406.04093) — Top-$k$ SAEs (11.6).
+- **Rajamanoharan, S., Conmy, A., Smith, L., et al.** (2024). "Jumping ahead: Improving reconstruction fidelity with JumpReLU sparse autoencoders". [arXiv:2407.14435](https://arxiv.org/abs/2407.14435) — JumpReLU SAEs (11.6).
+- **Marks, S., Rager, C., Michaud, E. J., et al.** (2024). "Sparse feature circuits: Discovering and editing interpretable causal graphs in language models". [arXiv:2403.19647](https://arxiv.org/abs/2403.19647) — Cross-layer SAE circuit identification (11.9).
+- **Turner, A., Thiergart, L., Udell, D., et al.** (2023). "Activation addition: Steering language models without optimization". [arXiv:2308.10248](https://arxiv.org/abs/2308.10248) — Activation steering (11.7).
+- **Rimsky, N., Gabrieli, N., Schubert, J., et al.** (2023). "Steering Llama 2 via contrastive activation addition". [arXiv:2312.06681](https://arxiv.org/abs/2312.06681) — CAA / contrastive steering (11.7).
+- **Park, K., Choe, Y. J., & Veitch, V.** (2023). "The linear representation hypothesis and the geometry of large language models". [arXiv:2311.03658](https://arxiv.org/abs/2311.03658) — Linear-representation hypothesis (11.2, 11.5).
+
+**Primary papers — emergent abilities debate.**
+
+- **Wei, J., Tay, Y., Bommasani, R., et al.** (2022). "Emergent abilities of large language models". [arXiv:2206.07682](https://arxiv.org/abs/2206.07682) — Emergence claim (11.8).
+- **Schaeffer, R., Miranda, B., & Koyejo, S.** (2023). "Are emergent abilities of large language models a mirage?". [arXiv:2304.15004](https://arxiv.org/abs/2304.15004) — Metric-artefact critique (11.8).
+- **Lu, S., Bigoulaeva, I., Sachdeva, R., et al.** (2023). "Are emergent abilities in large language models just in-context learning?". [arXiv:2309.01809](https://arxiv.org/abs/2309.01809) — Re-analysis of BIG-Bench emergence (11.8).
+
+**Primary papers — frontier (model organisms, agents, architectures).**
+
+- **Hubinger, E., Denison, C., Mu, J., et al.** (2024). "Sleeper agents: Training deceptive LLMs that persist through safety training". [arXiv:2401.05566](https://arxiv.org/abs/2401.05566) — Model organisms of deceptive alignment (11.9).
+- **van der Weij, T., Hofstätter, F., Jaffe, O., et al.** (2024). "AI sandbagging: Language models can strategically underperform on evaluations". [arXiv:2406.07358](https://arxiv.org/abs/2406.07358) — Sandbagging studies (11.9).
+- **AI21 Labs** (2024). "Jamba: A hybrid Transformer-Mamba language model". [arXiv:2403.19887](https://arxiv.org/abs/2403.19887) — Jamba hybrid architecture (11.9).
+- **Beck, M., Pöppel, K., Spanring, M., et al.** (2024). "xLSTM: Extended long short-term memory". [arXiv:2405.04517](https://arxiv.org/abs/2405.04517) — xLSTM (11.9).
+- **Yang, S., Wang, B., Zhang, Y., et al.** (2024). "Parallelizing linear transformers with the delta rule over sequence length". [arXiv:2406.06484](https://arxiv.org/abs/2406.06484) — Gated DeltaNet (11.9).
+- **Sun, Y., Li, X., Dalal, K., et al.** (2024). "Learning to (learn at test time): RNNs with expressive hidden states". [arXiv:2407.04620](https://arxiv.org/abs/2407.04620) — Test-Time Training as sequence modelling (11.9).
+- **Jimenez, C. E., Yang, J., Wettig, A., et al.** (2024). "SWE-bench: Can language models resolve real-world GitHub issues?". [arXiv:2310.06770](https://arxiv.org/abs/2310.06770) — SWE-bench (11.9).
+- **Xie, T., Zhang, D., Chen, J., et al.** (2024). "OSWorld: Benchmarking multimodal agents for open-ended tasks in real computer environments". [arXiv:2404.07972](https://arxiv.org/abs/2404.07972) — OSWorld (11.9).
+- **Mialon, G., Fourrier, C., Swift, C., et al.** (2023). "GAIA: A benchmark for general AI assistants". [arXiv:2311.12983](https://arxiv.org/abs/2311.12983) — GAIA (11.9).
+- **Lu, C., Lange, R. T., Foerster, J., Clune, J., & Ha, D.** (2024). "The AI Scientist: Towards fully automated open-ended scientific discovery". [arXiv:2408.06292](https://arxiv.org/abs/2408.06292) — AI-driven research (11.9).
+
+**Online tools and resources.**
+
+- **Anthropic.** [Transformer Circuits Thread.](https://transformer-circuits.pub/) Living publication for Anthropic's mechanistic-interpretability research.
+- **Nanda, N.** [TransformerLens.](https://github.com/neelnanda-io/TransformerLens) PyTorch library for mechanistic interpretability research on small/medium Transformers.
+- **EleutherAI.** [SAE-Lens.](https://github.com/jbloomAus/SAELens) Open-source SAE training and analysis toolkit.
+
+---
+
+## Chapter 12 — Capstone: build and train a tiny GPT
+
+The capstone primarily re-uses citations from Chapters 0–11. Specific to this chapter:
+
+- **Karpathy, A.** (2022–). [nanoGPT.](https://github.com/karpathy/nanoGPT) The canonical pedagogical reference Transformer implementation (12.1, 12.2).
+- **Karpathy, A.** (2023). [Let's build GPT: from scratch, in code, spelled out.](https://www.youtube.com/watch?v=kCc8FmEb1nY) YouTube companion to nanoGPT; line-by-line build of the architecture and training loop.
+
+For the architectural upgrades in 12.4, see the RoPE and RMSNorm references already in **Chapter 6** (Su et al., 2021 — RoPE) and **Chapter 3** (Zhang & Sennrich, 2019 — RMSNorm). For the mini-RLHF loop in 12.5, see the DPO and Bradley-Terry references in **Chapter 9** (Rafailov et al., 2023; Bradley & Terry, 1952).
 
 ---
 

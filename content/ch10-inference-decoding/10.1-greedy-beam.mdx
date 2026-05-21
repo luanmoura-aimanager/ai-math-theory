@@ -1,0 +1,234 @@
+---
+title: "10.1 — Greedy decoding and beam search"
+chapter: 10
+order: 1
+estimatedMinutes: 22
+goal: "Define greedy and beam-search decoding from the autoregressive factorisation; derive their compute and memory profiles; explain why beam search hurts open-ended generation (the 'beam search curse') and why LLMs have almost entirely abandoned it outside machine translation."
+prerequisites: ["ch9-alignment/9.15-inference-time-alignment", "ch6-attention-transformer/6.14-kv-cache"]
+---
+
+## 1. Why this session exists
+
+Chapter 9 closed the alignment loop: with SFT, RLHF or DPO, GRPO, and inference-time selection, we have a *policy* $\pi_\theta$ that gives us, for every prefix $x_{<t}$, a next-token distribution
+
+$$
+\pi_\theta(\cdot \mid x_{<t}) \in \Delta^{|V|-1}.
+$$
+
+Chapter 10 opens the question of how to *use* that distribution at deployment time: given the per-token distribution, how do we produce a complete sequence?
+
+There are two families. **Deterministic search** picks tokens by some rule — argmax (greedy) or beam-restricted argmax (beam search). **Stochastic sampling** draws from a (transformed) distribution — covered in [10.2](/session/ch10-inference-decoding/10.2-sampling-temperature-top-k-top-p).
+
+This session does the deterministic family carefully. The headline conclusion is uncomfortable: **beam search, the workhorse of pre-Transformer NMT, hurts open-ended LLM generation**. Understanding *why* sets up everything else in this chapter.
+
+---
+
+## 2. The autoregressive decoding problem
+
+Recall the autoregressive language model factorisation ([5.3](/session/ch5-sequence-modeling/5.3-language-modeling-objective)):
+
+$$
+p_\theta(y_{1:T} \mid x) \;=\; \prod_{t=1}^{T} \pi_\theta(y_t \mid x, y_{<t}).
+$$
+
+Decoding is the optimisation problem
+
+$$
+y^\star \;=\; \arg\max_{y_{1:T},\, T \le T_{\max}} \; \log p_\theta(y_{1:T} \mid x).
+$$
+
+This search space has size $|V|^{T_{\max}}$ — for $|V|=32\text{k}$ and $T_{\max}=2048$, roughly $10^{9{,}300}$ candidate sequences. Exact optimisation is hopeless. Every practical decoder is an approximation.
+
+Two design axes:
+
+1. **Greedy vs. lookahead.** At each step, commit to the token that looks best locally, or maintain alternatives and re-evaluate after seeing more context.
+2. **Deterministic vs. stochastic.** Pick by argmax, or sample from a distribution.
+
+Greedy and beam search are both deterministic; greedy is no-lookahead, beam search is bounded-lookahead.
+
+---
+
+## 3. Greedy decoding
+
+The simplest decoder: at each step, take the token of maximum probability.
+
+```
+Greedy(x):
+    y_1 = argmax_v π_θ(v | x)
+    for t = 2, ..., T_max:
+        y_t = argmax_v π_θ(v | x, y_{<t})
+        if y_t = <EOS>: break
+    return y_{1:t}
+```
+
+### 3.1 Cost
+
+One model forward per token, $T$ tokens total. With the KV cache ([6.14](/session/ch6-attention-transformer/6.14-kv-cache)), each step costs $\Theta(d_\text{model}^2 + d_\text{model} \cdot T)$ FLOPs and reuses cached keys/values for the prefix.
+
+$$
+\boxed{\;\text{FLOPs}_\text{greedy} \;\approx\; T \cdot \big( 2 N + d_\text{model} \cdot T \big), \;\;\text{memory} = O(N + d_\text{model} \cdot T)\;}
+$$
+
+where $N$ is the parameter count (the $2N$ factor is the standard "one fwd ≈ 2N FLOPs per token" rule from [7.3](/session/ch7-training-language-models/7.3-forward-pass-at-scale)). The $d_\text{model} \cdot T$ term is attention against the cached prefix.
+
+### 3.2 What greedy gets wrong
+
+Greedy maximises the local conditional $\pi_\theta(y_t \mid x, y_{<t})$ at each step, but this is *not* the joint argmax. Two failure modes.
+
+**Pathological loops.** If the model assigns high probability to a token that, once emitted, makes itself most probable again, the decoder enters a loop ("the the the …" or "I think I think I think …"). This is endemic in undertrained models and in regions of context space the model hasn't seen.
+
+**Premature commitment.** A high-probability token at step $t$ may force the model into a low-probability region later. The classic toy:
+
+$$
+\pi(y_1 = A) = 0.6, \;\;\; \pi(y_1 = B) = 0.4.
+$$
+
+Greedy picks $A$. But suppose $\pi(y_2 = z \mid A) = 0.1$ and $\pi(y_2 = z \mid B) = 0.9$. Then
+
+$$
+p(A, z) = 0.06, \quad p(B, z) = 0.36.
+$$
+
+Greedy's sequence $A,z$ has joint probability $6\%$; the better sequence $B,z$ has $36\%$ but greedy never explores it.
+
+This is the motivation for *lookahead* — beam search.
+
+---
+
+## 4. Beam search
+
+Maintain a set of $k$ partial hypotheses (the "beam") and at each step expand all of them, keeping only the top-$k$ by joint log-prob.
+
+```
+BeamSearch(x, k):
+    B_0 = { (∅, 0.0) }
+    for t = 1, ..., T_max:
+        candidates = []
+        for (y, s) in B_{t-1}:
+            if y ends in <EOS>: candidates.append((y, s)); continue
+            for v in V:
+                candidates.append((y ⊕ v, s + log π_θ(v | x, y)))
+        B_t = top-k candidates by score
+        if all B_t end in <EOS>: break
+    return argmax B_T by score
+```
+
+### 4.1 Cost
+
+Each step expands $k$ live hypotheses against $|V|$ next tokens, then prunes to $k$. Forward passes: $k$ per step, $T$ steps, so $k T$ total. KV cache must be maintained *per beam* (each hypothesis has its own continuation):
+
+$$
+\boxed{\;\text{FLOPs}_\text{beam} \approx k \cdot T \cdot (2N + d_\text{model} \cdot T), \;\;\text{memory} = O(k \cdot (N + d_\text{model} \cdot T))\;}
+$$
+
+So beam is $k\times$ greedy in both axes. Typical $k = 4$–$8$ for NMT; beyond ~$10$ the marginal quality gain flattens for almost all tasks.
+
+### 4.2 Length normalisation
+
+The naive score $\log p(y_{1:T}) = \sum_t \log \pi_\theta(y_t \mid \cdot)$ accumulates a *negative* number per step (since $\log p \le 0$). Longer sequences always score worse. Beam search prefers short sequences pathologically.
+
+The standard fix is **length-normalised scoring**:
+
+$$
+\boxed{\;s_\alpha(y_{1:T}) \;=\; \frac{1}{T^\alpha} \sum_{t=1}^{T} \log \pi_\theta(y_t \mid x, y_{<t})\;}
+$$
+
+with $\alpha \in [0.6, 1.0]$. $\alpha = 1$ is the per-token log-likelihood; smaller $\alpha$ penalises length less. NMT systems typically use $\alpha \approx 0.7$.
+
+<Aside type="note">
+**Why $\alpha < 1$ helps.** With $\alpha = 1$, the model's bias is exactly cancelled (long and short are scored on the same per-token basis). But in NMT, the *source* dictates target length and pure per-token scoring still under-generates. $\alpha < 1$ rewards completing the translation rather than truncating. The 0.6–0.7 range was tuned empirically by Wu et al. (Google NMT, 2016) and persists.
+</Aside>
+
+### 4.3 Coverage penalties
+
+NMT systems also add a *coverage* term — a reward for translating each source token at least once, computed from attention weights. This is specific to encoder-decoder MT and doesn't transfer to decoder-only LLMs (no source to cover).
+
+---
+
+## 5. The beam search curse
+
+In Sequence-to-Sequence MT, beam-$k$ with $k=4$–$8$ reliably outperforms greedy by 1–2 BLEU. In *open-ended* generation — story continuation, dialogue, instruction-following — beam search *underperforms* greedy and dramatically underperforms stochastic sampling.
+
+This counterintuitive result is the "beam search curse". Holtzman et al. ([2019, arXiv:1904.09751](https://arxiv.org/abs/1904.09751)) documented it: as $k$ increases, generated text becomes *more* repetitive, *less* diverse, and *lower* quality (by human evaluation) — even though the joint log-likelihood goes up.
+
+### 5.1 Diagnosis: argmax of a calibrated LM is degenerate
+
+The next-token distribution of a well-trained LM has heavy tail: many plausible continuations have small but nonzero probability. The argmax sequence — the *single most likely* string — is highly atypical of the distribution. It is short, generic, and repetitive, because those properties accumulate small probability advantages step after step.
+
+Formally, consider a unigram model with $\pi(\text{the}) = 0.05$, $\pi(\text{a}) = 0.04$, etc. The argmax sequence is "the the the the the…". Probability: $0.05^T$. The *typical* sequence under the model is something like "The cat sat on the mat", which has lower per-step probability but is far more plausible.
+
+This is the *typical set* phenomenon from information theory: for sources with entropy $H$, almost all probability mass is on sequences of approximate per-token log-prob $-H$, which is *not* the argmax. Beam search drives towards the mode of $p(y_{1:T})$; sampling stays in the typical set.
+
+### 5.2 The plot from Holtzman et al.
+
+Beam-$k$ generated text exhibits **degenerate repetition**: after some tokens, the same phrase begins to repeat verbatim. The probability of the *repeated* phrase actually *increases* with each repetition — the model becomes more confident in repetition the more it repeats — so beam search locks in.
+
+Empirically, the curse is sharpest for $k \ge 4$ on open-ended generation. Even greedy ($k = 1$) exhibits some repetition; the cure is to introduce *stochasticity* (Cap 10.2) or *repetition penalties* (post-hoc score adjustments that downweight tokens recently emitted).
+
+---
+
+## 6. When beam search is still right
+
+Beam search isn't dead. Three settings where it works:
+
+1. **Machine translation.** Source dictates target. Output length is bounded by source length; faithfulness matters more than diversity. Beam-4 with length-normalised scoring remains state of the art for NMT, including modern neural systems.
+2. **Constrained generation.** Tasks where the output must match a schema (JSON, SQL, code with syntactic constraints) benefit from beam search combined with a constraint-aware scoring function that prunes invalid prefixes.
+3. **Short, factual responses.** "Yes/no" answers, single-word completions, classification framed as generation. The output is short enough that the typical-set vs. mode distinction barely applies.
+
+For everything else — open-ended dialogue, instruction-following, code, creative writing — sampling-based decoding (Cap 10.2) wins.
+
+<Aside type="history">
+The transition is visible in the literature: GNMT (Wu et al., 2016) used beam-8 with length normalisation; T5 (2019) defaulted to beam search; GPT-2 (2019) defaulted to top-$k$ sampling; GPT-3 onwards almost never reports beam-search numbers for open-ended tasks. By 2026, beam search persists in the HuggingFace `generate()` API mostly for backwards compatibility and translation benchmarks.
+</Aside>
+
+---
+
+## 7. Diverse beam search and group beam search
+
+A line of work tried to fix beam search by *forcing diversity* across beams.
+
+**Diverse Beam Search** (Vijayakumar et al., 2016, [arXiv:1610.02424](https://arxiv.org/abs/1610.02424)) partitions the $k$ beams into $G$ groups and applies a *dissimilarity penalty* between groups:
+
+$$
+s_g(y_{1:T}) \;=\; \frac{1}{T^\alpha}\sum_{t} \log \pi_\theta(y_t \mid \cdot) \;-\; \lambda \sum_{g' < g} \mathrm{sim}(y, y^{(g')}).
+$$
+
+In practice this is rarely used today; the moment you accept *some* diversity, plain sampling with temperature/top-p is simpler and equally effective.
+
+---
+
+## 8. Implementation notes
+
+A few details that matter for a correct implementation:
+
+- **EOS handling.** A hypothesis ending in `<EOS>` is *finished*; it should not be expanded further, but its score still competes with live hypotheses in the top-$k$ selection. Otherwise long, fluent-but-pointless beams crowd out short, complete ones.
+- **KV cache management.** Each beam needs its own KV cache. When beam $i$ is pruned, its cache memory is freed; when beam $j$ branches into two top-$k$ continuations (rare but possible), the cache must be *cloned*. Production beam implementations therefore maintain a *tree* of caches with reference counting.
+- **Batching.** Beam search batches naturally: the $k$ beams form a batch of size $k$, and tokens within a batch are independent. This is a free $k\times$ speedup on a GPU — relevant for NMT serving but not for the LLM case where $k=1$ (greedy) dominates.
+
+---
+
+## 9. What we keep going forward
+
+Three things.
+
+1. **Greedy decoding** is the simplest baseline: argmax at each step, $T$ forwards total, fast and deterministic, but vulnerable to loops and premature commitment.
+2. **Beam search** maintains $k$ hypotheses with lookahead; costs $k\times$ greedy in compute and memory; needs length normalisation; remains the right choice for machine translation and constrained generation.
+3. **The beam search curse**: on open-ended generation, the *argmax of a calibrated LM* is degenerate (repetitive, generic), because most probability mass sits in the typical set, not at the mode. Sampling — Cap 10.2 — is the cure.
+
+The rest of this chapter takes the sampling-based decoding for granted and turns to *engineering*: KV-cache details (10.3), speculative decoding (10.4), FlashAttention (10.5), quantisation (10.6), test-time scaling (10.7), continuous batching (10.8), agentic decoding (10.9). With these, an aligned policy from Chapter 9 becomes a deployable LLM.
+
+<SelfTest>
+
+**(a)** State the autoregressive decoding optimisation problem. Why is exact optimisation infeasible? Give the search-space size for $|V| = 32{,}000$ and $T_{\max} = 1024$.
+
+**(b)** Write greedy decoding in pseudocode. Derive the cost expression $\Theta(T \cdot (2N + d_\text{model} \cdot T))$ — what does each term represent?
+
+**(c)** Construct a 2-token toy example where greedy decoding picks the lower-joint-probability sequence (different from the example in §3.2).
+
+**(d)** State the length-normalised beam-search score $s_\alpha$. Why does $\alpha < 1$ help in NMT? What does $\alpha = 0$ mean operationally?
+
+**(e)** State the beam search curse. Give the information-theoretic intuition (typical set vs. mode) in one paragraph.
+
+**(f)** Beam search remains standard for which two task types? Explain why those tasks dodge the curse.
+
+</SelfTest>

@@ -1,0 +1,224 @@
+---
+title: "11.4 — Induction heads"
+chapter: 11
+order: 4
+estimatedMinutes: 22
+goal: "Derive the 2-head induction circuit: a layer-1 'previous-token' head whose output enables a layer-2 'induction' head to do in-context pattern matching `A B ... A → B`. Establish induction heads as the mechanistic substrate of in-context learning. State the phase transition in training where they emerge."
+prerequisites: ["ch11-interpretability-frontier/11.3-attention-heads-circuits"]
+---
+
+## 1. Why this session exists
+
+Models with $\ge 2$ layers exhibit a capability that 1-layer models cannot: **in-context learning**. Given a prompt like
+
+> *bonjour → hello*
+> *chat → cat*
+> *maison → ___*
+
+a 2-layer model — even with $< 1$M parameters — can produce "house" with high probability, on tokens it has never seen during training in this Franco-English pairing. The model has *learned to learn from context*.
+
+For most of the deep-learning era, this was a black box ("emergent capability of scaled language models"). In 2022, Olsson et al. at Anthropic ([In-context Learning and Induction Heads](https://transformer-circuits.pub/2022/in-context-learning-and-induction-heads/index.html)) identified the *mechanistic substrate* of this behaviour: a 2-head circuit called the **induction head**. It implements the algorithm:
+
+> *Given the current context, look at occurrences of the current token earlier in the context. Predict that the next token will be whatever followed those earlier occurrences.*
+
+In notation: in a sequence $\ldots A B \ldots A$, an induction head causes the model to predict $B$ as the next token. This is the *minimal algorithm for in-context learning* — and it lives in essentially every Transformer with $\ge 2$ layers.
+
+This session derives the circuit and describes the phase transition (during training) at which it forms.
+
+---
+
+## 2. The behavioural target
+
+Define the task precisely. The model sees a token sequence
+
+$$
+x_1, x_2, \ldots, x_t,
+$$
+
+and is asked to predict $x_{t+1}$. The behavioural claim:
+
+> If there exists $s < t$ such that $x_s = x_t$, then the model should predict $x_{t+1} \approx x_{s+1}$ with non-trivial probability — even if $(x_s, x_{s+1})$ has never been seen in training.
+
+This is "in-context bigram induction": copy the continuation pattern from earlier in the same prompt. The model does *not* memorise $(A, B)$ pairs; it dynamically detects them in the input and copies them forward.
+
+### 2.1 Empirical signature
+
+The signature is sharp. On synthetic prompts of the form
+
+> $A_1 B_1 A_2 B_2 \ldots A_n B_n A_k$
+
+(where $A_i, B_i$ are random tokens, $k \in \{1, \ldots, n\}$), a model with induction heads predicts $B_k$ with $\sim 99\%$ accuracy *even though the specific $(A_i, B_i)$ pairs were never in the training distribution*. The model has not memorised them; it has *learned the algorithm* of detecting repetition and copying the continuation.
+
+Models with $\le 1$ layer: $\sim 0\%$ on this task. Models with $\ge 2$ layers: high accuracy after a sharp transition in training (see §6).
+
+---
+
+## 3. The 2-head circuit
+
+The minimal implementation. Need two heads, one in each of two consecutive layers.
+
+### 3.1 Head 1: previous-token head
+
+In layer 1, a head whose QK pattern attends from position $t$ to position $t-1$. Its OV writes the *embedding of $x_{t-1}$* (or a transformation thereof) into the residual stream at position $t$.
+
+After head 1, the residual stream at position $t$ contains (additively):
+
+$$
+h_t^{(1)} \;=\; W^E_{:,x_t} \;+\; \underbrace{p_t}_{\text{positional}} \;+\; \underbrace{W^{OV,1} W^E_{:,x_{t-1}}}_{\text{from head 1: previous-token info}}
+$$
+
+The key point: position $t$'s residual stream now carries information about *both* $x_t$ and $x_{t-1}$.
+
+### 3.2 Head 2: induction head
+
+In layer 2, the induction head. Its QK pattern is *key-side* tuned: at query position $t$, attend to *key positions $s$ whose layer-1-augmented stream carries the same "previous-token feature" as $x_t$*. Operationally, this means attending to positions $s$ where $x_{s-1} = x_t$.
+
+How does the QK circuit do this? It is *K-composition* with head 1:
+
+- The layer-2 head's *query* projects $W^E_{:,x_t}$ — the current token's embedding — into the query space.
+- The layer-2 head's *key* projects the layer-1-augmented stream. At position $s$, the key-relevant part is the layer-1 head's write at $s$, which encodes $x_{s-1}$.
+
+So the QK score at $(t, s)$ depends on whether the current token $x_t$ matches the "previous token" feature at $s$, i.e., whether $x_t = x_{s-1}$.
+
+If the QK matrix is approximately:
+
+$$
+W^{QK, 2} \cdot W^{OV, 1} \;\approx\; I,
+$$
+
+then the score $(W^E_{:,x_t})^\top W^{QK, 2}(W^{OV, 1} W^E_{:,x_{s-1}})$ is large when $x_t = x_{s-1}$ — exactly the desired attention pattern.
+
+### 3.3 OV: copying
+
+Head 2's OV is approximately a *copying* OV (Cap 11.3 §7): attending to position $s$ writes the embedding of $x_s$ into the residual stream.
+
+Net effect: at position $t$, head 2 attends to all $s$ such that $x_{s-1} = x_t$, then copies $x_s$ into the residual stream. When unembedded, this boosts the logit of $x_s$ — exactly the desired $A B \ldots A \to B$ behaviour.
+
+### 3.4 The circuit in one paragraph
+
+> **Layer-1 head**: at position $t$, attend to position $t-1$, copy the previous token's embedding into the residual stream.
+> 
+> **Layer-2 head**: at position $t$, query with $x_t$'s embedding; attend to positions $s$ where layer 1 wrote "previous token = $x_t$", i.e., where $x_{s-1} = x_t$. Copy $x_s$'s embedding into the residual stream, which boosts the logit of $x_s$.
+
+The two heads compose via the residual stream: layer 1's write becomes layer 2's read. This is K-composition (Cap 11.3 §8.1) in action.
+
+---
+
+## 4. Why this is "the" algorithm for in-context learning
+
+Induction heads are *general-purpose*. They don't depend on the tokens being meaningful — they trigger on any repetition in context. This gives the model a *content-independent* mechanism for in-context pattern matching.
+
+### 4.1 Beyond literal repetition
+
+Pure induction heads handle literal-token repetition. But the same circuit, with a *softer* QK matrix, handles *semantic* repetition: attending to tokens with embeddings *similar* to (but not identical to) the current token. This is the basis of:
+
+- Few-shot in-context learning: the model attends to earlier examples in the prompt with similar structure.
+- Translation in context: attending to source-language tokens whose meanings match the target-language gloss.
+- Function-calling pattern matching: attending to prior usage of an API to predict its current usage.
+
+All of these are *generalisations* of the induction-head template. The exact mechanistic identification is harder in larger models — the circuits become "fuzzy" induction heads composed with feature-detection heads and MLP-based feature lookup — but the core algorithm is recognisable.
+
+### 4.2 The connection to in-context learning at scale
+
+Brown et al.'s GPT-3 paper (2020) demonstrated that few-shot in-context learning scaled steeply with model size. Olsson et al. (2022) showed that this scaling is *driven by induction heads*: removing induction heads (by ablation) destroys in-context learning ability; models without induction heads show no in-context learning regardless of size.
+
+The implication is strong: in-context learning isn't a mysterious emergent property of scaled language models — it's a *specific algorithmic capability* implemented by a *specific circuit*, the induction head, which emerges during training and then powers a wide range of downstream in-context behaviours.
+
+---
+
+## 5. Empirical identification
+
+How do you find an induction head in a trained model? Standard recipe.
+
+### 5.1 The induction score
+
+For each candidate layer-$\ell$ head, run the synthetic-repetition prompt
+
+$$
+[A_1 B_1 A_2 B_2 \ldots A_n B_n] \; A_k
+$$
+
+and measure the head's attention pattern at the final query position. Compute the **induction score**:
+
+$$
+\text{induction\_score}(h) \;=\; \mathbb{E}\big[ \text{attention weight at position } B_k\big].
+$$
+
+A pure induction head has score $\sim 1$ (attends almost entirely to the matching $B_k$). Other heads have scores near $1/n$ (random) or pattern-specific scores below $1$.
+
+### 5.2 Two-head identification
+
+For each pair (layer-1 head, layer-2 head): check whether the layer-1 head implements a previous-token pattern (QK attends to $t-1$) and whether the layer-2 head's behaviour *depends on* the layer-1 head's output (via activation patching: ablate the layer-1 head, see if the layer-2 head's induction score drops).
+
+For most small ($\le 1$B-parameter) models, this identifies $1$–$5$ induction-head pairs. Larger models have many.
+
+### 5.3 The TransformerLens toolkit
+
+Neel Nanda's [TransformerLens](https://github.com/neelnanda-io/TransformerLens) library provides pre-built induction-score tools, attention visualisers, and ablation infrastructure. By 2026 it (and its successors in the Pythia / Anthropic ecosystem) is the standard tool for this kind of analysis.
+
+---
+
+## 6. The phase transition
+
+The most striking empirical finding of Olsson et al. (2022): induction heads emerge in a *sharp transition* during training.
+
+### 6.1 The training-loss bump
+
+Plot training loss against optimisation steps. For models with $\ge 2$ layers, you see a small but visible *bump* — a region where loss decreases more slowly, followed by a sudden acceleration. The bump coincides with the formation of induction heads.
+
+Mechanistically: before the transition, the model is doing pure unigram + bigram prediction (heads of the form in Cap 11.3 §5). During the bump, the K-composition that enables induction is being learned. After the bump, induction heads are active and the model exhibits in-context learning.
+
+### 6.2 The capability emergence
+
+In-context learning ability — measured by accuracy on the synthetic repetition task — goes from $\sim 0$ to $\sim 1$ over a narrow training-step window. *Before* the transition, the model cannot do in-context learning at all; *after*, it can robustly.
+
+This is the canonical example of an **emergent ability**: a capability that appears suddenly at a specific scale (here, after a specific number of training steps) rather than smoothly growing. Cap 11.8 returns to the broader emergent-abilities debate (whether such emergence is real or an artefact of the metric). For induction heads, the emergence is real — it corresponds to a specific structural change in the model's circuits.
+
+### 6.3 What triggers the transition
+
+Open question. Empirically, the transition timing depends on model size (later for smaller models), data composition (earlier on data with more in-context repetition), and architecture (faster for models with sharper attention). The mechanistic story is incomplete: the model has to *simultaneously* form the previous-token head and the K-composing layer-2 head; neither is useful alone, so gradient pressure for both starts low and grows as the heads partially form. A "credit assignment" problem.
+
+<Aside type="history">
+**Why this paper mattered.** Until Olsson et al. (2022), in-context learning was treated as a *behavioural* property of scaled language models — a thing they could do, with no understanding of how. The identification of induction heads as the *substrate* of in-context learning shifted the framing: in-context learning is a *concrete algorithm* implemented by a *concrete circuit*. This made it possible to ask questions like "why does this model do in-context learning better than that one?" by *looking at the heads*, not just running benchmarks. By 2026, induction-head analysis is the entry point to nearly every mech-interp study of large models.
+</Aside>
+
+---
+
+## 7. Induction heads in larger models
+
+In a $\sim 100$M-parameter model, induction heads are *crisp*: 1–5 heads, easy to identify, with clean attention patterns. In a $\sim 100$B-parameter model, the picture is messier:
+
+- **Many induction heads.** Dozens to hundreds, with overlapping functions.
+- **Fuzzy QK patterns.** Heads attend not just to literal token matches but to semantic-similarity matches, requiring feature analysis (Cap 11.6) to disentangle.
+- **Compositions with MLP features.** Induction at scale uses MLP-mediated feature lookup — the layer-1 "previous token" feature isn't raw embedding, it's a processed feature written by an MLP into the residual stream.
+- **Specialised induction heads.** Some heads do "code-induction" (matching function-call patterns), some do "math-induction" (matching equation patterns), some do "name-induction" (matching named-entity patterns).
+
+The core algorithm is the same; the implementation diversifies as the model scales. Disentangling this at frontier-model scale is the topic of sparse autoencoders (Cap 11.6) and the circuit-tracing work that depends on them.
+
+---
+
+## 8. What we keep going forward
+
+Three things.
+
+1. **Induction heads implement in-context pattern matching.** Layer-1 previous-token head + layer-2 K-composing induction head = the algorithm $A B \ldots A \to B$.
+2. **Induction heads emerge in a sharp training transition.** Before: no in-context learning. After: robust in-context learning across many tasks. The transition aligns with a visible training-loss bump.
+3. **In-context learning is not a mystery; it's an algorithm.** Removing induction heads destroys in-context learning regardless of model size. The capability has a mechanistic substrate that can be identified and manipulated.
+
+Cap 11.5 next: **superposition**. Why models have *more features than dimensions*, and why this makes mech-interp at scale fundamentally harder.
+
+<SelfTest>
+
+**(a)** State the in-context induction behaviour. Give the synthetic prompt format used to measure it.
+
+**(b)** Describe the layer-1 head's role in the induction circuit: QK pattern and OV behaviour.
+
+**(c)** Describe the layer-2 head's role: how its QK circuit K-composes with the layer-1 head's output, and what its OV does.
+
+**(d)** Define the induction score. State how to compute it for one candidate head.
+
+**(e)** The training-loss bump: describe what happens behaviourally and mechanistically across the transition.
+
+**(f)** A 70B model has dozens of induction-head-like circuits with fuzzy QK patterns. List two reasons why the "clean" 2-head story from a 100M model becomes messier at frontier scale.
+
+</SelfTest>

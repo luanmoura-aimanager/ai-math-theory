@@ -1,0 +1,257 @@
+---
+title: "10.3 — KV cache implementation details"
+chapter: 10
+order: 3
+estimatedMinutes: 24
+goal: "Derive the KV-cache memory cost $2 \\cdot n_\\text{layers} \\cdot n_\\text{heads} \\cdot d_\\text{head} \\cdot n_\\text{ctx} \\cdot \\text{batch}$ exactly; walk through prefill vs decode phases; show how GQA/MLA reduce the cache; understand the operational consequences (batch size, context length, throughput-vs-latency)."
+prerequisites: ["ch6-attention-transformer/6.14-kv-cache", "ch8-modern-llm-architectures/8.3-gqa-mqa", "ch8-modern-llm-architectures/8.5-mla"]
+---
+
+## 1. Why this session exists
+
+[Cap 6.14](/session/ch6-attention-transformer/6.14-kv-cache) introduced the KV cache as the reason autoregressive decode is feasible at all: by caching keys and values for past tokens, each new-token forward is $O(n)$ in context length rather than $O(n^2)$.
+
+That gave us the *concept*. This session does the *engineering*: exact memory formula, prefill vs. decode separation, what GQA/MLA buy in the cache, and how the cache constrains the batch-size / context-length / throughput Pareto frontier.
+
+By the end you should be able to look at a deployment and answer: *given an A100-80GB or H100, what is the largest (batch × context) I can serve, and what does the inference loop look like step-by-step?*
+
+---
+
+## 2. The exact KV-cache formula
+
+At every Transformer layer, self-attention produces per-head keys and values $K, V \in \mathbb{R}^{n \times d_\text{head}}$ from the input via linear projections $W^K, W^V$.
+
+For autoregressive decode, the keys and values for positions $1, \ldots, t-1$ never change as $t$ advances — they depend only on the (now-fixed) earlier tokens. We *cache* them.
+
+The cache at maximum context $n_\text{ctx}$ has:
+
+- 2 tensors (K and V),
+- $n_\text{layers}$ copies (one per Transformer block),
+- $n_\text{heads}$ heads per layer,
+- $d_\text{head}$ dimensions per head,
+- $n_\text{ctx}$ positions,
+- $B$ sequences in the batch,
+- $p$ bytes per element (2 for fp16/bf16, 1 for int8, 0.5 for int4).
+
+Multiplying:
+
+$$
+\boxed{\;\text{KV-cache bytes} \;=\; 2 \cdot n_\text{layers} \cdot n_\text{heads} \cdot d_\text{head} \cdot n_\text{ctx} \cdot B \cdot p\;}
+$$
+
+### 2.1 Concrete numbers
+
+Llama-2 70B has $n_\text{layers} = 80$, $n_\text{heads} = 64$, $d_\text{head} = 128$, fp16 ($p = 2$). For one sequence at $n_\text{ctx} = 4096$:
+
+$$
+2 \cdot 80 \cdot 64 \cdot 128 \cdot 4096 \cdot 1 \cdot 2 \;=\; 10{,}737{,}418{,}240 \text{ bytes} \;\approx\; 10.7 \text{ GB}.
+$$
+
+Per sequence. At batch 8 and $n_\text{ctx} = 4096$, the KV cache alone consumes $\approx 86$ GB — exceeding the 80 GB of an A100.
+
+This is the principal bottleneck of LLM serving in 2025–2026: **the KV cache, not the model weights, dominates GPU memory at production batch sizes and context lengths.**
+
+### 2.2 Per-token cache footprint
+
+A useful summary statistic is bytes per token:
+
+$$
+\text{cache bytes/token} \;=\; 2 \cdot n_\text{layers} \cdot n_\text{heads} \cdot d_\text{head} \cdot p.
+$$
+
+For Llama-2 70B fp16: $2.6$ MB/token. For Llama-3 70B (with GQA, $n_\text{kv\_heads} = 8$): $0.33$ MB/token. For DeepSeek-V2 (with MLA): $\sim 0.07$ MB/token. The factor of $\sim 40\times$ between dense MHA and MLA is precisely the reason MLA exists.
+
+---
+
+## 3. Prefill vs. decode
+
+Inference has two distinct phases.
+
+**Prefill.** The model processes the *prompt* of length $L_\text{prompt}$ in one forward pass. The KV cache is populated for positions $1, \ldots, L_\text{prompt}$. This is compute-bound: $\Theta(L_\text{prompt} \cdot d_\text{model}^2)$ matrix-multiply work per layer.
+
+**Decode.** Each subsequent step processes *one* new token, using the cached K/V for all earlier positions. The new token's K/V is appended to the cache. This is memory-bound: most of the time is spent *moving the cache through the GPU memory hierarchy* to perform attention against it.
+
+### 3.1 The compute / memory profile
+
+A useful operational reference (the numbers below are for an A100, fp16):
+
+| Phase | Work per token | Bottleneck | Tokens/sec achievable |
+|---|---|---|---|
+| Prefill | $\sim 2N$ FLOPs/token, parallel across $L_\text{prompt}$ | Compute (TFLOP/s) | $\sim 10\text{k}$–$50\text{k}$ at single-batch, much higher batched |
+| Decode | $\sim 2N$ FLOPs/token, sequential | Memory bandwidth (HBM) | $\sim 50$–$200$ for a $70$B model |
+
+Decode is two orders of magnitude slower than prefill *per token*, because every step pays the cost of moving the entire weight matrix and the (growing) cache through the GPU bandwidth wall.
+
+### 3.2 Time-to-first-token (TTFT) vs. inter-token latency (ITL)
+
+- **TTFT** is the prefill time: time from receiving the prompt to emitting token $1$. Scales with $L_\text{prompt}$.
+- **ITL** is the decode time per token: time between successive emitted tokens. Roughly constant in $t$ until KV-cache attention becomes dominant.
+
+Modern serving stacks (vLLM, TGI, TensorRT-LLM) report both metrics. A "fast" model is one with low TTFT (prefill is fast) *and* low ITL (decode is fast).
+
+---
+
+## 4. KV cache shrinkage: GQA, MQA, MLA recap
+
+[Cap 8.3](/session/ch8-modern-llm-architectures/8.3-gqa-mqa) and [Cap 8.5](/session/ch8-modern-llm-architectures/8.5-mla) introduced cache-shrinkage techniques. The recap, in the units of this session:
+
+### 4.1 Multi-Query Attention (MQA)
+
+Single K/V projection shared across all $n_\text{heads}$ query heads:
+
+$$
+\text{cache bytes}_\text{MQA} \;=\; 2 \cdot n_\text{layers} \cdot 1 \cdot d_\text{head} \cdot n_\text{ctx} \cdot B \cdot p.
+$$
+
+Factor of $n_\text{heads}$ smaller than MHA. Loses some quality on long-context tasks.
+
+### 4.2 Grouped-Query Attention (GQA)
+
+$g$ KV groups, each shared across $n_\text{heads}/g$ query heads:
+
+$$
+\text{cache bytes}_\text{GQA} \;=\; 2 \cdot n_\text{layers} \cdot g \cdot d_\text{head} \cdot n_\text{ctx} \cdot B \cdot p.
+$$
+
+Llama-2 70B → Llama-3 70B reduced $g$ from $64$ (MHA) to $8$. The cache shrank by $8\times$ at the cost of $\le 0.3$ perplexity points.
+
+### 4.3 Multi-head Latent Attention (MLA)
+
+Cache a latent $c \in \mathbb{R}^{d_c}$ per token, with $d_c \ll n_\text{heads} \cdot d_\text{head}$, and reconstruct K and V on the fly via low-rank up-projections. DeepSeek-V2: $d_c = 512$ vs. nominal $n_\text{heads} \cdot d_\text{head} = 16 \cdot 128 = 2048$. Per-token cache shrinks by $\sim 4\times$ more than GQA.
+
+$$
+\text{cache bytes}_\text{MLA} \;=\; n_\text{layers} \cdot d_c \cdot n_\text{ctx} \cdot B \cdot p.
+$$
+
+(Note: only one tensor, not two — MLA stores a single latent and reconstructs K and V separately at compute time.)
+
+### 4.4 KV-cache quantisation
+
+Independently of architecture, the cache itself can be stored in lower precision. KV-cache fp16 → int8 halves the memory, at a small (sub-perplexity-point) quality cost. int4 KV cache is increasingly common in 2025–2026. The math:
+
+$$
+\text{cache bytes}(p_\text{cache}) \;=\; 2 \cdot n_\text{layers} \cdot n_\text{kv\_heads} \cdot d_\text{head} \cdot n_\text{ctx} \cdot B \cdot p_\text{cache}.
+$$
+
+A common production stack: Llama-3 70B with GQA-$8$ and int8 KV cache — $\sim 80$ KB/token, allowing batches of $32$+ at $n_\text{ctx} = 8\text{k}$ on a single H100-80GB.
+
+---
+
+## 5. The decode-loop, step-by-step
+
+A concrete walk-through of one decode step at position $t$.
+
+1. **Embed the new token.** $e_t = \text{emb}(y_{t-1}) \in \mathbb{R}^{d_\text{model}}$. One row lookup; no cache.
+2. **For each layer $\ell = 1, \ldots, n_\text{layers}$:**
+   - Apply pre-norm.
+   - Compute *new* projections only: $q_t^\ell = W^Q h_t^\ell \in \mathbb{R}^{d_\text{model}}$, $k_t^\ell = W^K h_t^\ell$, $v_t^\ell = W^V h_t^\ell$. (Heads reshaped from $d_\text{model}$ to $n_\text{heads} \times d_\text{head}$.)
+   - **Append** $k_t^\ell, v_t^\ell$ to the layer's KV cache. New cache shape: $(t, n_\text{kv\_heads}, d_\text{head})$ per beam/sequence.
+   - **Attention**: query is one row $q_t^\ell$; keys/values are the entire cache. Output: $\text{attn}_t^\ell = \text{softmax}(q_t^\ell K_\text{cache}^{\ell\top}/\sqrt{d_\text{head}}) V_\text{cache}^\ell$. This is the only place the cache is *read*.
+   - Residual add, FFN, residual add.
+3. **Final LayerNorm + unembed.** $z_t = W_E^\top h_t^{n_\text{layers}}$. Logits over $|V|$.
+4. **Sampling.** Apply temperature/top-$p$/top-$k$ (Cap 10.2). Sample $y_t$.
+
+The expensive steps are #2's attention reads (memory-bandwidth bound) and the weight-matrix multiplications of the projections and FFN (memory-bandwidth bound at batch 1, compute-bound at large batch).
+
+### 5.1 Per-step compute and memory traffic
+
+For one decode step, batch $B$, context $t$:
+
+- Weight matrices read once: $O(N)$ bytes from HBM. Independent of $t$ and $B$.
+- KV cache read once: $O(B \cdot t \cdot n_\text{layers} \cdot n_\text{kv\_heads} \cdot d_\text{head} \cdot p)$ bytes from HBM. Scales linearly in $B$ and $t$.
+- New K/V written once: $O(B \cdot n_\text{layers} \cdot n_\text{kv\_heads} \cdot d_\text{head} \cdot p)$ bytes. Negligible.
+- FLOPs: $\Theta(B \cdot N)$ for the matmul, $\Theta(B \cdot t \cdot d_\text{model})$ for the attention reduction.
+
+The arithmetic intensity — FLOPs ÷ bytes — determines whether the step is compute-bound or memory-bound:
+
+$$
+\text{intensity} \;\approx\; \frac{2 B N}{N \text{ (weights)}} \;=\; 2B.
+$$
+
+At $B = 1$, intensity $\approx 2$ — far below the GPU's roofline ratio (typically $\sim 100$–$300$ FLOPs/byte for fp16 on H100). The step is memory-bound: most of the wall-clock is *moving the weight matrices through HBM*, not actually multiplying.
+
+At $B = 64$, intensity $\approx 128$ — above the roofline. The step becomes compute-bound; the weight bytes are amortised across $B$ sequences.
+
+This is **why batching matters**: a batch of $B$ sequences pays the weight-read cost *once* per token-step, divided over $B$ outputs. Below batch ~$32$ you are wasting GPU compute; above batch ~$64$ you saturate it.
+
+<Aside type="note">
+**The serving trilemma.** Latency, throughput, and quality (context length, model size) cannot all be maximised simultaneously.
+
+- Low latency ↔ small batch ↔ memory-bound decode ↔ low GPU utilisation.
+- High throughput ↔ large batch ↔ compute-bound decode ↔ high GPU utilisation.
+- Long context ↔ large per-sequence KV cache ↔ fewer sequences fit in HBM ↔ smaller batch.
+
+Continuous batching ([10.8](/session/ch10-inference-decoding/10.8-continuous-batching-paged-attention)) and PagedAttention reframe these trade-offs but don't eliminate them.
+</Aside>
+
+---
+
+## 6. Long-context tax
+
+At long contexts, the KV cache *attention read* dominates even the weight read.
+
+The crossover happens at
+
+$$
+B \cdot t \cdot n_\text{kv\_heads} \cdot d_\text{head} \cdot p \;\gtrsim\; N \cdot p_\text{weight}.
+$$
+
+For Llama-3 70B (GQA-$8$, $N \approx 70 \times 10^9$, fp16 weights, fp16 KV): the crossover is around $B \cdot t \approx 6 \times 10^5$. With batch $B = 32$, that's $t \approx 20{,}000$ — so for context lengths $\gtrsim 20\text{k}$, the KV cache attention is the dominant cost.
+
+Long-context architectures ([6.13](/session/ch6-attention-transformer/6.13-long-context), [7.13](/session/ch7-training-language-models/7.13-long-context-training)) need an attention compute strategy that is sub-quadratic in $t$ for the cache read. FlashAttention ([10.5](/session/ch10-inference-decoding/10.5-flashattention)) is the standard answer for *exact* attention; sliding-window, sparse, and SSM hybrids ([8.7](/session/ch8-modern-llm-architectures/8.7-state-space-models-mamba)–[8.8](/session/ch8-modern-llm-architectures/8.8-hybrid-architectures)) are the architectural alternatives.
+
+---
+
+## 7. Cache management policies
+
+Beyond per-step mechanics, *cache lifetime* matters. Three policies in production:
+
+1. **Per-request cache.** Allocate on prompt arrival; free when the response completes. Simplest; suffers from memory fragmentation when concurrent requests have variable length.
+2. **PagedAttention** (Kwon et al., vLLM, 2023; [10.8](/session/ch10-inference-decoding/10.8-continuous-batching-paged-attention)). The cache is allocated in fixed-size *blocks* (e.g., 16 tokens), like virtual-memory pages. Different sequences share a block table; non-contiguous physical blocks can be logically contiguous for the model. Eliminates fragmentation; allows fine-grained eviction.
+3. **Prefix caching.** When many requests share a common prefix (system prompt, few-shot examples), cache the prefix's K/V once and let multiple requests share it. Latency win on prefill; memory win on cache reuse. Standard in production chat-LLM serving as of 2025.
+
+Prefix caching is conceptually a *first-class* optimisation now — the per-request system prompt for an aligned chat model often runs to 1–5 K tokens, and caching its K/V across the user-facing batch of requests saves *all* of the prefill compute on those tokens, request after request.
+
+---
+
+## 8. Putting it together: an end-to-end serving stack
+
+A modern (2026) LLM serving stack — call it Llama-3 70B + GQA-$8$ + int8 KV cache on H100-80GB — looks like:
+
+1. Weights occupy $\approx 70$ GB (fp16) or $\approx 35$ GB (int8 / GPTQ; see [10.6](/session/ch10-inference-decoding/10.6-quantization-gptq-awq)). Quantised weights free up tens of GBs for the KV cache.
+2. KV cache budget: $\sim 40$ GB after weights + activations. At $\sim 40$ KB/token (GQA-$8$, int8 KV), the total cache supports $\sim 10^6$ tokens. Split across batch and context: $B = 32$ at $n_\text{ctx} = 32\text{k}$ or $B = 128$ at $n_\text{ctx} = 8\text{k}$.
+3. Prefill batched across sequences; FlashAttention reduces SRAM/HBM traffic.
+4. Decode runs in continuous-batching mode: sequences enter and leave the batch as they arrive / finish. PagedAttention manages the cache.
+5. Prefix caching reuses system-prompt K/V across requests.
+6. Sampling: $T \in [0.5, 1.0]$, top-$p \approx 0.95$, top-$k \approx 50$.
+7. Speculative decoding ([10.4](/session/ch10-inference-decoding/10.4-speculative-decoding)) wraps the decode step for an additional $\sim 2$–$3\times$ throughput on conversational workloads.
+
+This is roughly the architecture under any of the major commercial inference endpoints in 2026.
+
+---
+
+## 9. What we keep going forward
+
+Three things.
+
+1. **The KV-cache formula.** $2 \cdot n_\text{layers} \cdot n_\text{kv\_heads} \cdot d_\text{head} \cdot n_\text{ctx} \cdot B \cdot p$ bytes. The KV cache is the dominant memory consumer at production batch and context sizes.
+2. **Prefill vs. decode.** Prefill is compute-bound and parallel across prompt tokens. Decode is memory-bound at small batch (weight reads dominate) or attention-bound at large context (cache reads dominate). Batching amortises the weight read; sub-quadratic attention (FlashAttention or hybrids) addresses the cache read.
+3. **Cache shrinkage stacks.** GQA cuts $n_\text{kv\_heads}$ by $\sim 8\times$; MLA cuts another $\sim 4\times$ via latent compression; KV-cache quantisation (int8/int4) cuts $p$ by $2$–$4\times$. Modern stacks combine all three.
+
+Cap 10.4 next: *speculative decoding*. With the KV cache understood, we can ask the next question — can we use a cheap draft model to propose $k$ tokens, verify them in parallel with the target model, and get $\sim 2$–$3\times$ wall-clock speedup with zero quality loss?
+
+<SelfTest>
+
+**(a)** State the KV-cache bytes formula. Compute the cache size for Llama-2 70B ($n_\text{layers} = 80$, $n_\text{heads} = 64$, $d_\text{head} = 128$, MHA, fp16) at batch 4, context 8192. Compare to an 80 GB GPU.
+
+**(b)** Distinguish prefill from decode. Why is decode memory-bandwidth bound at batch 1? What does increasing batch buy you on each phase?
+
+**(c)** State the per-token cache-bytes formula. Compute it for Llama-3 70B (GQA-$8$) fp16 and again with int8 KV cache.
+
+**(d)** Define arithmetic intensity for a decode step. Derive the rough $\sim 2B$ form. Explain why $B = 32$ is roughly where decode transitions from memory-bound to compute-bound.
+
+**(e)** Sketch the order of operations of one decode step at position $t$, naming where in the loop the KV cache is *read* and where it is *written*.
+
+**(f)** Prefix caching: explain what is cached, what is shared across requests, and which phase (prefill / decode) it accelerates.
+
+</SelfTest>

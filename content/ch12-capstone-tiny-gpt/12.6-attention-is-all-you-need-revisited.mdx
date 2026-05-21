@@ -1,0 +1,147 @@
+---
+title: "12.6 — Write your own 'Attention is All You Need (Revisited)'"
+chapter: 12
+order: 6
+estimatedMinutes: 90
+goal: "Distil Chapters 0–11 and your capstone artefacts into a one-page, self-contained essay in your own words. State, in your own notation, what a Transformer is, what it computes, why it is trained on next-token prediction, how it is aligned, how it is interpreted. The artefact that proves you've internalised everything."
+prerequisites: ["ch12-capstone-tiny-gpt/12.5-mini-rlhf-dpo"]
+---
+
+## 1. Why this session exists
+
+This is the final session of the course. No new content. No new code. One assignment: **write a one-page essay, in your own words, that summarises what a Transformer is and what you've learned to do with it.**
+
+The frame is "Attention is All You Need (Revisited)" — a 2026 retrospective on the 2017 paper, written by you, building on the entire stack of Chapters 0–11. You are the author. The audience is *yourself in five years* — someone who knows the material but wants the compact, opinionated, personalised summary.
+
+Why this matters: a course is *not* internalised until you can compress it into your own language. The act of writing forces you to choose what's essential, what's tangential, what notation to commit to, what claims to defend. This is the artefact that proves the rest of the course landed.
+
+---
+
+## 2. What to write
+
+A one-page essay (~$500$–$800$ words). Structure suggestion (don't follow rigidly):
+
+1. **What a Transformer is.** A decoder-only autoregressive next-token predictor, decomposed as embedding → residual-stream → repeated read-modify-write blocks → unembed → softmax. Use your own notation; pick what feels natural after a year with this material.
+2. **Why attention.** What it buys over recurrence and convolutions. State the QK ↔ OV decomposition; argue why scaled-dot-product is the natural primitive.
+3. **Why depth.** Residual stream + pre-norm + many layers. Each layer adds a small contribution; depth enables composition; superposition lets each layer carry many features.
+4. **How it is trained.** Next-token prediction at scale; Chinchilla-compute-optimal scaling; mixed-precision and parallelism.
+5. **How it is aligned.** SFT → RLHF (or DPO) → constitutional / RLAIF → inference-time selection. The full Chapter 9 pipeline in compressed form.
+6. **How it is deployed.** KV cache, FlashAttention, quantisation, continuous batching, speculative decoding, agentic loops. The Chapter 10 stack.
+7. **How it is understood.** Residual stream view; circuits; induction heads; superposition; sparse autoencoders; activation steering. The Chapter 11 vocabulary.
+8. **What you take away.** Personal note. What surprised you. What you still find unsatisfying. What you want to study next.
+
+That's eight sections in ~$800$ words — $\sim 100$ words each. The constraint forces compression. Don't pad.
+
+---
+
+## 3. Suggested format
+
+- **Markdown.** Single `.md` file, plain text. Math in LaTeX (e.g., `$\\pi_\theta(y_t | x, y_{<t})$`).
+- **No headings beyond H2.** This isn't a structured document; it's an essay.
+- **No bullet lists.** Prose. (Your reader-self in five years wants flow, not bullets.)
+- **No external citations.** You're not making new claims; you're summarising what you've learned. The citations are in your own bibliography ([Chapter 13 references](/session/references-bibliography/references)) if needed.
+- **Use your own notation.** If you've started writing $\pi_\theta$ as $p_\theta$ or attention as $\text{Attn}(Q, K, V)$ as $\sigma(QK^\top/\sqrt{d}) V$ — use whichever feels natural. The notation should serve the argument, not vice versa.
+
+---
+
+## 4. Worked-example skeleton (don't copy; use as scaffolding)
+
+Below is a *minimal* sample skeleton — what one essay *could* look like. Don't copy it; use it as a starting point for the *shape* if you're stuck. The actual prose, claims, and emphases must be yours.
+
+> ## What a Transformer is, after twelve chapters
+> 
+> A Transformer is an autoregressive model of token sequences. Given a context $x_{<t}$, it produces a distribution $\pi_\theta(\cdot \mid x_{<t})$ over the next token; sampling iterates the distribution to generate full sequences. The architecture is built out of repeated read-modify-write blocks on a shared residual stream $h_t \in \mathbb{R}^{d_\text{model}}$: each block applies a layer-normed attention (which mixes information across positions) and a layer-normed feed-forward (which mixes information across features), both written back to the stream additively.
+> 
+> The attention primitive is scaled dot product: a query at position $t$ attends to keys at every earlier position, weights are softmaxed, and the weighted sum of values is written. The QK matrix selects *what to look at*; the OV matrix decides *what to write*. This factorisation is the algorithmic substrate of the Transformer — circuits like induction heads (which implement in-context pattern matching $AB \ldots A \to B$) are recognisable combinations of QK and OV behaviours.
+> 
+> Depth is the second key: a model with $L$ layers can compose $L$ stacked feature transformations through the residual stream. Each layer's small contribution can be tracked as an additive term; collectively they implement complex algorithms that single-layer models cannot. Depth is also what enables superposition — the network packs more features than dimensions into its activations, using sparsity to keep interference manageable.
+> 
+> Training is next-token prediction at scale. Cross-entropy of the predicted softmax against the next token, minimised by AdamW on shuffled subsequences. The Chinchilla scaling law tells us that compute should be split roughly equally between parameters and data; the modern recipe (mixed precision, ZeRO/FSDP, careful schedulers) scales this to the $10^{25}$ FLOPs frontier.
+> 
+> Alignment is the multi-stage pipeline that turns a pretrained next-token predictor into a usable assistant: supervised fine-tuning on (prompt, response) pairs, then preference-based optimisation (DPO is the clean derivation; PPO is the workhorse) against a reward signal — human preferences, AI preferences, verifiable rewards for reasoning. Test-time scaling — letting the model "think" before answering — compounds with training-time alignment.
+> 
+> Deployment is the engineering stack: KV cache (the dominant inference memory cost), FlashAttention (I/O-optimal exact attention), quantisation (INT4 for weights, INT8 for cache), continuous batching with paged KV (vLLM), speculative decoding (free wall-clock from a small draft model), and agentic orchestration on top. A frontier inference server is the integration of all of these.
+> 
+> Interpretability is the youngest layer of the stack. The residual stream is a bus on which features (linear directions) accumulate. Sparse autoencoders recover these features from the model's activations; activation steering uses them as control knobs. We can now read off, partially, what frontier models have learned — and we are very far from doing this completely. Mech-interp is the safety bet.
+> 
+> What I take away: the Transformer's success comes from one architectural idea (attention) and many small accumulated improvements (RMSNorm, RoPE, SwiGLU, GQA/MLA, etc.). The hard work has shifted from architecture to alignment, from alignment to inference, from inference to interpretation. The next five years' frontier is probably some hybrid of (i) longer-thinking reasoning models, (ii) agentic loops with tools, (iii) better interpretability tools that scale to frontier models. Whether the safety story can keep pace with the capability story is the central open question.
+
+That's $\sim 750$ words. *Don't copy it.* The essay must be in your own voice, your own emphases, your own choices about what to include. If you find yourself paraphrasing this skeleton, throw it away and start fresh.
+
+---
+
+## 5. Quality bar
+
+How do you know your essay is good?
+
+### 5.1 Specific not generic
+
+A bad sentence: "Transformers use attention to process sequences." A good sentence: "A Transformer's attention head, factored into a QK matrix that selects which token to attend to and an OV matrix that decides what to write, implements one of perhaps a half-dozen identifiable algorithmic primitives — bigram, copy, induction, name-mover — depending on which of these matrices is more structured."
+
+The first sentence could appear in a marketing pitch. The second has been written by someone who has done the work.
+
+### 5.2 Compressed without lossy
+
+You're squeezing $\sim 100{,}000$ words of course material into $\sim 800$. The right ratio is $125\times$ compression. The wrong way is by dropping content; the right way is by *naming the abstractions* (QK + OV, residual stream, KL leash) and letting the names do the work.
+
+### 5.3 Opinionated
+
+This is your essay. You're allowed to say what you think. "Beam search is dead" is acceptable. "RoPE is the most consequential single architecture change since pre-norm" is acceptable. "I think mech-interp will succeed at scale" is acceptable. Defend your opinions briefly.
+
+### 5.4 Honest about what's unsolved
+
+A good essay names what we don't yet understand: the faithfulness of reasoning-model chains, whether agentic capabilities will outpace alignment, what mech-interp can and can't certify. These open questions are part of the story, not bugs in your understanding.
+
+---
+
+## 6. Where to put it
+
+Save the essay as `capstone_essay.md` in your `ai-math-theory/` working directory. Or, if you have a personal blog or notes system, put it there. The location doesn't matter; the *existence* of the artefact is what matters.
+
+Optional: post the essay publicly (gist, blog post, Substack). Useful for getting feedback and for forcing the bar one notch higher. Not required.
+
+---
+
+## 7. What this artefact proves
+
+If you can write this essay, in $\sim 800$ words, without copying or paraphrasing the course material, *you have internalised the modern LLM stack*. The course's job is done.
+
+This isn't a credentialing claim — there's no certificate. It's an *epistemic* claim about your own knowledge. The essay is the artefact that, when you re-read it in five years, will tell you whether the course landed.
+
+<Aside type="note">
+**The "internalisation" test, generalised.** This format — finish a textbook, write a personal essay condensing what you took away — works for almost any technical body of knowledge. It is also what professional researchers do when they have to give a $5$-minute talk on a $5$-year program of work: select the load-bearing ideas, articulate them in your own voice, defend choices. If you can do it for this material, you can do it for whatever you study next. That habit is more valuable than any specific knowledge in the course.
+</Aside>
+
+---
+
+## 8. Closing the course
+
+You started with linear algebra (Cap 0.1), matrix calculus (Cap 0.2), and the perceptron (Cap 1.5). You ended with a trained, aligned, modernised tiny GPT and a one-page essay that condenses what you've learned. The arc spans $127$ sessions of theory plus six sessions of capstone implementation.
+
+Three things to do in the months after closing the course:
+
+1. **Read three frontier papers per month.** Sample broadly across mech-interp ([transformer-circuits.pub](https://transformer-circuits.pub/)), alignment (arXiv cs.CL), and engineering (vLLM, FlashAttention follow-ups). The reading list in [Cap 11.9](/session/ch11-interpretability-frontier/11.9-where-the-frontier-is-now) is a starting point.
+2. **Build one thing.** A working model, an interpretability tool, a small reasoning agent, an evaluation. The capstone artefacts (TinyGPT v1/v2/DPO) are starting material; extend them.
+3. **Teach someone.** Find a study partner; walk them through Chapter 6 or Chapter 9. The act of teaching exposes the gaps in your own understanding — exactly where to study next.
+
+The course is closed. The work continues.
+
+<SelfTest>
+
+**(a)** Write your one-page essay. Aim for $500$–$800$ words. The eight-section skeleton in §2 is a starting suggestion; deviate if you have a better structure.
+
+**(b)** After writing, re-read. Identify three sentences that are "generic" (could appear in a marketing pitch) and rewrite each to be specific to what you actually learned.
+
+**(c)** Compute your essay's compression ratio (course words / essay words). Aim for $\sim 100$–$200\times$. Higher means more compression; lower means you're paraphrasing rather than abstracting.
+
+**(d)** Show the essay to someone else (a colleague, study partner, or your reader-self via re-reading in a week). Get one piece of feedback on the *opinions* expressed. Revise if warranted.
+
+**(e)** Save the essay alongside your capstone artefacts (loss curves, samples, model checkpoints). Note: this is the artefact you'll point to when asked "what do you know about LLMs?"
+
+**(f)** *Reflect.* What was the single most surprising thing in the course? Where do you most want to go deeper? Where is your understanding still shaky? Write these down — they are your next study plan.
+
+</SelfTest>
+
+---
+
+*The course closes here. Thank you for following it through. The next phase is yours.*

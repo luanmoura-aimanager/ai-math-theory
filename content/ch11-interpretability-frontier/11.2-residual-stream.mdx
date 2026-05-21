@@ -1,0 +1,251 @@
+---
+title: "11.2 — Residual stream view of a Transformer"
+chapter: 11
+order: 2
+estimatedMinutes: 22
+goal: "Reframe the Transformer block as a read-modify-write on a shared 'residual stream' of dimension $d_\\text{model}$. Decompose the model as a sum of contributions from every attention head and MLP. Define feature directions as elements of the residual stream's vector space. Set up the language used by the rest of Chapter 11."
+prerequisites: ["ch11-interpretability-frontier/11.1-mech-interp-program", "ch6-attention-transformer/6.9-residual-connections", "ch6-attention-transformer/6.11-transformer-block-aiayn"]
+---
+
+## 1. Why this session exists
+
+The Transformer block, as introduced in [Cap 6.11](/session/ch6-attention-transformer/6.11-transformer-block-aiayn), is conventionally drawn as:
+
+$$
+\begin{aligned}
+\tilde{h} &= h + \text{Attn}(\text{LN}(h)) \\
+h_\text{out} &= \tilde{h} + \text{FFN}(\text{LN}(\tilde{h}))
+\end{aligned}
+$$
+
+Two layers, one block. Residual connections everywhere. This is the right *engineering* picture: it tells you what to code.
+
+For interpretability, the right picture is rotated 90°. Instead of "the block transforms $h$ to $h_\text{out}$", we say: **every block reads from a single shared vector $h$ — the residual stream — and writes a (potentially) different vector into it.** The Transformer's computation is a sequence of additive writes to one running register, with each attention head and MLP contributing one term.
+
+This is the **residual stream view**, due to Elhage et al. (Anthropic, 2021, *A Mathematical Framework for Transformer Circuits*, [transformer-circuits.pub](https://transformer-circuits.pub/2021/framework/index.html)). It is the foundation of every mech-interp paper that follows.
+
+By the end of this session you should be comfortable writing the model output as
+
+$$
+\text{logits} = W_U \cdot \left( \text{token\_emb} + \text{pos\_emb} + \sum_\text{all heads} \text{head\_output} + \sum_\text{all MLPs} \text{MLP\_output} \right),
+$$
+
+and identifying each summand with a *direct contribution* to the prediction. This decomposition is what makes circuit analysis possible.
+
+---
+
+## 2. The residual stream
+
+At every layer $\ell$ and every token position $t$, the model holds a vector $h_t^{(\ell)} \in \mathbb{R}^{d_\text{model}}$. Across positions: $H^{(\ell)} \in \mathbb{R}^{n \times d_\text{model}}$ (one row per token).
+
+**Initialisation.** $H^{(0)}$ is the token embedding plus positional encoding (for absolute PE) or just the token embedding (for RoPE — Cap 6.7, where positional info enters at attention time, not at the embedding layer).
+
+$$
+h_t^{(0)} \;=\; e_{x_t} \;+\; p_t,
+$$
+
+with $e_{x_t} \in \mathbb{R}^{d_\text{model}}$ from the token-embedding matrix $W_E$ and $p_t$ the positional encoding (or $0$ for RoPE-style models).
+
+**Block update.** Each block adds two terms — one from attention, one from FFN — to $h$, without otherwise modifying it. Crucially, LayerNorm is *applied inside the attention/FFN* in the pre-norm design (Cap 6.10), so the stream itself is not LayerNormed; it accumulates raw contributions.
+
+$$
+h_t^{(\ell+1)} \;=\; h_t^{(\ell)} \;+\; a_t^{(\ell)} \;+\; m_t^{(\ell)}
+$$
+
+where $a_t^{(\ell)} = \text{Attn}^{(\ell)}(\text{LN}(H^{(\ell)}))_t$ and $m_t^{(\ell)} = \text{FFN}^{(\ell)}(\text{LN}(h_t^{(\ell)} + a_t^{(\ell)}))$.
+
+**Read-out.** After the final block, the stream is projected to logits:
+
+$$
+\text{logits}_t \;=\; W_U \cdot \text{LN}(h_t^{(L)}),
+$$
+
+with $W_U \in \mathbb{R}^{|V| \times d_\text{model}}$ the unembedding matrix (often $W_U = W_E^\top$ in weight-tied models).
+
+### 2.1 The stream as a vector bus
+
+Mental model: the residual stream is a *bus* — a shared communication channel between modules. Every attention head and MLP *reads* from it (via its input projections), processes locally, and *writes* an additive contribution back.
+
+Two structural consequences:
+
+- **Modules don't communicate directly with each other.** Head $7.4$ doesn't talk to head $9.2$; they communicate through the residual stream's contents.
+- **Contributions are linear and additive.** Every write to the stream is a vector addition; the stream's value at any layer is a sum of all previous writes plus the embedding.
+
+This linearity is the key to circuit analysis. We can write the final stream as a *sum of contributions* from every component:
+
+$$
+\boxed{\;h_t^{(L)} \;=\; e_{x_t} + p_t + \sum_{\ell=0}^{L-1} \big(a_t^{(\ell)} + m_t^{(\ell)}\big)\;}
+$$
+
+Every component is one summand in the residual stream's final value.
+
+---
+
+## 3. Decomposing attention
+
+Attention itself is a sum over heads. Recall (Cap 6.4) that multi-head attention is
+
+$$
+\text{Attn}(X) \;=\; \sum_{h=1}^{H} (P^{(h)} \cdot V^{(h)}) \cdot W^{O,(h)}
+$$
+
+where $P^{(h)} = \text{softmax}(Q^{(h)} K^{(h)\top}/\sqrt{d})$ is the attention pattern and $W^{O, (h)} \in \mathbb{R}^{d_\text{head} \times d_\text{model}}$ is the per-head output projection.
+
+So each head $h$ at layer $\ell$ contributes one term to the residual stream:
+
+$$
+a_t^{(\ell)} \;=\; \sum_{h=1}^{H} \underbrace{(P^{(\ell, h)} V^{(\ell, h)})_t \cdot W^{O, (\ell, h)}}_{\text{head } (\ell, h) \text{ contribution}}.
+$$
+
+There are $L \cdot H$ heads in total. Each writes one vector at every position; we can read it off without affecting anything else.
+
+### 3.1 The OV circuit and the QK circuit
+
+A useful decomposition per head: separate the *what* (what gets moved) from the *where* (which token's contribution goes where).
+
+- **QK circuit.** Determines the attention pattern $P^{(\ell, h)} \in \mathbb{R}^{n \times n}$. Function of $Q = X W^{Q, (\ell, h)}$ and $K = X W^{K, (\ell, h)}$. Says: "from position $t$, attend to positions $s$ with these weights."
+- **OV circuit.** Determines what gets written. The composition $W^{V, (\ell, h)} W^{O, (\ell, h)} \in \mathbb{R}^{d_\text{model} \times d_\text{model}}$ maps "what is in the residual stream at the attended-to position" to "what gets added at the attending-from position."
+
+Mech-interp speaks of *the QK matrix* and *the OV matrix* as the two halves of a head's behaviour: QK selects which token to look at, OV decides what information to copy.
+
+These two matrices, alone, often suffice to characterise a head's algorithm. Cap 11.3 develops bigram and skip-bigram head analyses entirely in terms of QK and OV.
+
+### 3.2 The "low-rank residual" structure
+
+A head writes via $V W^O$ where $V \in \mathbb{R}^{n \times d_\text{head}}$ and $W^O \in \mathbb{R}^{d_\text{head} \times d_\text{model}}$. The output thus lies in a $d_\text{head}$-dimensional subspace of the $d_\text{model}$-dimensional residual stream. With $d_\text{head} = d_\text{model}/n_\text{heads}$ (typical $128 / 4096$): each head writes into a $\sim 3\%$-rank subspace.
+
+The residual stream has *many more dimensions than any single head's image*. This means heads can in principle communicate non-interferingly — different heads' writes can live in orthogonal subspaces. (In practice, they don't always; subspaces overlap, and superposition (Cap 11.5) emerges.)
+
+---
+
+## 4. Decomposing MLPs
+
+The FFN at layer $\ell$:
+
+$$
+\text{FFN}^{(\ell)}(x) \;=\; W_\text{out}^{(\ell)} \cdot \sigma\big( W_\text{in}^{(\ell)} \cdot x \big)
+$$
+
+with $W_\text{in} \in \mathbb{R}^{d_\text{ff} \times d_\text{model}}$, $W_\text{out} \in \mathbb{R}^{d_\text{model} \times d_\text{ff}}$, $\sigma$ the activation (GELU, SwiGLU; Cap 8.4).
+
+Per-neuron decomposition:
+
+$$
+\text{FFN}^{(\ell)}(x) \;=\; \sum_{n=1}^{d_\text{ff}} \sigma(w_{\text{in},n}^\top x) \cdot w_{\text{out},n}^{}
+$$
+
+where $w_{\text{in},n}$ is the $n$-th row of $W_\text{in}$ (the *reader* direction for neuron $n$) and $w_{\text{out},n}$ is the $n$-th column of $W_\text{out}$ (the *writer* direction). Each neuron reads the residual stream along $w_{\text{in},n}$, applies the activation, and writes along $w_{\text{out},n}$ scaled by its activation magnitude.
+
+This is the *per-neuron* view of an MLP — each of $d_\text{ff}$ neurons is one read-write pair. In modern LLMs, $d_\text{ff} = 4 d_\text{model}$, so each MLP has $\sim 16\text{k}$ such units. The whole model has $L \cdot d_\text{ff}$ neurons — for a $70$B model, $\sim 1$M.
+
+### 4.1 Neurons as features (the optimistic view)
+
+A *monosemantic* neuron is one where $\sigma(w_{\text{in},n}^\top x)$ is high in exactly one interpretable circumstance (e.g., "the previous token is `cat`") and low otherwise. Its writer direction $w_{\text{out},n}$ then *injects* a fixed feature ("cat-context detected") into the residual stream.
+
+Identified monosemantic neurons exist — and are spectacular when found ("the curve detector" in vision (Olah et al., 2017); the "Indonesian-language" neuron in GPT-2; the "Golden Gate" feature in Claude 3 Sonnet). But they are *rare*. Most neurons are *polysemantic* — they activate on multiple unrelated stimuli, mixing several features into one neuron. Cap 11.5 explains *why* (superposition); Cap 11.6 describes the tool (SAEs) for un-mixing.
+
+---
+
+## 5. The full additive decomposition
+
+Putting it together. The pre-unembed stream at the final layer is
+
+$$
+h_t^{(L)} \;=\; e_{x_t} + p_t \;+\; \sum_{\ell, h} a_t^{(\ell, h)} \;+\; \sum_{\ell, n} m_t^{(\ell, n)}
+$$
+
+where $a_t^{(\ell, h)}$ is the contribution of head $(\ell, h)$ at position $t$ and $m_t^{(\ell, n)}$ is the contribution of MLP-neuron $(\ell, n)$ at position $t$.
+
+The logit on token $v$ is then
+
+$$
+\boxed{\;\text{logit}_v \;=\; W_U[v,:] \cdot \text{LN}(h_t^{(L)}) \;\approx\; W_U[v,:] \cdot e_{x_t} + W_U[v,:] \cdot p_t + \sum_{\ell, h} W_U[v,:] \cdot a_t^{(\ell, h)} + \sum_{\ell, n} W_U[v,:] \cdot m_t^{(\ell, n)}\;}
+$$
+
+(The $\approx$ becomes $=$ if we momentarily ignore the final LayerNorm or absorb it into the unembed. We can also fold a layer-specific LN into the projection if we're careful.)
+
+This means **every component's logit contribution is computable**. We can rank the heads/neurons by how much they push the logit of (say) "Paris" up or down on a particular input. This is the *logit attribution* technique, and it is the workhorse of circuit identification.
+
+### 5.1 Direct vs. indirect contributions
+
+The decomposition above accounts for *direct* contributions: what does head $(\ell, h)$ write to the stream, projected onto the unembed.
+
+In a multi-layer model, contributions can also be *indirect*: head $(\ell, h)$ writes feature $F$; later head $(\ell', h')$ reads $F$ from the stream and writes a downstream feature $F'$; $F'$ ends up in the logit.
+
+The full attribution graph is therefore a *DAG of contributions* through the residual stream. Tracing a full circuit ([Cap 11.3](/session/ch11-interpretability-frontier/11.3-attention-heads-circuits)) means identifying both the direct effect of each component and the chain of indirect effects.
+
+---
+
+## 6. Feature directions
+
+A **feature** in mech-interp is an *element of the residual stream's vector space* — a direction $f \in \mathbb{R}^{d_\text{model}}$ such that the projection $\langle f, h_t^{(\ell)} \rangle$ encodes a specific human-interpretable property of the input.
+
+Examples:
+
+- A "is-the-input-French" direction (probable layer ~8 in a multilingual model).
+- A "the-subject-of-the-sentence-is-X" direction.
+- A "this-prompt-is-asking-for-code" direction.
+- A "Golden Gate Bridge" direction in Claude 3 Sonnet.
+
+Features can be added, subtracted, projected, ablated. Their existence is the *linear-representation hypothesis*: meaningful concepts in trained Transformers are represented as approximately-linear directions in activation space, not as nonlinear combinations of neurons. Strong empirical support (Park et al., 2023, [arXiv:2311.03658](https://arxiv.org/abs/2311.03658)) — but not absolute (some concepts appear to require nonlinear readouts).
+
+A trained Transformer's residual stream is therefore best thought of as a *feature vector space* where the dimensions (the basis) don't generally align with neurons — features live as oblique directions, and the activation magnitudes are the feature *values*. Cap 11.5 develops this carefully via the superposition story.
+
+<Aside type="note">
+**Why "stream"?** The residual stream is a flowing, continuously-updated vector — each token position has its own running stream, and each layer adds to it. The metaphor is from circuit design (a bus carrying signals between modules) and from biological neural assemblies (population coding of features as vector directions). Both metaphors capture the right intuition: many modules read and write the same shared representation, and the representation's content is a sum of contributions, not a single component's output.
+</Aside>
+
+---
+
+## 7. Implications for analysis
+
+A few practical consequences for the rest of Chapter 11.
+
+### 7.1 Circuits are sub-DAGs of the contribution graph
+
+To say "circuit $C$ implements behaviour $B$" means: a small set of attention heads and MLP neurons, with specific QK/OV/reader/writer structure, are causally responsible for $B$ on the relevant inputs. The circuit can be drawn as a DAG with edges through the residual stream.
+
+The IOI circuit (Wang et al., 2023) — for solving "John gave the ball to Mary; Mary handed it back to ___" — is the canonical worked example: $\sim 26$ heads across $\sim 7$ layers, with specific roles (name-mover, duplicate-token detector, induction, S-inhibition). Each role is identified by its QK pattern, OV behaviour, and causal ablation effect.
+
+### 7.2 Ablation and patching
+
+Two interventions for testing causal claims:
+
+- **Ablation.** Zero out (or mean-substitute) a component's contribution. If behaviour $B$ disappears, the component is *necessary*.
+- **Activation patching.** Replace one component's activation on input $A$ with its activation on input $B$. Watch how behaviour changes. Reveals *causal pathways* through the model.
+
+Both rely on the additive decomposition: zeroing or substituting one summand leaves the others untouched, so we can attribute changes in the output to changes in that summand alone (to first order — non-linearities downstream complicate this, but the framework holds).
+
+### 7.3 The linearity wishlist
+
+A lot of mech-interp's power comes from the *linearity* of the residual stream: contributions add, projections decompose. The non-linearities — softmaxes in attention, the FFN's activation function, the final LayerNorm — are the friction points.
+
+Many mech-interp techniques explicitly approximate or *unfold* these non-linearities. The "freezing" trick: hold attention patterns fixed at their observed values for a given input, treating the rest as linear. This converts the model to a path-decomposable linear operator, at the cost of losing some causal information.
+
+---
+
+## 8. What we keep going forward
+
+Three things.
+
+1. **The residual stream is a vector bus.** Every component reads from it, processes locally, and writes an additive contribution back. The full stream at the final layer is a sum: token embedding + positional encoding + all head outputs + all MLP outputs.
+2. **Components factor into reader and writer parts.** Attention head: QK (selects) + OV (writes). MLP neuron: $w_\text{in}$ (reads) + $w_\text{out}$ (writes). The reader projects the stream into the component's input subspace; the writer projects the component's output back into the stream.
+3. **Features are directions in the stream.** Meaningful concepts are approximately linear functionals of $h$. This linear-representation hypothesis is what makes circuit analysis tractable; it is also the prerequisite for everything in 11.3–11.7.
+
+Cap 11.3 next: with the residual-stream language in hand, we analyse attention heads as bigram, skip-bigram, and copying circuits. This is the entry point to mech-interp's algorithmic findings.
+
+<SelfTest>
+
+**(a)** Write the residual-stream update at layer $\ell$ in additive form. Identify the two contributions (attention and MLP) and the role of LayerNorm.
+
+**(b)** State the additive decomposition of $h_t^{(L)}$ as a sum over embeddings, all heads, and all MLP neurons. How many terms in total for a model with $L = 32$, $H = 32$, $d_\text{ff} = 4 d_\text{model}$?
+
+**(c)** Decompose an attention head into QK and OV parts. State the dimensions of each matrix and what each computes.
+
+**(d)** Per-neuron MLP decomposition: state the reader direction $w_\text{in}$ and the writer direction $w_\text{out}$. What does the activation function $\sigma$ contribute to the per-neuron writer formula?
+
+**(e)** A feature is a direction $f \in \mathbb{R}^{d_\text{model}}$. State the linear-representation hypothesis and one observable consequence (e.g., what a probe can detect).
+
+**(f)** A team claims "head $(15, 4)$ writes information about the subject of the sentence into the residual stream." Sketch two causal interventions you'd run to test this claim.
+
+</SelfTest>

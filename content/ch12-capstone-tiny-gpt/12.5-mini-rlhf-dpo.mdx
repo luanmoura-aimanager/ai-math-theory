@@ -1,0 +1,325 @@
+---
+title: "12.5 — Mini-RLHF: pairwise preference dataset on 2 prompts, reward model, DPO step"
+chapter: 12
+order: 5
+estimatedMinutes: 35
+goal: "Build an end-to-end alignment loop on your tiny GPT in under 300 lines: collect $\\sim 50$ pairwise preferences on two prompts, train a reward model on them, take one DPO step. The artefact is a *modified* model that prefers one stylistic register over another. The mini-RLHF that proves you can run the Chapter 9 stack."
+prerequisites: ["ch12-capstone-tiny-gpt/12.4-rope-rmsnorm", "ch9-alignment/9.10-dpo", "ch9-alignment/9.3-reward-modeling-preference-data"]
+---
+
+## 1. Why this session exists
+
+[Chapter 9](/session/ch9-alignment/9.1-why-pretrained-llms-arent-useful) covered the full alignment toolkit: SFT, reward modelling, PPO, GRPO, DPO, RLAIF, inference-time alignment. This session does the *minimum viable instance* on your TinyGPT. The minimum: $\sim 50$ preference pairs, a reward model with $\sim 30$ minutes of training, a DPO step that modifies your TinyGPT v2's weights.
+
+The point isn't to produce a usefully-aligned model — it's to *run the alignment loop* end-to-end on your own model. Once you have, the Chapter 9 derivations stop being abstract.
+
+By the end you should have:
+
+- $\sim 50$ pairwise preferences in a JSON file.
+- A small reward model (a copy of TinyGPT v2 with a scalar head) trained on those preferences.
+- A DPO-updated TinyGPT v2 that demonstrably prefers one stylistic register over another in its samples.
+
+The whole thing fits in $\sim 300$ lines of Python.
+
+---
+
+## 2. The alignment target
+
+Two prompts, two registers. Pick something where you can confidently label preferences yourself:
+
+- **Prompt 1:** "ROMEO:"
+- **Prompt 2:** "JULIET:"
+- **Preferred register:** more dramatic, multi-sentence, period-correct Shakespearean.
+- **Dispreferred register:** terse, repetitive, modern-sounding.
+
+Why two prompts and not 200? Because the goal is to *feel* alignment, not to make a useful product. With $\sim 50$ pairs across 2 prompts, you can hand-label in $30$ minutes and the DPO step's effect on samples should be visible afterwards.
+
+---
+
+## 3. Build the preference dataset
+
+### 3.1 Generate candidates
+
+Use TinyGPT v2 (the model from 12.4) at temperature 0.9 with top-$p$ = 0.95 to generate $\sim 20$ continuations per prompt, of length $\sim 150$ tokens each.
+
+```python
+import torch
+from tiny_gpt_v2 import TinyGPT_v2, GPTConfig
+# load model and tokeniser...
+
+samples = {"ROMEO:": [], "JULIET:": []}
+for prompt in samples:
+    for _ in range(20):
+        idx = tokenise(prompt).unsqueeze(0).cuda()
+        out = model.generate(idx, max_new_tokens=150, temperature=0.9, top_p=0.95)
+        samples[prompt].append(decode(out[0].tolist()))
+
+import json
+with open("samples.json", "w") as f:
+    json.dump(samples, f, indent=2)
+```
+
+### 3.2 Hand-label preferences
+
+Open `samples.json`, read pairs of completions for the same prompt, and label which one is *more Shakespearean*. Repeat $\sim 25$ times per prompt for $\sim 50$ pairs total.
+
+Format the dataset as a list of dicts:
+
+```json
+[
+  {
+    "prompt": "ROMEO:",
+    "chosen": "ROMEO: O fair morning! how strange is this hour...",
+    "rejected": "ROMEO: I am here. I am here. I am here..."
+  },
+  ...
+]
+```
+
+A sensible rejection criterion: penalise repetition loops, single-sentence answers, modern-sounding diction; prefer multi-clause, period vocabulary, multi-character dialogue. Be consistent. (This is exactly the labelling work that Chapter 9.3 abstracts — labellers applying a rubric.)
+
+Save to `preferences.json`.
+
+### 3.3 The cost of this step
+
+In real RLHF, this is the *expensive* step — Anthropic and OpenAI pay labellers tens of thousands of dollars per dataset (Cap 9.3 §4). Your $50$-pair version is the toy-scale demonstration.
+
+The dataset is also the *limiting factor*. If your labels are inconsistent or your samples don't actually distinguish the registers, no amount of clever training will produce a meaningful alignment. Spend the $30$ minutes here carefully.
+
+---
+
+## 4. Train a reward model
+
+The Bradley-Terry reward objective ([Cap 9.4 §2](/session/ch9-alignment/9.4-bradley-terry-reward-objective)) — recap:
+
+$$
+\mathcal{L}_\text{RM} \;=\; -\mathbb{E}_{(x, y_c, y_r) \sim D}\big[\log \sigma\big(r_\phi(x, y_c) - r_\phi(x, y_r)\big)\big]
+$$
+
+where $r_\phi$ is the reward model's scalar score for a (prompt, completion) pair, $y_c$ is the chosen response, $y_r$ the rejected.
+
+### 4.1 Reward-model architecture
+
+Easy version: start from a copy of TinyGPT v2's weights, replace the LM head with a scalar head:
+
+```python
+class RewardModel(nn.Module):
+    def __init__(self, base_model):
+        super().__init__()
+        self.base = base_model
+        # replace lm_head with scalar head
+        self.scalar_head = nn.Linear(base_model.config.n_embd, 1, bias=False)
+    def forward(self, idx):
+        # forward through base model up to (but not including) the lm_head
+        # one common trick: extract hidden states by inspecting the model's internal
+        # for a tiny rewrite, replicate the base forward without the unembed
+        x = self.base.wte(idx)
+        for block in self.base.blocks:
+            x = block(x)
+        x = self.base.rms_f(x)
+        # mean-pool over sequence (or take final token's hidden)
+        h = x.mean(dim=1)  # (B, n_embd)
+        return self.scalar_head(h).squeeze(-1)  # (B,)
+```
+
+The scalar head is initialised randomly; the rest of the model inherits from your trained TinyGPT v2. This is the standard RM-from-pretrained-model recipe (Cap 9.3 §3.2).
+
+### 4.2 The training loop
+
+```python
+import torch.nn.functional as F
+
+rm = RewardModel(base_model=tiny_gpt_v2_trained_copy).cuda()
+optimiser = torch.optim.AdamW(rm.parameters(), lr=1e-5, weight_decay=0.0)
+
+for epoch in range(5):
+    for batch in dataloader_preferences:
+        prompt_ids = tokenise(batch["prompt"]).cuda()
+        chosen_ids = tokenise(batch["prompt"] + batch["chosen"]).cuda()
+        rejected_ids = tokenise(batch["prompt"] + batch["rejected"]).cuda()
+        r_c = rm(chosen_ids)
+        r_r = rm(rejected_ids)
+        loss = -F.logsigmoid(r_c - r_r).mean()
+        loss.backward()
+        optimiser.step()
+        optimiser.zero_grad()
+```
+
+Expected: $\sim 20$ minutes of training on a single GPU. Loss should decrease from $\sim 0.7$ (random) to $\sim 0.3$–$0.5$. Don't expect $\sim 0$ — with only 50 pairs, the model can't perfectly fit; that's fine.
+
+### 4.3 Sanity-check the RM
+
+Before moving to DPO, verify the RM does what you intended. Generate $5$ new samples per prompt with temperature 0.9, score each with `rm()`, and check: do the high-RM-scored samples look "more Shakespearean" to you than the low-RM-scored?
+
+If yes, the RM has learned a meaningful proxy for your preferences. If no — debug; common cause is too few pairs or labelling noise.
+
+---
+
+## 5. DPO step
+
+DPO ([Cap 9.10 §3](/session/ch9-alignment/9.10-dpo)) reformulates RLHF as a closed-form preference loss directly on the policy, avoiding the explicit RL step:
+
+$$
+\mathcal{L}_\text{DPO} \;=\; -\mathbb{E}_{(x, y_c, y_r) \sim D}\bigg[\log \sigma\bigg(\beta \log \frac{\pi_\theta(y_c|x)}{\pi_\text{ref}(y_c|x)} - \beta \log \frac{\pi_\theta(y_r|x)}{\pi_\text{ref}(y_r|x)}\bigg)\bigg].
+$$
+
+Two models: $\pi_\theta$ (the trainable policy, started from $\pi_\text{ref}$) and $\pi_\text{ref}$ (a frozen reference, the SFT model — for us, TinyGPT v2). Hyperparameter $\beta$ controls how much $\pi_\theta$ is allowed to diverge from $\pi_\text{ref}$; typical $\beta \in [0.1, 0.5]$.
+
+### 5.1 Compute the log-probabilities
+
+For a (prompt, completion) pair, the log-probability is the sum of per-token cross-entropies on the *completion* portion only (not the prompt):
+
+```python
+def compute_logprob(model, idx, prompt_len):
+    """Return sum of log probabilities of completion tokens."""
+    logits, _ = model(idx)  # (B, T, V)
+    logits = logits[:, :-1, :]  # shift for next-token
+    targets = idx[:, 1:]
+    log_probs = F.log_softmax(logits, dim=-1)
+    gather_lp = log_probs.gather(-1, targets.unsqueeze(-1)).squeeze(-1)  # (B, T-1)
+    # mask out prompt tokens (set to 0 to ignore)
+    completion_mask = (torch.arange(gather_lp.shape[1])[None, :] >= prompt_len - 1).float().cuda()
+    return (gather_lp * completion_mask).sum(dim=1)
+```
+
+### 5.2 The DPO training loop
+
+```python
+ref_model = tiny_gpt_v2_trained_frozen.cuda()
+policy = tiny_gpt_v2_trained_copy.cuda()    # start from ref weights, trainable
+
+optimiser = torch.optim.AdamW(policy.parameters(), lr=1e-6, weight_decay=0.0)
+beta = 0.1
+
+for epoch in range(3):
+    for batch in dataloader_preferences:
+        chosen_ids = tokenise(batch["prompt"] + batch["chosen"]).cuda()
+        rejected_ids = tokenise(batch["prompt"] + batch["rejected"]).cuda()
+        prompt_len = len(tokenise(batch["prompt"]))
+
+        # Policy log-probs
+        lp_c_pi = compute_logprob(policy, chosen_ids, prompt_len)
+        lp_r_pi = compute_logprob(policy, rejected_ids, prompt_len)
+
+        # Reference log-probs (frozen, no grad)
+        with torch.no_grad():
+            lp_c_ref = compute_logprob(ref_model, chosen_ids, prompt_len)
+            lp_r_ref = compute_logprob(ref_model, rejected_ids, prompt_len)
+
+        # DPO loss
+        h = beta * ((lp_c_pi - lp_c_ref) - (lp_r_pi - lp_r_ref))
+        loss = -F.logsigmoid(h).mean()
+        loss.backward()
+        torch.nn.utils.clip_grad_norm_(policy.parameters(), 1.0)
+        optimiser.step()
+        optimiser.zero_grad()
+```
+
+Run for $\sim 3$ epochs. Total training time: $\sim 10$ minutes on a single GPU.
+
+### 5.3 Note: no RM needed for DPO
+
+DPO doesn't actually require the RM — its derivation (Cap 9.10) shows that the policy *is* implicitly the reward model. So you could skip the reward-model step entirely and just train DPO directly on the preferences.
+
+We did the RM separately because it (a) lets you sanity-check the dataset (§4.3), (b) demonstrates the Bradley-Terry objective end-to-end, (c) shows the *equivalence* of RM-then-RL vs DPO-directly. In production, most teams use DPO without an explicit RM step.
+
+---
+
+## 6. Evaluate the aligned model
+
+Generate samples from the DPO-aligned model with the same prompt and seed as the v2 baseline. Compare side-by-side.
+
+### 6.1 Expected behaviour change
+
+- **More Shakespearean diction.** Period vocabulary, longer multi-clause sentences.
+- **Less repetition.** The "I am here. I am here." failure mode you penalised should be less frequent.
+- **Multi-character dialogue.** If you preferred turns with multiple speakers, the model should produce more of them.
+
+The effect is *modest* — with 50 pairs and a tiny model, you're not going to get dramatic transformation — but should be visible. If you see *no* difference, common causes:
+
+- $\beta$ too small: model didn't update enough. Try $\beta = 0.3$.
+- $\beta$ too large: model collapsed to extreme behaviour, output may now be repetitive in a *new* way. Try $\beta = 0.05$.
+- Learning rate too low: gradients aren't moving weights. Try $5 \times 10^{-6}$.
+- Labels too inconsistent: re-check your preference dataset.
+
+### 6.2 The KL leash visualisation
+
+Recall (Cap 9.9): the KL between $\pi_\theta$ and $\pi_\text{ref}$ measures how much the policy has diverged. Compute it on a held-out set of $\sim 20$ prompts:
+
+```python
+def estimate_kl(policy, ref_model, prompts, n_samples=5):
+    total_kl = 0
+    for prompt in prompts:
+        idx = tokenise(prompt).unsqueeze(0).cuda()
+        out = policy.generate(idx, max_new_tokens=100, temperature=1.0)
+        lp_pi = compute_logprob(policy, out, prompt_len=idx.shape[1])
+        with torch.no_grad():
+            lp_ref = compute_logprob(ref_model, out, prompt_len=idx.shape[1])
+        kl_estimate = (lp_pi - lp_ref).mean().item()  # one-sample MC estimate
+        total_kl += kl_estimate
+    return total_kl / len(prompts)
+
+print(estimate_kl(policy, ref_model, ["ROMEO:", "JULIET:"], n_samples=5))
+```
+
+You should see a non-trivial KL value (typically $\sim 1$–$10$ nats per completion). If KL is near zero, training did nothing; if it's huge ($\sim 100$+), the policy has collapsed.
+
+A well-tuned DPO step in your setup: KL $\sim 2$–$5$ per completion. Visible behaviour change, but the model still resembles its reference.
+
+---
+
+## 7. The full pipeline you've now run
+
+```
+1. Tokeniser preparation     (Cap 5.1)
+2. Pretrain TinyGPT v1       (Cap 12.2–12.3; the whole Chapters 0–7 stack at toy scale)
+3. Architecture upgrade v2   (Cap 12.4; RoPE + RMSNorm from Chapter 8)
+4. Preference data           (Cap 9.3; hand-labelled rubric, 50 pairs)
+5. Reward model              (Cap 9.4 Bradley-Terry on your data)
+6. DPO step                  (Cap 9.10 closed-form preference learning)
+7. Evaluation                (sample comparison + KL diagnostic from Cap 9.9)
+```
+
+This is the entire shape of a modern frontier LLM pipeline, at $1/10000$ the scale. The fact that you can run it on a single GPU in an afternoon is itself a testament to how clean these techniques are.
+
+### 7.1 What would change at frontier scale
+
+- **Steps 2–3:** pretrained model, billions of parameters, trillions of tokens. Cap 7.11–7.12 scaling laws.
+- **Step 4:** $10^4$–$10^6$ preference pairs across thousands of prompt categories.
+- **Step 5:** RM training adds RM-ensemble, calibration, length-normalisation, etc.
+- **Step 6:** DPO or PPO at billions-of-parameters scale; usually multiple rounds of *iterative* DPO (Cap 9.11).
+- **Plus:** SFT step (Cap 9.2) before alignment; constitutional principles (Cap 9.13); RLHF on AI-generated preference data; inference-time complement (Cap 9.15, Cap 10.7).
+
+You don't need to do those for the capstone. Knowing that the *shape* is the same gives you the conceptual scaffolding to read any 2026 alignment paper.
+
+<Aside type="note">
+**The full Chapter 9 stack in 300 lines.** SFT (~50 lines), reward model (~50), DPO (~100), evaluation (~50), bookkeeping (~50). The fact that this fits in a single file is what made DPO transformative — it's *implementable*. PPO requires another 200+ lines just for the rollout-and-advantage-computation infrastructure, plus the reference-model evaluation that DPO subsumes. For toy scale, DPO is overwhelmingly the right choice.
+</Aside>
+
+---
+
+## 8. What we keep going forward
+
+Three things.
+
+1. **The mini-RLHF loop is a real RLHF loop.** Same Bradley-Terry, same DPO derivation, same KL leash. Different scale.
+2. **DPO is the right choice for tiny scale.** No reward model required (we did one anyway for pedagogical clarity), no RL rollout infrastructure, one closed-form loss. Fits in $\sim 100$ lines.
+3. **Your aligned tiny GPT.** Three artefacts now: v1 pretrained (Cap 12.3), v2 modern-architecture (12.4), v2-DPO aligned (this session). Loss curves and samples for each.
+
+Cap 12.6 next: the write-up. Distil what you've learned from Chapters 0–11 and your capstone artefacts into a one-page "Attention is All You Need (Revisited)" in your own words.
+
+<SelfTest>
+
+**(a)** State the Bradley-Terry reward objective. What is the data needed to train an RM?
+
+**(b)** State the DPO loss. Identify each of the four quantities $\pi_\theta(y_c|x)$, $\pi_\text{ref}(y_c|x)$, $\pi_\theta(y_r|x)$, $\pi_\text{ref}(y_r|x)$.
+
+**(c)** Why does $\pi_\text{ref}$ need to be *frozen* during DPO training? What goes wrong if it's also trainable?
+
+**(d)** $\beta$ is the temperature in the DPO loss. What does smaller $\beta$ vs. larger $\beta$ control? Sketch the trade-off.
+
+**(e)** A team reports DPO loss going to $\sim 0$ in a few steps. Two likely failure modes — over-fitting to the preference set, and the policy collapsing onto trivial outputs. Describe how you'd diagnose each.
+
+**(f)** Compare sample quality from your aligned model vs. the v2 baseline on $5$ prompts. Note three observable differences. If you see *no* difference, list two debugging steps you'd take.
+
+</SelfTest>

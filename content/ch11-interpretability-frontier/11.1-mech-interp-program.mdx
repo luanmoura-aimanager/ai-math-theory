@@ -1,0 +1,181 @@
+---
+title: "11.1 — Mechanistic interpretability: the program"
+chapter: 11
+order: 1
+estimatedMinutes: 20
+goal: "State the mechanistic-interpretability bet: that Transformer computation can be decomposed into legible *algorithms* implemented by combinations of attention heads and MLP neurons. Distinguish mech-interp from behavioural interpretability, probing, and explainability. Set the stage for the residual-stream / circuits / SAE program that runs through Chapter 11."
+prerequisites: ["ch10-inference-decoding/10.9-agentic-decoding", "ch6-attention-transformer/6.11-transformer-block-aiayn"]
+---
+
+## 1. Why this session exists
+
+Chapters 6–10 built the modern LLM. We can train it (Cap 7), modify its architecture (Cap 8), align it (Cap 9), and serve it (Cap 10). What we *cannot* yet do is open it up and read off what it has learned.
+
+A trained $70$B-parameter model is, in any literal sense, a $70$-billion-entry table of numbers. It implements *some* function from prompts to next-token distributions. What that function is — what *algorithm* the matrix multiplies actually implement — is an empirical question almost no one in 2026 can fully answer.
+
+Mechanistic interpretability is the research program that says: *we should try anyway*, and we should treat the trained network as a program to be reverse-engineered, not a black box to be probed. The bet is that the network's computation, while complicated, is *not* arbitrary — it consists of recognisable algorithmic primitives (look-up, copy, induction, refusal, etc.) implemented by small combinations of attention heads, MLP neurons, and residual-stream features, and that these can be identified and understood.
+
+This session states the program. The rest of Chapter 11 carries it out: residual stream as the data structure (11.2), circuits as the unit of computation (11.3), induction heads as the first identified algorithm (11.4), superposition as the obstacle (11.5), sparse autoencoders as a tool against it (11.6), activation steering as the engineering payoff (11.7). Sessions 11.8–11.9 contextualise: emergent abilities (debated) and the 2026 frontier.
+
+---
+
+## 2. What "interpretability" can mean
+
+The field uses one word for many things. A useful taxonomy.
+
+### 2.1 Behavioural interpretability
+
+Treat the model as a black box; characterise its input-output behaviour. Examples: benchmark scores, ablation studies on the prompt, calibration analyses, jailbreak surveys.
+
+This is *what* the model does. Useful for evaluation and safety, but tells you nothing about *why*.
+
+### 2.2 Probing
+
+Train a small classifier ("probe") on the model's internal activations to detect a property — e.g., "does layer 12's residual stream encode whether the input is in French?" If the probe achieves $\sim 100\%$ accuracy, the property is *linearly decodable* from the activations. If a sparse probe works ($1$ direction in activation space), the property is encoded in a single feature.
+
+Probing tells you *what is represented* and *where*, but not *how the network uses it*. Probes find features; they don't find algorithms.
+
+### 2.3 Saliency and gradient methods
+
+Compute $\partial \text{output} / \partial \text{input}$ or its variants (integrated gradients, attention rollout, LIME). Highlights which input tokens most affect the output. Common in pre-2020 NLP interpretability.
+
+The known failure: gradient maps are *noisy* and *unstable*; they often disagree across runs and don't reliably identify *causal* features. Saliency answers "what input changes affect output" — useful, but not a description of internal computation.
+
+### 2.4 Mechanistic interpretability
+
+Identify *circuits*: subgraphs of the model (specific attention heads, MLP neurons, residual-stream features) that implement a specific *algorithm* on a specific task. Validate by causal interventions (ablate the circuit → behaviour disappears; transplant the circuit → behaviour appears in a different model).
+
+This is the program of [Anthropic-Circuits](https://transformer-circuits.pub/) (Olah, Elhage, Nanda, et al.) and the broader mech-interp community. It is *substantially* harder than probing, but produces statements of the form "head 9.6 of GPT-2 small implements name-mover behaviour by copying the token from the position attended to" — *mechanistic* claims about how computation happens.
+
+---
+
+## 3. The mech-interp bet
+
+The wager has three parts:
+
+### 3.1 Networks compute algorithms, not just statistical patterns
+
+A trained Transformer doesn't merely memorise a distribution over text; it *runs computation* in service of predicting the next token. The computation has *structure* — patterns the network repeatedly invokes, organised into recognisable algorithmic primitives.
+
+Evidence: the discovery of induction heads ([Cap 11.4](/session/ch11-interpretability-frontier/11.4-induction-heads)), name-mover heads (Wang et al., 2023, [arXiv:2211.00593](https://arxiv.org/abs/2211.00593)), the IOI circuit (Wang et al., same paper), task-vector arithmetic (Ilharco et al., 2022, [arXiv:2212.04089](https://arxiv.org/abs/2212.04089)), behaviour-encoding directions (Anthropic 2024 *Scaling Monosemanticity*). All of these are *specific algorithmic structures* implemented by identifiable sub-circuits.
+
+### 3.2 The algorithms are (mostly) human-comprehensible
+
+If we identify the circuit that does (say) name-resolution, can we *read* what it's doing? The empirical answer so far: *yes, with effort*. Identified circuits typically have a paragraph-long explanation that a competent human can verify.
+
+This is not guaranteed. A network could in principle implement algorithms that are correct but inscrutable — analogous to a chess engine's evaluation function. The mech-interp bet is that *for current Transformer models on current tasks*, this is rarely the case. Whether the bet continues to hold at the frontier (highly distilled, RL-trained, agentic models) is open.
+
+### 3.3 Mech-interp can scale
+
+The original circuits work was done on $\sim 100$M-parameter models — small enough to study head by head. Scaling to $\sim 100$B-parameter frontier models needs *tools*, not just human attention.
+
+Sparse autoencoders ([Cap 11.6](/session/ch11-interpretability-frontier/11.6-sparse-autoencoders)) are one such tool: they automatically extract candidate features from activations at scale. Anthropic's *Scaling Monosemanticity* (2024) extracted $\sim 10^7$ features from Claude 3 Sonnet — a feasibility proof for the scaling-up part of the bet.
+
+---
+
+## 4. Why this matters
+
+Three reasons mech-interp is a major research direction in 2026, not a curiosity.
+
+### 4.1 Safety
+
+We deploy models making consequential decisions — medical advice, code generation, agentic actions on the web ([Cap 10.9](/session/ch10-inference-decoding/10.9-agentic-decoding)). For high-stakes deployment, we'd like to know:
+
+- *What goals* the model is pursuing internally (alignment).
+- *Whether the model is being deceptive* — saying one thing and "thinking" another.
+- *What triggers refusal vs. compliance* (jailbreak robustness).
+- *Whether dangerous capabilities are present even if dormant* (CBRN, persuasion, self-exfiltration).
+
+Behavioural tests catch the obvious. Mech-interp aims to catch the non-obvious — failure modes that don't surface in any specific test but are *latent* in the weights.
+
+### 4.2 Capability
+
+The activation-steering work ([Cap 11.7](/session/ch11-interpretability-frontier/11.7-activation-steering-control-vectors)) demonstrates that mech-interp findings translate directly into model control: once you've identified a feature for "writing in French", you can amplify it at inference and force French output. As mech-interp scales, this style of *direct* control becomes a complement to RLHF/DPO.
+
+### 4.3 Science of intelligence
+
+If we can read off what a trained network has learned about (say) addition, that's data for cognitive science and the theory of learning more broadly. The mech-interp papers on grokking (Power et al., 2022; Nanda et al., 2023, [arXiv:2301.05217](https://arxiv.org/abs/2301.05217)) found that small Transformers learn modular arithmetic via *Fourier-basis circuits* — a beautiful and unexpected algorithmic structure. This is the kind of finding that the program promises at scale.
+
+---
+
+## 5. What mech-interp does *not* do
+
+Three common misconceptions.
+
+### 5.1 It does not "explain" model outputs in real time
+
+Mech-interp finds structures that are stable across many inputs and tasks. It does not produce a per-token, per-query explanation of "why the model said that". Saliency methods try to do that, with known reliability problems.
+
+### 5.2 It does not (yet) certify safety
+
+A mech-interp analysis can rule out certain failure modes ("this circuit is the only one that handles refusal; ablating it eliminates refusal; therefore refusal is mediated by this circuit"). It cannot certify that *no* concerning algorithm is latent — the space of possible algorithms is too large.
+
+### 5.3 It is not the only safety tool
+
+RLHF, constitutional AI, behavioural red-teaming, oversight protocols, sandboxing — all of these are independent safety measures. Mech-interp is one approach in a portfolio, not a replacement for the others.
+
+---
+
+## 6. The Anthropic-Circuits program (a brief tour)
+
+The most coherent body of mech-interp work is the [Anthropic-Circuits thread](https://transformer-circuits.pub/) (Elhage, Olah, et al.), running 2021–present. A skeleton tour, since later sessions reference it heavily:
+
+- **A Mathematical Framework for Transformer Circuits** (Elhage et al., 2021). The residual-stream / QK / OV decomposition. Foundation for Cap 11.2–11.3.
+- **In-context Learning and Induction Heads** (Olsson et al., 2022). The discovery of induction heads. Cap 11.4.
+- **Toy Models of Superposition** (Elhage et al., 2022). Why neurons are polysemantic. Cap 11.5.
+- **Towards Monosemanticity** (Bricken et al., 2023). Sparse autoencoders as a way out of superposition. Cap 11.6.
+- **Scaling Monosemanticity** (Templeton et al., 2024). SAEs applied to Claude 3 Sonnet at the millions-of-features scale. Cap 11.6.
+- **Circuit Tracing** (Anthropic, 2024). End-to-end attribution of model behaviour to feature-level circuits.
+
+Parallel efforts from Neel Nanda (now at Google DeepMind), Chris Olah's broader collaborators, the Pythia / interpretability-tools open-source ecosystem, and various academic groups (MIT, NYU, Cambridge, Tel Aviv) make this a multi-lab program by 2026.
+
+---
+
+## 7. The chapter's roadmap
+
+The rest of Chapter 11 builds the mech-interp program step by step.
+
+| Session | Content |
+|---|---|
+| 11.2 | **Residual stream view**: the data structure on which Transformers compute. |
+| 11.3 | **Attention heads as circuits**: QK and OV decomposition; bigram and skip-bigram patterns. |
+| 11.4 | **Induction heads**: the first identified general-purpose algorithm. |
+| 11.5 | **Superposition**: more features than dimensions; why polysemantic neurons exist. |
+| 11.6 | **Sparse autoencoders**: extracting monosemantic features at scale. |
+| 11.7 | **Activation steering**: turning features into control knobs. |
+| 11.8 | **Emergent abilities, debated**: is the capability jump real or a measurement artefact? |
+| 11.9 | **The 2026 frontier**: where the research is going. |
+
+Cap 11.9 ends the chapter and bridges to Cap 12, the capstone: train a tiny GPT from scratch with everything you've learned in Chapters 0–10, then close the course with a short essay in your own words.
+
+<Aside type="note">
+**Mech-interp's epistemic style.** A mech-interp claim looks like: "Heads 7.1 and 7.6 of GPT-2 small implement copy-suppression by attending to the previous occurrence of the current token and writing a negation into the residual stream that suppresses re-emission." Such a claim is supported by (i) attention pattern analysis on hundreds of inputs, (ii) ablation studies (silencing the heads breaks the behaviour), (iii) activation patching (transplanting the heads' output reproduces the behaviour on different inputs), (iv) plausibility of the implied algorithm. No single piece of evidence is conclusive; the *triangulation* across multiple causal and statistical methods is what produces confidence in the claim.
+</Aside>
+
+---
+
+## 8. What we keep going forward
+
+Three things.
+
+1. **The mech-interp program** treats trained Transformers as programs to be reverse-engineered into legible algorithmic primitives, not black boxes to be probed.
+2. **Three pillars of evidence**: feature decoding (probing), causal intervention (ablation, patching), and triangulation across methods. A mech-interp claim is one that survives all three.
+3. **The Chapter 11 arc**: residual stream → circuits → induction heads → superposition → SAEs → steering → emergence → frontier. The rest of the chapter builds the tools and applies them.
+
+Cap 11.2 next: the residual stream — the data structure on which all of this happens.
+
+<SelfTest>
+
+**(a)** Distinguish behavioural interpretability, probing, saliency, and mechanistic interpretability. Give one example research output of each.
+
+**(b)** State the three parts of the mech-interp bet. Cite one piece of empirical evidence for each part.
+
+**(c)** Why is probing alone insufficient to make a mechanistic claim about an algorithm? Give a hypothetical: probing finds a "sentiment" feature in layer 8 — what additional evidence would you need to claim that *the model uses sentiment to decide its next token*?
+
+**(d)** What three failure modes of LLM safety would benefit from mech-interp tools (vs. behavioural red-teaming)?
+
+**(e)** Name three publications in the Anthropic-Circuits thread and the one-sentence contribution of each.
+
+**(f)** A research team claims mech-interp will "certify model safety." Why is this claim too strong as stated?
+
+</SelfTest>

@@ -1,0 +1,326 @@
+---
+title: "12.4 — Replace LN with RMSNorm; replace learned PE with RoPE"
+chapter: 12
+order: 4
+estimatedMinutes: 30
+goal: "Apply two of the canonical Chapter 8 architecture upgrades to your `TinyGPT`: swap LayerNorm for RMSNorm (Cap 3.8) and replace learned positional embeddings with Rotary Positional Embeddings (Cap 6.7). Re-train, compare loss curves and sample quality against the 12.3 baseline. Feel the difference."
+prerequisites: ["ch12-capstone-tiny-gpt/12.3-train-tinyshakespeare", "ch3-optimization-regularization/3.8-layernorm-rmsnorm", "ch6-attention-transformer/6.7-rope"]
+---
+
+## 1. Why this session exists
+
+[Chapter 8](/session/ch8-modern-llm-architectures/8.1-decoder-only) catalogued the architectural changes that took a 2017 vanilla Transformer to a 2024 Llama/DeepSeek-style frontier model. Most are large engineering investments (GQA cache redesign, MLA latent attention, MoE routing). Two upgrades are *small* — a few lines of code each — and substantial in impact:
+
+- **RMSNorm** (Cap 3.8) replaces LayerNorm. Cuts one statistic, comparable quality, faster. Used by Llama, DeepSeek, Mistral.
+- **RoPE** (Cap 6.7) replaces learned absolute positional embedding. Adds *relative* positional information directly into Q/K via a rotation; better length-generalisation, also used by virtually all modern LLMs.
+
+This session applies both to your `TinyGPT`. Re-train. Compare. The goal is the *feel*: see the loss curve shift, see the samples change, internalise why these are the modern defaults.
+
+By the end you should have `tiny_gpt_v2.py` with both upgrades and a side-by-side comparison of v1 vs. v2.
+
+---
+
+## 2. Pre-work: the changes you'll make
+
+### 2.1 RMSNorm
+
+Replace `nn.LayerNorm`. RMSNorm (Cap 3.8 §3) drops the mean-centering step:
+
+$$
+\text{RMSNorm}(x) \;=\; \frac{x}{\sqrt{\tfrac{1}{d} \sum_i x_i^2 + \epsilon}} \cdot \gamma.
+$$
+
+No bias parameter $\beta$. Only the scale $\gamma$. Cheaper because: (i) one fewer reduction (no mean), (ii) one fewer parameter per neuron (no bias), (iii) one fewer subtraction per forward pass.
+
+Implementation:
+
+```python
+class RMSNorm(nn.Module):
+    def __init__(self, d_model, eps=1e-6):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(d_model))
+        self.eps = eps
+    def forward(self, x):
+        # x: (B, T, d_model)
+        rms = x.pow(2).mean(dim=-1, keepdim=True).add(self.eps).rsqrt()
+        return x * rms * self.weight
+```
+
+Two places to swap in `tiny_gpt.py`: `Block.ln1`, `Block.ln2`, and the final `ln_f`. Three substitutions.
+
+### 2.2 RoPE
+
+Rotary Positional Embedding (Cap 6.7 §3). The change is in the attention layer's QK computation: instead of adding a positional embedding at the input, rotate $Q$ and $K$ by a position-dependent rotation matrix *before* the QK dot product.
+
+For head-dim $d_\text{head}$, treat each pair of consecutive dimensions $(q_{2i}, q_{2i+1})$ as a 2D vector and rotate by angle $\theta_i \cdot t$ where $t$ is the position and $\theta_i = 10000^{-2i/d_\text{head}}$ (the standard RoPE base of $10^4$).
+
+Numerically equivalent to multiplying $(q_{2i}, q_{2i+1})$ by
+
+$$
+R(\theta_i t) \;=\; \begin{pmatrix} \cos(\theta_i t) & -\sin(\theta_i t) \\ \sin(\theta_i t) & \cos(\theta_i t) \end{pmatrix}.
+$$
+
+The same rotation is applied to $K$ at its own position. After the rotation, the dot product $q_t^\top k_s$ depends only on *relative position* $t - s$.
+
+A clean PyTorch implementation:
+
+```python
+def precompute_freqs_cis(d_head, max_seq_len, base=10000.0):
+    # frequencies per dimension pair
+    freqs = 1.0 / (base ** (torch.arange(0, d_head, 2).float() / d_head))
+    # outer product with positions
+    t = torch.arange(max_seq_len).float()
+    freqs = torch.outer(t, freqs)
+    # complex exponentials: cis = cos + i sin
+    return torch.polar(torch.ones_like(freqs), freqs)  # (max_seq_len, d_head/2)
+
+def apply_rotary_emb(x, freqs_cis):
+    # x: (B, n_head, T, d_head); freqs_cis: (T, d_head/2)
+    x_complex = torch.view_as_complex(x.float().reshape(*x.shape[:-1], -1, 2))
+    # freqs_cis broadcast: (1, 1, T, d_head/2)
+    freqs_cis = freqs_cis[None, None, :x.shape[2], :]
+    x_rotated = x_complex * freqs_cis
+    return torch.view_as_real(x_rotated).flatten(-2).type_as(x)
+```
+
+In `CausalSelfAttention.__init__`: precompute `self.freqs_cis = precompute_freqs_cis(d_head, max_seq_len)`. In `forward`, apply `apply_rotary_emb(q, self.freqs_cis)` and `apply_rotary_emb(k, self.freqs_cis)` *after* the QKV projection and reshape, *before* the dot product.
+
+**Critically**: remove the learned positional embedding `wpe`. With RoPE, position info enters through the rotation; there's no need for an additive PE.
+
+### 2.3 Architecture summary v2
+
+```
+TinyGPT_v2:
+    wte: token embedding (V × d_model)
+    [no wpe — RoPE handles positions]
+    blocks: L × Block_v2
+        rms1: RMSNorm
+        attn: CausalSelfAttention with RoPE on Q/K
+        rms2: RMSNorm
+        mlp: FFN with GELU
+    rms_f: RMSNorm
+    lm_head: weight-tied to wte
+```
+
+Param count: slightly *smaller* than v1 because (a) RMSNorm has no bias and (b) no `wpe` matrix. For our config: $\sim 10.5$M vs. $\sim 10.6$M. Negligible.
+
+---
+
+## 3. Implementation walk-through
+
+Copy `tiny_gpt.py` to `tiny_gpt_v2.py`. Three classes change.
+
+```python
+# tiny_gpt_v2.py — sketch
+import math, torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class RMSNorm(nn.Module):
+    # as above
+    ...
+
+def precompute_freqs_cis(d_head, max_seq_len, base=10000.0):
+    # as above
+    ...
+
+def apply_rotary_emb(x, freqs_cis):
+    # as above
+    ...
+
+class CausalSelfAttention(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        assert config.n_embd % config.n_head == 0
+        self.n_head = config.n_head
+        self.d_head = config.n_embd // config.n_head
+        self.qkv = nn.Linear(config.n_embd, 3 * config.n_embd, bias=False)
+        self.out_proj = nn.Linear(config.n_embd, config.n_embd, bias=False)
+        self.drop = nn.Dropout(config.dropout)
+        self.register_buffer(
+            "freqs_cis",
+            precompute_freqs_cis(self.d_head, config.block_size),
+            persistent=False
+        )
+        self.register_buffer(
+            "mask",
+            torch.tril(torch.ones(config.block_size, config.block_size)).view(1, 1, config.block_size, config.block_size)
+        )
+    def forward(self, x):
+        B, T, C = x.shape
+        qkv = self.qkv(x).view(B, T, 3, self.n_head, self.d_head).permute(2, 0, 3, 1, 4)
+        q, k, v = qkv[0], qkv[1], qkv[2]  # each (B, n_head, T, d_head)
+        # apply RoPE to q and k
+        q = apply_rotary_emb(q, self.freqs_cis)
+        k = apply_rotary_emb(k, self.freqs_cis)
+        att = (q @ k.transpose(-2, -1)) / math.sqrt(self.d_head)
+        att = att.masked_fill(self.mask[:, :, :T, :T] == 0, float('-inf'))
+        att = F.softmax(att, dim=-1)
+        att = self.drop(att)
+        y = att @ v  # (B, n_head, T, d_head)
+        y = y.transpose(1, 2).contiguous().view(B, T, C)
+        return self.out_proj(y)
+
+class Block(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.rms1 = RMSNorm(config.n_embd)
+        self.attn = CausalSelfAttention(config)
+        self.rms2 = RMSNorm(config.n_embd)
+        self.mlp = FFN(config.n_embd, 4 * config.n_embd, config.dropout)
+    def forward(self, x):
+        x = x + self.attn(self.rms1(x))
+        x = x + self.mlp(self.rms2(x))
+        return x
+
+class TinyGPT_v2(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+        self.wte = nn.Embedding(config.vocab_size, config.n_embd)
+        # NO wpe
+        self.drop = nn.Dropout(config.dropout)
+        self.blocks = nn.ModuleList([Block(config) for _ in range(config.n_layer)])
+        self.rms_f = RMSNorm(config.n_embd)
+        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
+        self.lm_head.weight = self.wte.weight
+        self.apply(self._init_weights)
+    def _init_weights(self, module):
+        # same as v1
+        ...
+    def forward(self, idx, targets=None):
+        B, T = idx.shape
+        x = self.drop(self.wte(idx))  # no positional embedding added
+        for block in self.blocks:
+            x = block(x)
+        x = self.rms_f(x)
+        logits = self.lm_head(x)
+        loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1)) if targets is not None else None
+        return logits, loss
+    def generate(self, ...):
+        # same as v1
+        ...
+```
+
+### 3.1 The RoPE pitfalls
+
+Two debugging traps:
+
+- **`freqs_cis` device.** When you move the model to GPU, registered buffers move along — but if you precompute `freqs_cis` outside the module, it stays on CPU. The `register_buffer` call handles this correctly; if you set `self.freqs_cis = ...` directly, it won't move with the model.
+- **`x.float()`.** RoPE's complex-multiplication trick uses `torch.view_as_complex`, which requires fp32 (it can't operate on bf16/fp16). The `.float()` cast handles this; the `.type_as(x)` at the end casts back.
+
+Test with a small forward pass before training:
+
+```python
+config = GPTConfig(vocab_size=65, block_size=256, n_layer=6, n_head=6, n_embd=384, dropout=0.0, bias=False)
+model = TinyGPT_v2(config).cuda()
+x = torch.randint(0, 65, (2, 64)).cuda()
+y, _ = model(x)
+print(y.shape, y.dtype)  # expect torch.Size([2, 64, 65]) torch.float32
+```
+
+If this passes, you can train.
+
+---
+
+## 4. Training and comparison
+
+Use the same config as 12.3 (`config/train_shakespeare_char.py`). Train v2 to the same $5000$ steps.
+
+A typical comparison (your numbers will vary by a few percent):
+
+| Step | v1 val loss (LN + learned PE) | v2 val loss (RMSNorm + RoPE) |
+|---|---|---|
+| 500 | 1.83 | 1.79 |
+| 1000 | 1.55 | 1.52 |
+| 2000 | 1.49 | 1.47 |
+| 5000 | 1.47 | 1.45 |
+
+At this scale, RMSNorm + RoPE give a *modest* improvement — typically $\sim 1$–$3\%$ lower val loss. The effect is real but small; the architectural upgrades pay off more dramatically at larger scale and longer context (see Cap 8.3, 8.5).
+
+### 4.1 Wall-clock comparison
+
+RMSNorm is slightly faster per step (one fewer reduction); RoPE has a small overhead (precomputed table, complex multiplication). Net wall-clock is about the same. The improvements come from *better optimisation* (more stable gradients per the RMSNorm story) and *better positional information* (relative-position generalisation per RoPE), not from compute savings.
+
+### 4.2 Sampling comparison
+
+Sample from both models with the same prompt and seed. Side-by-side:
+
+> **v1 (step 5000):** "ROMEO: I am not the man that I was, for I have been a fool. The world is full of strange things, and I cannot find the way to my home."
+> 
+> **v2 (step 5000):** "ROMEO: Methinks the world hath fallen into a strange and bitter sleep, and we are but its dreams. JULIET: Aye, my lord; and yet the dawn shall come, however long we tarry in the night."
+
+The differences are subtle at this scale. v2 outputs are *slightly* more coherent across multiple sentences, with *slightly* better diction. Whether this is the architectural change or training noise is hard to say from a single run; the loss-curve improvement is the more reliable signal.
+
+---
+
+## 5. Length-generalisation experiment (optional)
+
+The RoPE-vs-learned-PE distinction is most visible on *length generalisation* — generating sequences longer than the training context.
+
+Train both v1 and v2 with `block_size = 128`. Then *sample* with `max_new_tokens = 512`. The model is now producing positions $129, 130, \ldots, 640$ — positions it has never been trained on.
+
+**Expected outcome:**
+
+- **v1 (learned PE).** Output degrades sharply past position $\sim 128$. The model has no learned embedding for position $129$+; the generation becomes incoherent or repetitive.
+- **v2 (RoPE).** Output remains roughly coherent for several hundred extra tokens. RoPE generalises to unseen positions because the rotation formula extrapolates naturally.
+
+This is *the* killer feature of RoPE: it doesn't need to see a position during training to produce coherent output at that position. This is why every long-context model (Llama, Claude, GPT-4) uses RoPE or one of its variants (NTK-RoPE, YaRN, etc. — Cap 6.13).
+
+---
+
+## 6. Why these specific upgrades, not others?
+
+[Chapter 8](/session/ch8-modern-llm-architectures/8.1-decoder-only) listed many architectural improvements. Why these two for the capstone?
+
+**Why RoPE.** It's the most consequential single architecture change since pre-norm. Universal in modern LLMs. The implementation is *small* but the conceptual leap (from absolute PE to relative-via-rotation) is significant. It also enables long-context (Cap 6.13). Worth implementing once.
+
+**Why RMSNorm.** Same shape as LayerNorm; trivial substitution; demonstrates the "less is more" of Llama-style architecture. A reader who can do RMSNorm correctly can do the next decade of normalisation-tweaks (DeepNorm, ReZero, etc.) by analogy.
+
+**Why not GQA or MLA?** GQA (Cap 8.3) is mechanically straightforward but requires careful KV-cache reshape; at our scale (10M params, single GPU, character LM) it provides no measurable benefit because the cache is small anyway. MLA (Cap 8.5) is more complex and has the same scale-irrelevance.
+
+**Why not SwiGLU?** Could swap GELU for SwiGLU (Cap 8.4); two extra linear layers and a Swish activation. Worthwhile but pedagogically lower-impact than RoPE/RMSNorm. If you have extra time, add it as an exercise.
+
+**Why not MoE?** Out of scope; capstone is for legibility, not capacity.
+
+---
+
+## 7. Saving the v2 artefact
+
+For the final session (12.5 mini-RLHF), you'll fine-tune one of these. Save:
+
+- `out-shakespeare-v2/ckpt.pt`
+- `v2_samples.txt` (matching v1's format)
+- A loss-curve plot comparing v1 and v2.
+
+You now have two trained models — vanilla GPT-2-style v1 and modern (RoPE + RMSNorm) v2 — and side-by-side outputs. The artefacts demonstrate that you can read off architectural changes from a paper and implement them faithfully.
+
+<Aside type="note">
+**The "feeling" the architectural changes.** RMSNorm vs. LN, RoPE vs. learned PE — these aren't enormous differences in isolation. They are part of a larger pattern: modern frontier architecture is the *accumulation* of many small wins, each $0.5\%$–$2\%$, that compound to meaningful capability gains. Llama's recipe (decoder-only + RMSNorm + RoPE + SwiGLU + GQA, plus careful hyperparameters and lots of data) outperforms vanilla GPT-2 substantially at the same parameter count not because of any one change but because all the changes compose. Implementing two of them by hand makes the rest comprehensible.
+</Aside>
+
+---
+
+## 8. What we keep going forward
+
+Three things.
+
+1. **RMSNorm is a near-drop-in replacement for LayerNorm.** Drop the mean centering, drop the bias, keep the scale. $\sim 1\%$ training speedup, comparable quality. Standard in modern LLMs.
+2. **RoPE replaces learned positional embedding.** Rotate Q and K by a position-dependent rotation; the QK dot product then depends on relative position. Enables long-context generalisation; universal in modern frontier architectures.
+3. **The v2 model is your modernised baseline.** Loss curve modestly better than v1; samples qualitatively similar at this scale; length generalisation dramatically better. Cap 12.5 next: a mini-RLHF loop on v2 to feel the alignment story.
+
+<SelfTest>
+
+**(a)** State the RMSNorm formula. Compare to LayerNorm on (i) statistics computed, (ii) parameters, (iii) per-step cost.
+
+**(b)** State the RoPE rotation: for a head-dim-pair index $i$ and position $t$, what angle is the pair $(q_{2i}, q_{2i+1})$ rotated by? Cite the standard base $\theta_i = 10000^{-2i/d_\text{head}}$.
+
+**(c)** After applying RoPE to Q and K, the score $q_t^\top k_s$ depends only on *relative position* $t-s$. Sketch the derivation. (Hint: rotation by $\theta_i t$ on Q and by $\theta_i s$ on K composes to net rotation by $\theta_i(t-s)$ in the inner product.)
+
+**(d)** Why is the `wpe` (learned positional embedding) removed when adding RoPE? What would happen if you kept both?
+
+**(e)** Length-generalisation: explain in one paragraph why RoPE generalises to positions beyond the training context length, while learned absolute PE does not.
+
+**(f)** Compare v1 vs v2 loss curves at step $5000$. The improvement is modest (~$1$–$3\%$). At what scale (training data, model size) do you expect the improvement to be larger? (Hint: Cap 6.13 long-context, Cap 8 GQA/MLA cache shrinkage interact with RoPE.)
+
+</SelfTest>

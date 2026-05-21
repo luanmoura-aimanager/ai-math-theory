@@ -1,0 +1,277 @@
+---
+title: "10.4 — Speculative decoding"
+chapter: 10
+order: 4
+estimatedMinutes: 24
+goal: "Derive speculative decoding from a draft–target rejection-sampling argument; prove that the resulting distribution equals the target's distribution exactly; analyse the expected wall-clock speedup and when speculative decoding helps vs. hurts."
+prerequisites: ["ch10-inference-decoding/10.3-kv-cache-implementation", "ch0-math-foundations/0.6-entropy-kl"]
+---
+
+## 1. Why this session exists
+
+Decoding from a $70$B-parameter target model is slow: each token costs one full forward pass, memory-bound at batch $1$ (Cap 10.3 §3). The compute is *spent moving the weights through HBM*; the actual multiply-add work is cheap relative to the bandwidth bill.
+
+A simple observation: at typical batch sizes, the GPU is idle most of the time. If we could *verify* multiple candidate tokens in one forward pass — and most of them turn out to be the same tokens the target would have produced — we'd amortise the per-step weight-read cost across multiple emitted tokens.
+
+This is **speculative decoding** (Leviathan et al., 2023, [arXiv:2211.17192](https://arxiv.org/abs/2211.17192); also Chen et al., 2023, [arXiv:2302.01318](https://arxiv.org/abs/2302.01318)). The protocol:
+
+1. A cheap **draft model** $\pi_\text{draft}$ proposes $k$ tokens autoregressively.
+2. The expensive **target model** $\pi_\text{target}$ runs *one* forward pass on the $k$-token continuation, producing $k$ next-token distributions in parallel.
+3. A rejection-sampling rule accepts a prefix of the draft, then samples one extra token from a corrected distribution at the rejection point.
+
+The miraculous property: the marginal distribution of the *accepted output* is **exactly** $\pi_\text{target}$. No quality loss. The only thing that changes is wall-clock — typically $2$–$3\times$ faster decode at no accuracy cost.
+
+This session derives the algorithm, proves the correctness, and characterises when speculative decoding actually wins.
+
+---
+
+## 2. Setup
+
+Let:
+
+- $\pi_\text{target}(\cdot \mid x, y_{<t})$ be the target model's next-token distribution at step $t$. Expensive to compute.
+- $\pi_\text{draft}(\cdot \mid x, y_{<t})$ be the draft model's distribution. Cheap (e.g., a $1$B model proposing for a $70$B target).
+- $k$ the speculation length (typical $k = 4$–$8$).
+
+The goal is to produce a stream $y_1, y_2, \ldots$ whose joint distribution equals $\prod_t \pi_\text{target}(y_t \mid x, y_{<t})$, but with fewer wall-clock target-model invocations per emitted token.
+
+---
+
+## 3. The algorithm
+
+```
+SpeculativeDecode(x):
+    t = 1
+    while not done:
+        # Draft phase: cheap autoregressive sampling
+        draft tokens ỹ_{t}, ỹ_{t+1}, ..., ỹ_{t+k-1}
+        store draft probabilities p̃_j(ỹ_{t+j}) = π_draft(ỹ_{t+j} | ..., ỹ_{<t+j})
+
+        # Verification phase: one target forward over k tokens
+        target distributions q_j(·) = π_target(· | x, y_{<t}, ỹ_{t..t+j-1})
+            for j = 0, 1, ..., k
+
+        # Acceptance loop
+        for j = 0, 1, ..., k-1:
+            r ~ Uniform(0, 1)
+            if r < min(1, q_j(ỹ_{t+j}) / p̃_j(ỹ_{t+j})):
+                accept: y_{t+j} = ỹ_{t+j}
+            else:
+                # rejection: resample from corrected distribution
+                q̄(v) ∝ max(0, q_j(v) - p̃_j(v))
+                y_{t+j} ~ q̄
+                t = t + j + 1; goto outer while
+        # All k drafts accepted
+        # Bonus token: sample y_{t+k} from q_k (free — already computed)
+        y_{t+k} ~ q_k
+        t = t + k + 1
+```
+
+In words: walk down the draft, accept each token with probability $\min(1, q/p̃)$. On the first rejection, resample from the *residual* distribution $(q - p̃)_+ / Z$. If all $k$ are accepted, take one bonus token from the next target distribution (which we already computed for free during verification).
+
+---
+
+## 4. Correctness: the rejection-sampling argument
+
+The key claim:
+
+$$
+\boxed{\;\Pr[Y_{t+j} = v] \;=\; q_j(v) \quad \text{for every accepted (or resampled) token.}\;}
+$$
+
+I.e., the distribution of the emitted token at each step is *exactly* the target's distribution $q_j$, regardless of the draft.
+
+### 4.1 Proof for a single step
+
+Fix $j$ and write $p = p̃_j$, $q = q_j$ for brevity, $\tilde{Y} \sim p$ for the draft sample.
+
+There are three ways the *output* $Y$ takes value $v$:
+
+**Case A.** The draft proposes $v$ ($\tilde{Y} = v$) *and* it is accepted ($r < \min(1, q(v)/p(v))$). Probability:
+
+$$
+p(v) \cdot \min\!\left(1, \frac{q(v)}{p(v)}\right) \;=\; \min(p(v), q(v)).
+$$
+
+**Case B.** The draft proposes some $v' \ne v$ ($\tilde{Y} = v'$) *and* it is rejected, after which we resample $Y = v$ from $\bar{q}(\cdot) \propto (q - p)_+$.
+
+The probability that *any* draft is rejected is
+
+$$
+\Pr[\text{reject}] \;=\; \sum_{v'} p(v') \cdot \left[1 - \min\!\left(1, \frac{q(v')}{p(v')}\right)\right] \;=\; \sum_{v'} \max(0, p(v') - q(v')) \;=\; \tfrac{1}{2}\|p - q\|_1.
+$$
+
+(Using $\sum_{v'} \min(p, q) + \sum_{v'} \max(0, p - q) = \sum_{v'} p = 1$.)
+
+The corrected distribution is $\bar{q}(v) = \max(0, q(v) - p(v)) / Z$ with $Z = \sum_{v} \max(0, q(v) - p(v)) = \tfrac{1}{2}\|p - q\|_1$. So
+
+$$
+\Pr[\text{reject and resample } v] \;=\; \tfrac{1}{2}\|p - q\|_1 \cdot \frac{\max(0, q(v) - p(v))}{\tfrac{1}{2}\|p - q\|_1} \;=\; \max(0, q(v) - p(v)).
+$$
+
+**Case C.** The draft proposes $v$ *and* it is rejected. Doesn't contribute to $Y = v$ (rejection always leads to resampling from $\bar{q}$, which would be a different draw).
+
+**Sum.** Adding Case A and Case B:
+
+$$
+\Pr[Y = v] \;=\; \min(p(v), q(v)) + \max(0, q(v) - p(v)) \;=\; q(v).
+$$
+
+(The last equality is the elementary identity $\min(a, b) + \max(0, b - a) = b$ for non-negative $a, b$.) $\square$
+
+So a single rejection-sampling step yields a sample from $q$ — *exactly*, not approximately — regardless of $p$. Iterating over $j$ gives the multi-step claim.
+
+### 4.2 What if all $k$ drafts are accepted?
+
+After accepting all $k$ tokens, we have the target distributions $q_0, q_1, \ldots, q_k$ computed (one verification forward). We never sampled $y_{t+k}$ from $q_k$. The "bonus token" step samples $y_{t+k} \sim q_k$ — this is an additional *free* token from the target distribution. So the all-accepted case emits $k+1$ tokens for the price of one target forward pass + $k$ draft forward passes.
+
+---
+
+## 5. The expected speedup
+
+Let $\alpha$ be the *per-token acceptance probability* — the probability that any given draft token is accepted:
+
+$$
+\alpha \;=\; \mathbb{E}_{\tilde{Y} \sim p}\!\left[ \min\!\left(1, \frac{q(\tilde{Y})}{p(\tilde{Y})}\right) \right].
+$$
+
+A useful identity: $\alpha = 1 - \tfrac{1}{2} \|p - q\|_1$. The more $p$ and $q$ agree, the higher $\alpha$.
+
+### 5.1 Expected accepted tokens per round
+
+In a round of $k$ drafts, the number of *consecutive* acceptances before the first rejection is a (truncated) geometric random variable. Its expectation:
+
+$$
+\mathbb{E}[\text{accepted}] \;=\; \frac{1 - \alpha^{k+1}}{1 - \alpha}.
+$$
+
+(Sum of $1 + \alpha + \alpha^2 + \cdots + \alpha^k$.) Plus one rejection-resampled token in the partial-rejection case, or one bonus token in the all-accepted case. Net:
+
+$$
+\boxed{\;\mathbb{E}[\text{emitted per round}] \;=\; \frac{1 - \alpha^{k+1}}{1 - \alpha}\;}
+$$
+
+### 5.2 Cost per round
+
+One round costs:
+
+- $k$ draft forwards: $k \cdot c_\text{draft}$
+- $1$ target forward over $k$ tokens (the verification): $c_\text{target}^{(k)} \approx c_\text{target}$ (the target forward over $k$ tokens is roughly the cost of one target forward — the prefill cost scales with $k$ but is bounded by memory traffic, not compute, at small $k$).
+
+So
+
+$$
+\boxed{\;\text{speedup} \;=\; \frac{\mathbb{E}[\text{emitted per round}]}{1 + k \cdot c_\text{draft}/c_\text{target}} \;=\; \frac{(1 - \alpha^{k+1}) / (1 - \alpha)}{1 + k \cdot c_\text{draft}/c_\text{target}}\;}
+$$
+
+### 5.3 Worked numbers
+
+Llama-3 70B target with Llama-3 8B draft. Approximate $c_\text{draft}/c_\text{target} \approx 1/9$. For an aligned chat workload, $\alpha \approx 0.7$–$0.8$ empirically.
+
+At $\alpha = 0.75$, $k = 5$:
+
+- Numerator: $(1 - 0.75^6)/(1 - 0.75) = (1 - 0.178)/0.25 = 3.29$
+- Denominator: $1 + 5/9 = 1.556$
+- Speedup: $3.29 / 1.556 \approx 2.1\times$.
+
+A factor of $\sim 2$ wall-clock speedup with zero quality loss is the typical operational gain. Speedups of $3$–$4\times$ are achievable with strong draft models or simple tasks (high $\alpha$).
+
+### 5.4 The acceptance-rate ceiling
+
+$\alpha \le 1 - \tfrac{1}{2}\|p - q\|_1 \le 1$. Equality $\alpha = 1$ requires $p = q$ — i.e., draft = target. So speculative decoding's ceiling speedup is $(k+1)/(1 + k \cdot c_\text{draft}/c_\text{target})$. With $k = 5$ and $c_\text{draft}/c_\text{target} = 1/9$: ceiling $\approx 3.86\times$.
+
+In practice, the per-token acceptance rate $\alpha$ depends on:
+
+- How similar the draft and target are. Same family, same training data, smaller size: high $\alpha$.
+- The distribution sharpness — sharp distributions ($T$ small) are easier to predict, $\alpha$ goes up.
+- The task — code and structured output have low entropy and high $\alpha$; open-ended chat has lower $\alpha$.
+
+---
+
+## 6. Drafting strategies
+
+The draft model can be:
+
+**(a) A smaller model from the same family.** Llama-3 70B target + Llama-3 8B draft. Trained on the same data, similar tokeniser, similar distribution. $\alpha$ is typically high. The most common production setup.
+
+**(b) A self-distilled draft.** Distil the target down to a $\sim 1\%$-size draft. Highest $\alpha$ but requires the extra training run.
+
+**(c) Medusa heads** (Cai et al., 2024, [arXiv:2401.10774](https://arxiv.org/abs/2401.10774)). Instead of a separate draft model, *attach extra prediction heads* to the target model that predict $y_{t+1}, y_{t+2}, \ldots$ in one pass. Zero extra model weights to load; lower $\alpha$ than a dedicated draft (the heads are shallow) but $c_\text{draft} \approx 0$, so the speedup arithmetic still favours it.
+
+**(d) EAGLE / EAGLE-2** (Li et al., 2024, [arXiv:2401.15077](https://arxiv.org/abs/2401.15077)). A small *autoregressive* draft head conditioned on the target's hidden states. Higher $\alpha$ than Medusa; small constant draft cost. Currently (2026) the best published wall-clock results for general LLM inference.
+
+**(e) Tree-based / Lookahead decoding.** Generalisations that propose a *tree* of possible continuations and verify the whole tree in parallel, accepting the deepest matching branch. Higher per-round emit at higher per-round verify cost; complex to implement.
+
+---
+
+## 7. Implementation details
+
+Three details that catch implementers:
+
+### 7.1 Parallel target verification
+
+The target model's $k$-token forward pass uses causal attention: position $j$ attends only to positions $\le j$. The KV cache for the prefix $y_{<t}$ is reused; the *new* keys/values for $\tilde{y}_t, \ldots, \tilde{y}_{t+k-1}$ are computed once and *tentatively appended*. On a rejection at position $j$, the tentative cache entries from position $j+1$ onwards are *discarded* — the cache after a round is truncated to whatever was actually accepted.
+
+This is the single largest source of bugs in speculative-decode implementations. The cache must support truncation in $O(1)$.
+
+### 7.2 Temperature handling
+
+Both $\pi_\text{draft}$ and $\pi_\text{target}$ should be evaluated at the *same temperature* — otherwise the acceptance rule samples from the wrong $q$. The straightforward implementation evaluates both at the user-facing $T$. Top-$k$ and top-$p$ truncation are applied to both in the same way.
+
+(There is a variant — *typical acceptance* — where the acceptance rule accepts any draft token whose probability under $q$ exceeds a threshold rather than the strict ratio. This loosens the rule, raises $\alpha$, but slightly *miscalibrates* the output. Used in some production stacks for $\sim 10\%$ extra speedup.)
+
+### 7.3 Greedy speculative decoding
+
+At $T = 0$ (greedy), the algorithm simplifies dramatically: accept $\tilde{y}_j$ iff $\tilde{y}_j = \arg\max_v q_j(v)$. No randomness. The acceptance rate $\alpha$ is the probability that draft argmax matches target argmax, position by position. This is *often* very high ($\alpha \approx 0.85$–$0.95$ for similar models) — speculative decoding shines brightest at low temperature.
+
+---
+
+## 8. When speculative decoding doesn't help
+
+Speculative decoding *hurts* when:
+
+- **Draft cost is high relative to target.** If $c_\text{draft}/c_\text{target} > \sim 0.3$, the speculation overhead exceeds the savings even at high $\alpha$.
+- **Acceptance rate is low.** Mismatched tokenisers, different model families, or tasks where the draft is consistently wrong. $\alpha < 0.4$ typically means net loss.
+- **Batch size is large.** At batch $B \gg 32$, decode is *compute-bound* (Cap 10.3 §5.1), and adding speculation work makes throughput *worse*. Speculative decoding is primarily a *latency* optimisation for small-batch / single-stream serving. At high-throughput batched serving, continuous batching ([10.8](/session/ch10-inference-decoding/10.8-continuous-batching-paged-attention)) is the better tool.
+
+The clean rule: speculative decoding for latency-sensitive single-stream inference; continuous batching for throughput.
+
+<Aside type="history">
+The protocol was discovered independently by Leviathan, Kalman, Matias (Google, 2022, published 2023) and by Chen et al. (DeepMind, 2023). Both papers worked out the rejection-sampling correctness argument from scratch. The technique sat on the shelf for ~$18$ months before being widely adopted; HuggingFace's `assistant_model` API and vLLM both shipped support in 2024. By 2025, every major commercial inference endpoint offered some form of speculative decoding by default for chat workloads.
+</Aside>
+
+---
+
+## 9. Connection to "test-time scaling"
+
+Speculative decoding is a *compute-saving* technique that gives back wall-clock at no quality cost. Test-time scaling ([10.7](/session/ch10-inference-decoding/10.7-test-time-scaling)) is the opposite — *spending* more inference compute for higher quality.
+
+Both can compose: a reasoning model uses test-time scaling to extend its chain-of-thought, *and* speculative decoding to make each token of that chain cheaper. The two operate at orthogonal layers (reasoning loop vs. per-token decode).
+
+---
+
+## 10. What we keep going forward
+
+Three things.
+
+1. **The protocol.** Draft proposes $k$, target verifies in parallel, rejection-sampling rule accepts a prefix. The acceptance distribution is *exactly* the target's — proved by the $\min(p, q) + \max(0, q - p) = q$ identity.
+2. **The speedup formula.** $\mathbb{E}[\text{emitted}]/\mathbb{E}[\text{cost}] = \frac{(1 - \alpha^{k+1})/(1 - \alpha)}{1 + k \cdot c_\text{draft}/c_\text{target}}$. Empirically $\sim 2$–$3\times$ for chat workloads at $\alpha \approx 0.7$–$0.8$.
+3. **Where it wins and where it doesn't.** Small-batch latency-sensitive inference: yes, almost always. High-throughput batched serving: no, use continuous batching instead.
+
+Cap 10.5 next: *FlashAttention*. With the KV-cache and speculative-decode mechanics in hand, we look at the attention kernel itself — and how an I/O-aware reformulation makes exact attention $\sim 2$–$4\times$ faster on modern GPUs.
+
+<SelfTest>
+
+**(a)** Write the speculative-decoding algorithm in pseudocode. Identify exactly where the *one* target-model forward pass happens.
+
+**(b)** Prove that $\Pr[Y = v] = q(v)$ for a single accepted-or-resampled step. Use the identity $\min(a,b) + \max(0, b-a) = b$.
+
+**(c)** State the expected-speedup formula. Compute the speedup for $\alpha = 0.7$, $k = 4$, $c_\text{draft}/c_\text{target} = 0.1$.
+
+**(d)** Why does $\alpha = 1 - \tfrac12 \|p - q\|_1$? Sketch the derivation from $\alpha = \mathbb{E}_{\tilde Y \sim p}[\min(1, q(\tilde Y)/p(\tilde Y))]$.
+
+**(e)** A team adds speculative decoding to their throughput-optimised serving stack (batch 128, continuous batching). They observe no speedup — sometimes a slowdown. Why?
+
+**(f)** Greedy speculative decoding: state the simplified acceptance rule and why it almost always achieves higher $\alpha$ than $T > 0$ speculative decoding.
+
+</SelfTest>

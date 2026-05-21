@@ -82,7 +82,7 @@ The role-marker tokens differ; the content does not. Templates are *family-speci
 
 ### 3.1 The loss-mask on the template
 
-The loss mask applies to *everything except the assistant's response content*. In the ChatML example, the loss applies *only* to the tokens that encode "Paris.<|im_end|>" — not to "<|im_start|>assistant\n", not to the user turn, not to the system prompt.
+The loss mask applies to *everything except the assistant's response content*. In the ChatML example, the loss applies *only* to the tokens that encode "Paris.`<|im_end|>`" — not to "`<|im_start|>assistant\n`", not to the user turn, not to the system prompt.
 
 Some implementations also unmask the `<|im_end|>` token specifically, so the model learns where to stop. Some implementations also unmask the assistant role-header tokens (`<|im_start|>assistant\n`), arguing the model should learn the conditional dependency on its own role marker. The choice is implementation-dependent and small in effect; the structural requirement is "loss is applied to the content the model is supposed to generate, not to the prompt context."
 

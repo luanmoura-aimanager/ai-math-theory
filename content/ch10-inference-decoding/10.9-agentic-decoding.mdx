@@ -1,0 +1,278 @@
+---
+title: "10.9 — Agentic decoding patterns: self-consistency, Tree of Thoughts, ReAct"
+chapter: 10
+order: 9
+estimatedMinutes: 26
+goal: "Survey the modern agentic-decoding stack: self-consistency (majority vote over reasoning chains), Tree of Thoughts (explicit search over partial reasoning states), ReAct (interleaved reasoning and tool-use). Place these as generalisations of Best-of-N where the search space is over plans rather than completions. Close Chapter 10."
+prerequisites: ["ch10-inference-decoding/10.7-test-time-scaling", "ch9-alignment/9.15-inference-time-alignment"]
+---
+
+## 1. Why this session exists
+
+Chapter 10 has built the inference stack from the bottom up: greedy/beam (10.1), sampling (10.2), KV cache (10.3), speculative decoding (10.4), FlashAttention (10.5), quantisation (10.6), test-time scaling and reasoning models (10.7), continuous batching and PagedAttention (10.8). All of these are *per-token* or *per-forward-pass* optimisations — they make a single chain of generation faster, cheaper, or longer.
+
+This session closes the chapter at the layer *above* the decode loop: **agentic decoding**. The model no longer just emits one chain of tokens and stops; it orchestrates a multi-step process — sampling multiple chains, searching over partial states, calling external tools, critiquing its own work.
+
+The pattern unifies what was previously a zoo of techniques. Self-consistency, Tree of Thoughts, ReAct, and the broader "agent" framing of 2024–2026 are all instances of one idea: **the decoder is a controller that orchestrates an outer search, with each inner step still being one of the decode strategies from earlier in this chapter**.
+
+By the end you should see test-time scaling (10.7), inference-time alignment (9.15), and the agentic loop as three views of the same underlying spend-more-inference-compute paradigm.
+
+---
+
+## 2. Self-consistency: majority vote over chains
+
+The simplest agentic pattern. Sample $N$ independent reasoning chains at $T > 0$, extract the final answer from each, return the most common answer.
+
+```
+SelfConsistency(prompt, N):
+    answers = []
+    for i = 1, ..., N:
+        chain_i = decode(prompt + CoT_prefix, sampling=temperature/top-p)
+        ans_i = extract_answer(chain_i)
+        answers.append(ans_i)
+    return mode(answers)
+```
+
+Wang et al. (2022, [arXiv:2203.11171](https://arxiv.org/abs/2203.11171)) showed this lifts GSM8K accuracy from $\sim 57\%$ (single CoT) to $\sim 75\%$ at $N = 40$. The gain is monotonic in $N$ up to roughly $N \sim 40$, then saturates.
+
+### 2.1 Why it works
+
+Self-consistency is a *parallel* spend of inference compute (Cap 10.7 §5.1). The intuition: the model's CoT distribution puts most mass on the *right reasoning path*, but with high variance — many individual chains are wrong. Marginalising over chains (by majority-voting the final answer) approximates picking the *most likely* answer under the model's posterior, which is more robust than any single chain.
+
+Formally: if the model's per-chain success rate is $p > 1/2$ and chains are roughly independent, the majority of $N$ samples is correct with probability approaching $1$ exponentially in $N$ (Chernoff bound). Saturation occurs when (i) errors stop being independent (the model's failure modes are systematic), or (ii) the right answer is structurally inaccessible (the model can't produce it in any chain).
+
+### 2.2 Verifier-augmented self-consistency
+
+A common upgrade: instead of majority-voting all $N$ answers, *filter* the chains through a verifier (Cap 9.15) — math-checker, code unit tests, PRM — and majority-vote only the verified ones.
+
+This is the dominant test-time-scaling pattern for reasoning benchmarks in 2025–2026. DeepSeek-R1 and o1 both use it on math/code evaluation.
+
+### 2.3 When self-consistency fails
+
+- **Open-ended tasks.** No "final answer" to extract; can't majority-vote on free text.
+- **Long-tail correctness.** When $p < 1/2$ (more failures than successes), the majority is *wrong* and self-consistency amplifies the error. Worse than single-sample.
+- **Strongly correlated samples.** If the model's failure modes are systematic — it always misses the same subtlety — sampling more chains doesn't help.
+
+These conditions push you towards the next family: explicit search.
+
+---
+
+## 3. Tree of Thoughts (ToT)
+
+Yao et al. (2023, [arXiv:2305.10601](https://arxiv.org/abs/2305.10601)) generalised self-consistency to *search over partial reasoning trees*. Instead of generating $N$ complete chains in parallel, build a tree where each node is a partial reasoning state and each edge is one reasoning *step*.
+
+```
+ToT(prompt):
+    root = empty partial state
+    frontier = {root}
+    while no node is terminal:
+        for each node n in frontier:
+            children = sample k continuation candidates from π(. | prompt, n)
+            for c in children:
+                v_c = evaluate(prompt, n + c)  # a value estimate
+            keep top-b children by v_c
+        frontier = {top-b nodes overall}
+    return best terminal node by total path value
+```
+
+Two hyperparameters: branching factor $k$ (children per node) and beam width $b$ (frontier size). Plus an *evaluator* — either the same LLM scoring partial states ("is this a promising direction?"), or a separate value model.
+
+### 3.1 Comparison to beam search
+
+ToT generalises beam search (Cap 10.1) in two ways:
+
+- The "tokens" are *reasoning steps* (sentences, equations, sub-goals), not single tokens.
+- The scoring uses an *external evaluator* — typically the LLM itself with a critique prompt — rather than the model's own log-probability.
+
+This is the right level of abstraction for reasoning: beam-searching over tokens doesn't help (token-level argmax is degenerate, Cap 10.1 §5); searching over *partial plans* with an external value estimate does.
+
+### 3.2 Where ToT beats CoT and self-consistency
+
+The Yao et al. paper's example: Game of 24 (combine four numbers via $+, -, \times, \div$ to get $24$). CoT solves $\sim 4\%$; self-consistency-$100$ solves $\sim 9\%$; ToT with $k=5, b=5$ solves $\sim 74\%$. The task has a natural tree structure (the partial expressions are tree-evaluable), and the LLM evaluator is sharper than chain-level sampling.
+
+ToT shines on tasks with explicit branching structure: planning, theorem proving, puzzle solving, search problems. It's *less* helpful on tasks where reasoning is mostly linear and the right chain just needs to be sampled (math word problems, where self-consistency is already near-optimal).
+
+### 3.3 The cost
+
+ToT generates $O(k^d)$ partial states for depth $d$ in the worst case (with beam pruning to $b$). For $k = 5, b = 5, d = 4$: hundreds of LLM calls per problem. Two orders of magnitude more inference compute than CoT. The win is real on hard problems, but ToT isn't free.
+
+---
+
+## 4. ReAct: interleaving reasoning and tools
+
+Yao et al. (2022, [arXiv:2210.03629](https://arxiv.org/abs/2210.03629)) introduced **ReAct** — Reason + Act — the prototype of modern tool-using agents.
+
+The decoder alternates between two kinds of tokens:
+
+- **Thought**: a step of internal reasoning.
+- **Action**: a structured tool call (e.g., `search("DeepSeek R1 paper")`, `calculator("23 * 47")`, `python.execute("..."`)).
+
+After an action, the *observation* (the tool's result) is appended to the context, and the loop continues:
+
+```
+ReAct(prompt):
+    context = prompt
+    while not done:
+        chunk = decode(context, stop=["Action:", "Final:"])
+        if chunk contains "Final:":
+            return extract_answer(chunk)
+        elif chunk contains "Action:":
+            action = parse(chunk)
+            obs = execute_tool(action)
+            context = context + chunk + f"\nObservation: {obs}\n"
+```
+
+The model's role: decide *when* to think internally, *when* to call a tool, and *what* to do with the result. The loop is finite because the model is trained (or prompted) to eventually emit a `Final:` answer.
+
+### 4.1 Why it works
+
+For tasks requiring grounded information (current facts, exact computation, code execution, long-term storage), pure reasoning is insufficient — the model's internal knowledge has a training cutoff, its arithmetic is unreliable, and its memory is the context window. ReAct gives the model *real* tools: search engines, calculators, Python interpreters, file systems, vector databases.
+
+The pattern is now standard in production agent frameworks (LangChain, LlamaIndex, Anthropic's tool-use API, OpenAI's function calling). By 2026 ReAct is no longer a research technique — it's the API contract for agentic LLM products.
+
+### 4.2 Tool-use training
+
+The original ReAct paper used pure prompting on GPT-3.5. Modern frontier models are *trained* to use tools: SFT on (prompt, tool-call trace, final-answer) triples, often followed by RL on a reward that scores whole agent trajectories. The result: the model is *better* at choosing when to call tools, formatting calls correctly, and recovering from tool errors.
+
+The training is conceptually identical to RLHF/GRPO (Cap 9.5–9.7) — the action space just includes tool calls as well as natural-language tokens.
+
+### 4.3 Compositions
+
+ReAct composes with everything else:
+
+- **ReAct + self-consistency.** Run $N$ ReAct trajectories; majority-vote the answers.
+- **ReAct + ToT.** Search the tree of possible (thought + action) sequences. Used in research/agent demos but expensive.
+- **ReAct + reasoning model.** A reasoning model (Cap 10.7) inside a ReAct loop: the model's internal `<think>` tokens *and* its tool calls are both inference-time spend. Currently the most powerful agent pattern in deployment.
+
+---
+
+## 5. Reflexion: critique-and-revise loops
+
+A natural extension: instead of just emitting an answer, emit an answer, *critique it* (with the same model or a separate critic), then *revise*.
+
+Shinn et al. (2023, [arXiv:2303.11366](https://arxiv.org/abs/2303.11366)) formalised this as **Reflexion**:
+
+```
+Reflexion(prompt, max_iters):
+    context = prompt
+    for i = 1, ..., max_iters:
+        answer = decode(context + "Answer:")
+        feedback = decode(context + answer + "Critique:")
+            # or: feedback = external_evaluator(answer)
+        if feedback says "correct": return answer
+        context = context + answer + feedback + "\nLet me try again."
+    return final answer
+```
+
+The model's own critiques become part of the next iteration's context. The loop terminates when the critic accepts or when iteration budget is exhausted.
+
+### 5.1 Why this works (when it does)
+
+Reflexion exploits the fact that **the model is often a better critic than generator**: it can recognise that an answer is wrong even when its first-pass generator wouldn't have produced the right answer directly. This asymmetry — easier to verify than to generate — is the fundamental driver of all these agentic patterns.
+
+When it fails: when the model can't recognise its own errors. For tasks where the model is overconfident in wrong answers (alignment failure mode — Cap 9.14), Reflexion is useless or counterproductive.
+
+### 5.2 Iterative DPO connection
+
+Cap 9.11 introduced iterative DPO: train on the model's own preferred/dispreferred outputs from the previous training round. Reflexion is the *inference-time* analogue: the model revises its own outputs in a single trajectory, using its own critique signal. Both share the structure of *bootstrap from self-evaluation*.
+
+---
+
+## 6. Test-time-compute scaling, unified
+
+All of this fits into one frame: **test-time compute scaling**.
+
+Three orthogonal axes of "spending more inference compute":
+
+1. **Sequential depth.** Longer reasoning chains (Cap 10.7). The model thinks more before answering.
+2. **Parallel breadth.** Multiple chains (self-consistency), multiple plans (ToT). The model considers alternatives.
+3. **Tool-augmented depth.** ReAct, Reflexion. The model uses external resources.
+
+A frontier deployment in 2026 stacks all three: a reasoning model that emits $30{\rm k}$ thinking tokens (sequential depth), sampled $N = 8$ times with verifier-based selection (parallel breadth), with tool calls interleaved (tool-augmented depth).
+
+This is also where Chapter 9's inference-time alignment (9.15) lives. Best-of-N, rejection sampling, judge-based selection are all instances of *parallel breadth* with various scoring functions. The unified picture: aligned policies (Chapter 9) running on optimised inference infrastructure (Chapter 10 §§1–8), orchestrated by agentic loops (this session).
+
+### 6.1 The cost-quality curve
+
+Per Snell et al. ([Cap 10.7 §5](/session/ch10-inference-decoding/10.7-test-time-scaling)): quality scales as roughly $\log C_\text{inf}$. The slope depends on which axis you're spending on.
+
+- Sequential depth has steep slope on long-reasoning tasks (math, code, formal proof).
+- Parallel breadth has steep slope when a verifier is sharper than the model's confidence.
+- Tool-augmented depth has steep slope when the task genuinely requires external information or computation the model can't do internally.
+
+Production deployments choose the axis (or mix) based on the task. Mathematical reasoning: depth + parallel + verifier. General QA with retrieval: tool-augmented + parallel. Code generation: depth + parallel + execution-feedback ReAct loop.
+
+<Aside type="note">
+**Why these techniques converged in 2024–2026.** Until late 2023, the pretrained-LLM stack was the dominant capability source: every gain came from scaling pretraining. Once reasoning models (o1) demonstrated that *trained* test-time-compute use could match training-scale gains *at far lower training cost*, the bottleneck shifted from training-data and training-FLOPs to *inference orchestration and verifier quality*. The whole landscape of agentic decoding patterns is the response: how do you orchestrate inference compute productively? Self-consistency, ToT, ReAct, Reflexion are answers, each best on a different task class.
+</Aside>
+
+---
+
+## 7. Limits and open problems
+
+Three current limits.
+
+### 7.1 Verifier quality is the binding constraint
+
+For self-consistency-with-verifier, ToT, and ReAct, the *evaluator/verifier* is the ceiling. A reasoning model + bad verifier converges to nothing useful; a reasoning model + perfect verifier converges to the verifier's quality.
+
+For math and code, verifiers are sharp (exact-answer check, unit tests). For open-ended tasks (writing, dialogue, planning), verifiers are RM-quality at best, with reward-hacking risk (Cap 9.14). The "verifiability gap" is the structural reason test-time scaling has been most dramatic on math and code.
+
+### 7.2 Long agent trajectories blow up
+
+A multi-step agent that calls $N$ tools and reasons between each can accumulate $50{\rm k}$+ tokens of context. The model's long-context performance degrades (Cap 6.13); the inference serving stack strains (Cap 10.8 §6).
+
+The 2026 frontier: agents that *summarise their own context* periodically — a hierarchical scratchpad where the agent moves "old" reasoning to compressed summaries and keeps only the active sub-goal in working context. Active research area; no consensus best practice yet.
+
+### 7.3 Composability is fragile
+
+Stacking multiple test-time-scaling axes doesn't always compound. ReAct + ToT + reasoning-model + self-consistency would in principle multiply gains; in practice, the trajectories become so long and noisy that gains stall. The pure reasoning-model + tools pattern (Anthropic's Computer Use, OpenAI's o1 with tool calling) is the current production sweet spot.
+
+---
+
+## 8. Putting Chapter 10 together
+
+Chapter 10 covered inference and decoding. The full inference stack as of 2026:
+
+| Layer | Sessions | Key idea |
+|---|---|---|
+| Decode strategy | 10.1, 10.2 | Sample, don't argmax. Top-$p$/top-$k$ truncation. |
+| KV cache | 10.3 | $2 \cdot n_\text{layers} \cdot n_\text{kv\_heads} \cdot d_\text{head} \cdot n_\text{ctx} \cdot B \cdot p$ bytes. Dominant memory cost. |
+| Speculative decoding | 10.4 | Draft proposes, target verifies, rejection sampling preserves distribution. $2$–$3\times$ wall-clock. |
+| Attention kernel | 10.5 | FlashAttention: tiling + online softmax. I/O-optimal, exact, $O(n)$ activation memory. |
+| Quantisation | 10.6 | INT4 weights (GPTQ/AWQ), INT8 KV cache. $4\times$ weight compression at $\le 1$ PPL loss. |
+| Test-time scaling | 10.7 | Reasoning models: RL-trained chain-of-thought. $\text{accuracy} \sim \log C_\text{inf}$. |
+| Serving | 10.8 | Continuous batching + PagedAttention. $\sim 10\times$ throughput vs naive. |
+| Agentic | 10.9 | Self-consistency, ToT, ReAct, Reflexion. Three axes: sequential depth, parallel breadth, tool-augmented depth. |
+
+A deployable LLM service is the *full vertical*: aligned policy (Chapter 9) + optimised inference (10.1–10.8) + agentic orchestration (10.9). Each layer is necessary; missing any one of them costs an order of magnitude in cost or capability.
+
+The next chapter (11) opens **interpretability** — what is actually happening *inside* the model that we've now learned to train, align, and serve? Chapter 12 then closes the course with a *capstone*: implement a tiny GPT end-to-end, with RoPE/RMSNorm/Adam/SGD, train it on Shakespeare, do a mini-RLHF step, write up your own *Attention is All You Need*.
+
+---
+
+## 9. What we keep going forward
+
+Three things.
+
+1. **Agentic decoding is search over plans, not tokens.** Self-consistency is parallel search; ToT is tree search with an evaluator; ReAct is search interleaved with tool calls; Reflexion is critique-and-revise. All inherit from the same Best-of-N / inference-time-alignment frame as Cap 9.15.
+2. **Three axes of test-time compute spend.** Sequential depth (longer chains), parallel breadth (more chains), tool-augmented depth (external resources). Frontier deployments stack all three; the right mix depends on the task and on verifier quality.
+3. **Verifier quality is the structural ceiling.** Test-time scaling shines on math, code, and verifiable reasoning; for open-ended tasks, the lack of sharp verifiers caps gains and creates reward-hacking risk.
+
+Chapter 10 closes. Chapter 11 opens: interpretability — peering inside the network.
+
+<SelfTest>
+
+**(a)** Self-consistency: state the algorithm and the Chernoff-style argument for why majority-voting helps when per-chain success rate $p > 1/2$.
+
+**(b)** Tree of Thoughts: contrast with beam search (Cap 10.1) on (i) what is a "token" in the search, (ii) what scoring function is used. Why is ToT not vulnerable to the beam-search curse?
+
+**(c)** Write the ReAct loop in pseudocode. What three actions does the loop alternate?
+
+**(d)** Reflexion exploits an asymmetry. State it in one sentence. When does the asymmetry fail?
+
+**(e)** Name the three axes of test-time compute spend. Give a frontier task that benefits most from each axis.
+
+**(f)** A 2026 production reasoning model with tool use combines: a 70B base, 30k thinking tokens per query, $N=8$ resamples, verifier-based selection, ReAct-style tool calls. Identify which session of Chapter 9 or 10 each component traces back to.
+
+</SelfTest>

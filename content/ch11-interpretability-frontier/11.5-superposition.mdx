@@ -1,0 +1,194 @@
+---
+title: "11.5 — Superposition: more features than dimensions"
+chapter: 11
+order: 5
+estimatedMinutes: 22
+goal: "State the superposition hypothesis: neural networks pack $k \\gg d$ features into $d$-dimensional activation spaces using sparsity. Derive the toy-model phase diagram (sparsity × importance) that predicts when superposition emerges. Identify polysemantic neurons as the visible consequence — and the obstacle to direct interpretability."
+prerequisites: ["ch11-interpretability-frontier/11.4-induction-heads"]
+---
+
+## 1. Why this session exists
+
+The previous sessions identified circuits and features as elements of a vector space. Cap 11.3 §4 introduced *feature directions* — vectors $f \in \mathbb{R}^{d_\text{model}}$ encoding interpretable concepts.
+
+A naive picture: each interpretable feature aligns with one *neuron* (one basis direction of the activation space). Reading the network would then be straightforward — inspect each neuron, name what it detects.
+
+Empirically, this naive picture fails. Most neurons in trained Transformers are **polysemantic** — they fire on multiple unrelated stimuli, mixing several features into one neuron. There are far more *concepts* the network represents than there are neurons to allocate them to.
+
+The Anthropic paper *Toy Models of Superposition* (Elhage et al., 2022, [transformer-circuits.pub](https://transformer-circuits.pub/2022/toy_model/index.html)) gave the theoretical explanation: **superposition**. Networks pack $k \gg d$ features into $d$-dimensional spaces by representing each feature as a *direction* (not an axis), exploiting feature *sparsity* to keep interference manageable.
+
+Superposition is the *structural reason* mech-interp at scale is hard. It is also the precondition for Cap 11.6 (sparse autoencoders), which provide a tool to *recover* the features from a superposed representation.
+
+---
+
+## 2. The setup
+
+A toy model. Suppose:
+
+- There are $k$ underlying "features" $f_1, \ldots, f_k$ — binary scalars indicating presence/absence of $k$ distinct concepts in the input.
+- A linear layer maps a sparse $k$-dimensional feature vector to a $d$-dimensional activation, then *back* to $k$-dimensional output: $\hat f = W^T W f$ where $W \in \mathbb{R}^{d \times k}$.
+- Training pressure: reconstruct $f$ from $\hat f$.
+- Each feature has importance $I_i$ (weight in the loss) and sparsity $s_i$ (probability of being inactive).
+
+When $k \le d$, the trivial solution: $W$ has $k$ orthonormal columns, each feature gets its own dimension. Perfect reconstruction.
+
+When $k > d$, this is impossible. The network has to *choose* — which features get dedicated directions, which share, which are dropped entirely.
+
+### 2.1 The phase diagram
+
+Elhage et al. derived the optimal $W$ under various $(k, d, s, I)$ regimes. The qualitative pattern:
+
+- **Dense features ($s \approx 0$, no sparsity).** Network can only represent $\sim d$ features cleanly; the rest are dropped or compressed.
+- **Sparse features ($s \to 1$, features rarely co-occur).** Network can pack many more than $d$ features by giving each a non-axis-aligned direction. Interference is tolerable because rarely-co-occurring features rarely overlap in any one input.
+- **High-importance features.** Get dedicated axis-aligned dimensions.
+- **Low-importance features.** Get packed into smaller, oblique subspaces or dropped.
+
+The full phase diagram has interesting structure — pentagons, antipodes, triangular packings — corresponding to the geometric problem of placing $k$ points on a $(d-1)$-sphere with maximum pairwise separation. The math is the same as in lattice packing.
+
+### 2.2 The key insight: sparsity is the resource
+
+Superposition exploits the fact that *features are sparse* — most concepts are *not* present in any given input. If features were dense (always active), every input would mix all features and interference would dominate. With sparsity, the network gets to *bet* that any given input activates only a small subset of features, so the oblique projections can disambiguate.
+
+Quantitatively: with feature sparsity $s = 0.9$ (each feature has $10\%$ activation rate), a network can represent $\sim 10 d$ features in $d$ dimensions with tolerable reconstruction error. With $s = 0.99$ ($1\%$ activation), $\sim 100 d$ features. The scaling is roughly $k_\max \approx d / (1 - s)$ in the simplest regime.
+
+---
+
+## 3. The superposition hypothesis
+
+**Claim.** Trained Transformers operate in the superposition regime. They represent $k \gg d$ features in their $d_\text{model}$-dimensional residual streams (and in their MLP hidden states), with each feature corresponding to a *direction*, not necessarily an axis.
+
+Three pieces of evidence.
+
+### 3.1 Polysemantic neurons
+
+In any trained Transformer, most neurons (rows of $W_\text{in}$ in MLP layers) fire on multiple seemingly-unrelated inputs. Olah et al. (2020) catalogued examples in vision models: a single neuron firing on "cat faces" *and* "fronts of cars" *and* "letter E". In LLMs, similar polysemantic neurons abound — "Indonesian-language tokens" + "function-call syntax" + "third-person pronouns" all activating one MLP neuron.
+
+This is exactly the predicted consequence of superposition: features don't align with neurons, so each neuron's activation is a *projection* of multiple features.
+
+### 3.2 More-than-$d$ features in linear probes
+
+Train probes for $k > d$ distinct concepts on activations of dimension $d$. Many probes achieve high accuracy. If the concepts were stored axis-aligned, only $d$ probes could fit; the fact that more do implies non-axis-aligned (oblique) directions.
+
+This is the linear-representation-hypothesis check at scale (Park et al., 2023, [arXiv:2311.03658](https://arxiv.org/abs/2311.03658)): concepts are *linear directions*, the dimensions of the space don't bound the number of representable concepts.
+
+### 3.3 Sparse autoencoders recover more features than neurons
+
+Sparse autoencoders trained on activations of dimension $d$ recover thousands or millions of monosemantic features (Cap 11.6, Bricken et al., 2023; Templeton et al., 2024). The features outnumber the neurons by $10\times$–$1000\times$. This is the strongest direct evidence: the network *does* pack many more features into the same $d$-dimensional space than naive intuition allows.
+
+---
+
+## 4. The structure of superposed representations
+
+A feature is a *direction* $v_i \in \mathbb{R}^d$ in activation space. The activation $h$ is a sum of currently-active features:
+
+$$
+h \;\approx\; \sum_{i : f_i = 1} c_i \cdot v_i,
+$$
+
+where $f_i \in \{0, 1\}$ indicates feature $i$'s presence and $c_i$ is its magnitude.
+
+### 4.1 The decoder problem
+
+To *recover* the active features from $h$, we need to solve the inverse problem:
+
+$$
+\hat f \;=\; \arg\min_f \|h - V f\|^2_2 \quad \text{s.t. } f \text{ is sparse},
+$$
+
+where $V \in \mathbb{R}^{d \times k}$ is the *feature dictionary*. This is a classical sparse-coding problem (Olshausen & Field, 1996) — well-studied, with known algorithms (lasso, matching pursuit, ISTA).
+
+In practice, we don't know $V$ — we have to *learn* it from the data. That's what a sparse autoencoder does (Cap 11.6).
+
+### 4.2 The geometric picture
+
+When $V$'s columns are *near-orthogonal* (cosine similarities close to 0), superposition works well — each feature's projection contaminates the others minimally. The packing problem of optimal $V$ for $k > d$ is: place $k$ unit vectors in $\mathbb{R}^d$ minimising max pairwise cosine similarity.
+
+For $k = 2d$: solutions exist with max similarity $\approx 1/2$. For $k = 10d$: max similarity $\approx 0.85$ — the features interfere meaningfully.
+
+The trained network's $V$ is close to optimal in this geometric sense (Elhage et al. 2022 §4 measured cosine-similarity distributions in trained models and found they match the theoretically optimal packings for the inferred sparsity regime).
+
+---
+
+## 5. Polysemantic neurons in detail
+
+The visible signature of superposition is polysemantic neurons. A neuron's activation is
+
+$$
+n = \sigma(w^\top h) = \sigma\big(\sum_i c_i \langle w, v_i \rangle f_i\big).
+$$
+
+The neuron fires when *any* active feature $i$ has a large enough $\langle w, v_i \rangle$. If $w$ has substantial overlap with $5$ different feature directions, the neuron fires on $5$ different stimuli.
+
+### 5.1 Why this is the default
+
+Imagine the alternative: every neuron is monosemantic, dedicated to one feature. Then $d_\text{ff}$ neurons hold $d_\text{ff}$ features. For a typical MLP, $d_\text{ff} = 4 d_\text{model} \approx 16{\rm k}$. But trained models seem to represent *millions* of distinct features (Cap 11.6). $16{\rm k}$ doesn't fit a million.
+
+So the network *must* superpose. Polysemantic neurons are the consequence.
+
+### 5.2 The cost: interpretation by neuron-inspection fails
+
+Pre-2022 interpretability methods often involved staring at individual neurons — what does neuron 7234 in layer 9 detect? With polysemantic neurons, the answer is *several unrelated things*, and there's no clean way to summarise. The neuron's name doesn't correspond to any single concept.
+
+The cure: stop looking at neurons. Look at *features* (directions), recovered via SAEs from the activation patterns across many inputs. This is the transition from neuron-centric to feature-centric mech-interp, championed by the Anthropic Circuits thread starting ~2023.
+
+---
+
+## 6. Computation under superposition
+
+A subtle point. The network doesn't just *store* superposed features; it *computes* on them. Each subsequent MLP/attention layer reads the superposed representation and writes another superposed representation.
+
+How does a network compute Boolean functions on superposed features? It uses **sparse activations**: each MLP neuron $n$ has $\sigma(w_n^\top h)$ that is *zero* for most inputs and nonzero for a specific feature combination. If $w_n$ aligns with the directions $v_i + v_j$, the neuron fires on inputs where *both* features $i$ and $j$ are active — implementing a logical AND.
+
+This is why ReLU/GELU/SwiGLU activations are essential: they enable sparse, conditional firing that performs feature combinations. A purely-linear network couldn't do superposed computation; the non-linearity is the substrate.
+
+### 6.1 The complexity cost
+
+Computing with $k$ features in $d$ dimensions, $k > d$, costs more *neurons* than the axis-aligned alternative — each feature combination requires a dedicated neuron that fires only when the relevant inputs co-occur. The $d_\text{ff} = 4 d_\text{model}$ ratio in standard Transformers is one indicator: the FFN has $4\times$ the dimensionality of the residual stream, providing room for compound features.
+
+### 6.2 Why deep models can compute more than shallow models
+
+Each layer can transform features, combine them, and write new derived features. A deep model can incrementally build up complex feature compositions that a shallow model can't reach in one layer's worth of computation. This is the *depth-as-feature-engineering* picture of why Transformers benefit from depth (Cap 6.13, Cap 8.1).
+
+---
+
+## 7. Limits of the toy model
+
+The Elhage et al. toy model is a *single-layer* linear-decoder-plus-ReLU model on synthetic features. Real Transformers are deeper and more complex. The toy model captures the *core mechanism* — sparsity-driven packing — but glosses over:
+
+- **Hierarchical features.** Real networks build features compositionally; low-level features in early layers feed compound features in later layers.
+- **Computational features.** Some "features" aren't input attributes but *computational states* (e.g., "we are currently inside a function call"). These have different statistics than input features.
+- **Feature splitting.** When a model trains on more data with more concepts, an existing polysemantic neuron may split into a more refined set of features. The feature inventory grows during training, not just at the end.
+
+The toy model gives the right intuitions; SAEs at scale (Cap 11.6) give the empirical inventory.
+
+<Aside type="note">
+**Why the field cared about this paper.** Before *Toy Models of Superposition* (2022), the polysemantic-neuron phenomenon was a known mystery — "neurons don't have clean meanings" — but there was no *theory* of why. Elhage et al. converted it from a mystery into a *predictable consequence* of network optimisation under feature sparsity. The theory makes specific predictions (more sparsity → more features per dimension; high-importance features get axis-aligned; etc.) that match observations. This gave the field a *target* — recover the underlying features, don't be fooled by the messy neuron basis — which is the agenda for the rest of Chapter 11.
+</Aside>
+
+---
+
+## 8. What we keep going forward
+
+Three things.
+
+1. **Superposition packs $k > d$ features into $d$ dimensions.** Each feature is a direction (not an axis), with magnitude encoding feature value. Sparsity is the resource that makes oblique packing work — rarely-co-occurring features can share regions of activation space.
+2. **Polysemantic neurons are the visible consequence.** Each neuron's activation is a projection of multiple features; one neuron fires on multiple seemingly-unrelated inputs. Staring at neurons one-by-one fails to recover meaning.
+3. **The right unit of analysis is the feature, not the neuron.** Features are directions to be discovered; neurons are basis vectors of the activation space, with no privileged interpretive status. Cap 11.6 introduces the tool — sparse autoencoders — that *recovers* features from superposed representations.
+
+Cap 11.6 next: sparse autoencoders. The engineering response to superposition.
+
+<SelfTest>
+
+**(a)** State the superposition hypothesis. Give the rough scaling $k_\text{max} \approx d / (1 - s)$ and interpret it.
+
+**(b)** Define a polysemantic neuron. Give a concrete example (real or constructed) of a single MLP neuron firing on multiple unrelated stimuli.
+
+**(c)** Why does the network *prefer* superposed representations over axis-aligned ones when $k > d$? Frame in terms of feature sparsity and information capacity.
+
+**(d)** State the sparse-coding inverse problem $\hat f = \arg\min \|h - V f\|^2$ s.t. $f$ sparse. Why is the *learning* of $V$ the hard part?
+
+**(e)** Why is ReLU/GELU essential for *computing* on superposed features (not just storing them)? Sketch how a single MLP neuron can implement an "AND" of two features.
+
+**(f)** A 70B model has $\sim 10$M MLP neurons but appears to represent $\gg 10$M distinct features (per SAE analyses). What does this tell us about the level of superposition in modern frontier models?
+
+</SelfTest>
