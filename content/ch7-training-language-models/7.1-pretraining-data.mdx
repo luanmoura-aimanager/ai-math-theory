@@ -61,7 +61,7 @@ Convert HTML to plain text. Strip navigation, ads, boilerplate (header/footer/si
 
 Filter to the target language(s). For an English-centric model, drop pages whose detected language is not English. For multilingual models (Aya, BLOOM, mBERT lineage), use language ID to *weight* languages explicitly. CLD3 and FastText's `lid.176` are the standard tools.
 
-### 3.3 Quality filtering — heuristic
+### 3.3 Quality filtering: heuristic
 
 Drop pages that fail simple heuristics:
 
@@ -74,7 +74,7 @@ Drop pages that fail simple heuristics:
 
 Each heuristic catches a specific failure mode. The MassiveText filtering of [Gopher (Rae et al., 2021, arXiv:2112.11446)<FN n={6} />](https://arxiv.org/abs/2112.11446) §A.2 codified the now-standard 7-rule list.
 
-### 3.4 Quality filtering — learned
+### 3.4 Quality filtering: learned
 
 Train a classifier on a small high-quality sample (Wikipedia, references, etc. as positives; random web as negatives) and use it to rank-filter the web. The **CCNet** pipeline ([Wenzek et al., 2020<FN n={7} />, arXiv:1911.00359](https://arxiv.org/abs/1911.00359)) used a perplexity threshold from a small KenLM trained on Wikipedia: keep pages whose Wikipedia-LM perplexity is low (Wikipedia-like) and drop the rest. Modern pipelines (DCLM, FineWeb-Edu) use a fastText classifier trained on hand-labeled examples.
 
@@ -111,7 +111,7 @@ That is *one* year of crawl. To reach the 10–20 T token regime, modern pipelin
 
 A short tour of the corpora you'll see cited in model cards and ablation studies. Each contributed something methodologically; together they document the field's evolution toward "quality over quantity."
 
-### 4.1 C4 — *Colossal Clean Crawled Corpus* (2019)
+### 4.1 C4: *Colossal Clean Crawled Corpus* (2019)
 
 **Raffel<FN n={1} /> et al., *Exploring the limits of transfer learning with a unified text-to-text transformer* (T5)** ([arXiv:1910.10683](https://arxiv.org/abs/1910.10683)) §3.1. ~750 GB, ~150 B tokens, extracted from one Common Crawl snapshot. Heuristic-only filtering: drop pages with placeholder text, profanity, fewer than 5 sentences, etc.
 
@@ -127,7 +127,7 @@ GPT-J, GPT-NeoX, and Pythia were trained on The Pile. The Pile remains the singl
 
 **Together AI<FN n={3} />, *RedPajama: An Open Source Recipe to Reproduce LLaMA Training Dataset*** ([togethercomputer.com/redpajama](https://www.together.ai/blog/redpajama)). Open reproduction of the LLaMA-1 data mixture: CommonCrawl-CC-Net (filtered with CCNet), C4, GitHub, books, arXiv, Wikipedia, StackExchange. ~1.2 T tokens. This was the first open-source corpus large enough to retrain a LLaMA-1-class model.
 
-### 4.4 DCLM — *DataComp for Language Models* (2024)
+### 4.4 DCLM: *DataComp for Language Models* (2024)
 
 **Li<FN n={4} />, Fang, Smyrnis, et al., *DataComp-LM: In search of the next generation of training sets for language models*** ([arXiv:2406.11794](https://arxiv.org/abs/2406.11794)). DCLM was the first paper to make the data-curation step *itself* the experimental subject. They built a 240 T-token raw pool from Common Crawl and ran controlled experiments on filtering recipes — what classifier, what threshold, what deduplication strategy — measuring downstream loss at fixed compute. The standardised benchmark drove dataset quality forward.
 

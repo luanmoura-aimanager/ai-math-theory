@@ -35,7 +35,7 @@ $$
 
 and biases $b_1 \in \mathbb{R}^{d_\text{ff}}, b_2 \in \mathbb{R}^{d}$. The non-linearity $\sigma$ in AIAYN was ReLU; modern LLMs use GELU (GPT-3, BERT) or SwiGLU/GeGLU (LLaMA, Mistral) — these gated variants are deferred to [8.4] and slightly change the formula, but the *shape* of the block remains: expand to $d_\text{ff}$, apply non-linearity, contract back to $d$.
 
-### 2.1 "Per-position" — what it means
+### 2.1 "Per-position": what it means
 
 Although we wrote $\text{FFN}(x)$ for a single position, in practice we apply it to all $T$ positions of a sequence by batching. For an input tensor $X \in \mathbb{R}^{T \times d}$ representing $T$ tokens, the FFN sub-layer computes
 

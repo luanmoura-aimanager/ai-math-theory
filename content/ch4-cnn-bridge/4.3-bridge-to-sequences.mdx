@@ -15,7 +15,7 @@ There are three structural mismatches, in increasing order of seriousness. Once 
 
 ---
 
-## 2. Limitation 1 — Long-range mixing requires deep stacks
+## 2. Limitation 1: long-range mixing requires deep stacks
 
 Section 4.2 showed: with stride-1 convs of kernel $K = 3$, the receptive field grows as $r_L = 1 + 2L$. A context window of $T = 2048$ tokens needs $L \ge 1024$ such layers for the *last* token to be able to influence the *first*. With dilation $d_\ell = 2^{\ell - 1}$ (WaveNet-style) you can do it in $\log_2 T$ layers, but you pay for it in two ways:
 
@@ -26,7 +26,7 @@ In a Transformer, by contrast, every layer is a single matrix multiply that mixe
 
 ---
 
-## 3. Limitation 2 — Equivariance is the wrong symmetry for language
+## 3. Limitation 2: equivariance is the wrong symmetry for language
 
 Translation equivariance is a feature in vision: a cat at $(50, 50)$ should fire the same detector as a cat at $(150, 150)$. The semantics of an image are largely translation-stable.
 
@@ -44,7 +44,7 @@ In CNNs the symmetry can only be broken after global pooling (which is invariant
 
 ---
 
-## 4. Limitation 3 — Convolution mixes by position, attention mixes by content
+## 4. Limitation 3: convolution mixes by position, attention mixes by content
 
 This is the deepest of the three. A conv layer combines a token with *its neighbours by index*. Whether the neighbours are semantically relevant or not, they get the same weight. In:
 

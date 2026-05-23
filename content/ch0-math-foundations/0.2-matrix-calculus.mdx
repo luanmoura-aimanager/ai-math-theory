@@ -48,15 +48,15 @@ $$
 \boxed{\;\frac{\partial (Wx + b)}{\partial x} = W \;\in \mathbb{R}^{m\times n}.\;}
 $$
 
-Intuition: differentiating an affine map with respect to its input
-returns the linear part — period.
+The intuition is direct: differentiating an affine map with respect to
+its input recovers its linear part.
 
-## 3. Derivative with respect to $W$ — the slippery point
+## 3. Derivative with respect to $W$
 
 Here $W$ is a matrix, so $\partial y / \partial W$ is in principle a
 *rank-3 tensor*: it has indices $(i, j, k)$ with $i$ ranging over $y$ and
-$(j, k)$ ranging over $W$. Let's compute element-wise and only afterwards
-decide how to store it.
+$(j, k)$ ranging over $W$. The cleanest route is to differentiate index by
+index; the storage shape will fall out at the end.
 
 $$
 \frac{\partial y_i}{\partial W_{jk}}
@@ -98,8 +98,8 @@ chained across all layers, it is literally PyTorch's `backward()`.
 For $W = \begin{pmatrix} 1 & 2 \\ 3 & 4 \end{pmatrix}$ and $x = (5,
 6)^\top$, compute $y = Wx$, then $\partial y / \partial x$, and finally
 — assuming $L = \tfrac{1}{2}\|y\|^2$ — obtain $\delta$ and the outer
-product $\delta\, x^\top$. If you end up with $W^\top y\, x^\top$ in the
-wrong place, re-read §1.
+product $\delta\, x^\top$. If $W^\top y\, x^\top$ shows up in the slot where $\delta\, x^\top$
+should be, the numerator convention from §1 was crossed.
 
 <Footnotes>
   <FNItem n={1}>
