@@ -233,7 +233,17 @@ schema and Prisma config can be recovered from git history if needed.
   toggle without asking — it complicates SSR hydration and Luan hasn't
   asked for it.
 
-### 9.3 Content (so you know — but you don't author)
+### 9.3 Content tone & voice
+
+All prose in `content/` is authored under `content/STYLE.md`. Load it
+before any session that writes or edits `.mdx`. The short version: no
+em-dashes, no empty intensifiers (`literally`, `exactly`, `simply`), no
+"let's" pedagogy, no colorful filler in headers, no vague threats.
+Default to surgical edits; reach for structural rewrites only when
+removing the artificial element exposes that the sentence was carrying
+tone instead of content.
+
+### 9.4 Content (so you know, but you don't author)
 
 Frontmatter shape every `.mdx` must have:
 
