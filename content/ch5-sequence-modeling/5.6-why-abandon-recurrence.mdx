@@ -18,7 +18,7 @@ This session collects those two arguments into a single brief — *parallelism* 
 
 ---
 
-## 2. Argument 1 — Parallelism
+## 2. Argument 1: parallelism
 
 GPUs achieve their performance by executing the same operation on many data elements at once. A modern training accelerator processes $\sim 10^{14}$ floating-point operations per second, but only if the work it's given is *embarrassingly parallel*: many independent small computations that can run simultaneously.
 
@@ -55,7 +55,7 @@ The end result is that a Transformer trains $10$–$100 \times$ faster than an R
 
 ---
 
-## 3. Argument 2 — Long-range dependencies
+## 3. Argument 2: long-range dependencies
 
 The RNN gradient analysis of [5.5 §4](/session/ch5-sequence-modeling/5.5-rnn-bptt) showed that information from a distant loss has to traverse $T - \tau$ copies of the recurrent matrix to reach a far-past hidden state. Spectrally, this product either vanishes or explodes — there is no stable middle ground. Gating (LSTM, GRU) widens the practical range but does not change the asymptotic behaviour: every recurrent architecture has a finite effective horizon.
 

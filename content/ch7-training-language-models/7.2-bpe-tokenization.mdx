@@ -105,7 +105,7 @@ Initial vocabulary: `{l, o, w, e, r, n, s, t, i, d, </w>}` — 11 symbols.
 (d,e)      : 3              = 3
 ```
 
-Tie-breaking is implementation-dependent; let's say we pick `(e, s)` first. Merge `e` + `s` → `es`. Apply:
+Tie-breaking is implementation-dependent; say we pick `(e, s)` first. Merge `e` + `s` → `es`. Apply:
 
 ```
 l o w </w>          : 5
@@ -200,11 +200,11 @@ UTF-8 has 256 distinct byte values. Some are printable ASCII (`0x20`–`0x7E`), 
 - **More tokens per non-Latin character.** A Chinese character takes 3 UTF-8 bytes; without specialised vocabulary entries, that's 3 byte-level BPE tokens. Multi-lingual models (mBLOOM, Qwen) build large vocabularies (100K+) to cover non-Latin scripts efficiently.
 - **Vocabulary "wastes" entries on raw bytes.** The 256 byte slots are always reserved, even though most aren't useful in English text.
 
-### 5.4 SentencePiece — the LLaMA tokenizer
+### 5.4 SentencePiece: the LLaMA tokenizer
 
 LLaMA uses **SentencePiece** ([Kudo & Richardson, 2018<FN n={3} />, arXiv:1808.06226](https://arxiv.org/abs/1808.06226)) in BPE mode. SentencePiece treats the input as a raw Unicode stream (not pre-split), and learns the same BPE algorithm but with the *whitespace itself* as a regular character (`▁`, the lower-eighth-block) rather than a pre-tokenizer separator. The difference from GPT-2 byte-level BPE is mostly cosmetic — both end up with subword vocabularies that handle arbitrary UTF-8 — but SentencePiece is often considered cleaner because it has no language-specific pre-tokenizer regex.
 
-### 5.5 tiktoken — the OpenAI tokenizer
+### 5.5 tiktoken: the OpenAI tokenizer
 
 OpenAI's `tiktoken` library ([github.com/openai/tiktoken](https://github.com/openai/tiktoken)) is the high-performance reference implementation of GPT-2/GPT-3.5/GPT-4 byte-level BPE. The `cl100k_base` encoding (GPT-4) has 100K vocabulary entries, with a few hundred special tokens (`<|endoftext|>`, role markers for chat, etc.). It is fast (Rust-backed) and easy to inspect:
 
