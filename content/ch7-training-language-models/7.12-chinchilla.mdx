@@ -185,7 +185,7 @@ A summary of how the field navigates the $(N, D, C)$ space in 2026:
 
 ## 7. The diminishing-returns curve
 
-A practical question: as $D/N$ grows past Chinchilla, how much loss do you actually save?
+A practical question: as $D/N$ grows past Chinchilla, how much loss do you save?
 
 The picture is monotone but slow. From Sardana & Frankle (2024) §3, fitted to the Chinchilla parametric form: increasing $D/N$ from 20 to 200 reduces loss by $\sim 3\%$ at fixed $N$. Small in absolute terms — but at the *capability* level, this maps to several MMLU/HumanEval points and substantial qualitative improvements.
 
@@ -195,7 +195,7 @@ So over-training is "expensive per loss point" but the loss points are *valuable
 
 ## 8. Scaling laws as a planning tool
 
-How a frontier run is actually planned, in practice:
+How a frontier run is planned, in practice:
 
 1. **Pick deployment scale.** Estimate $Q$ (queries per year × deployment lifetime).
 2. **Pick target capability.** What MMLU / HumanEval / domain-specific score do you need?

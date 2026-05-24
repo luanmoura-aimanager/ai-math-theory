@@ -9,7 +9,7 @@ prerequisites: ["ch7-training-language-models/7.14-gpt3-paper-read", "ch6-attent
 
 ## 1. Why this session exists
 
-Chapters 6 and 7 built the Transformer block and the modern pretraining recipe; the closing read of [7.14](/session/ch7-training-language-models/7.14-gpt3-paper-read) made the historical case that GPT-3 settled the architecture. This session names the resulting object — the **decoder-only Transformer** — and pins down, in one diagram, what it actually is: a single stack of $L$ causal pre-norm blocks between a token embedding and a tied linear head that emits next-token logits.
+Chapters 6 and 7 built the Transformer block and the modern pretraining recipe; the closing read of [7.14](/session/ch7-training-language-models/7.14-gpt3-paper-read) made the historical case that GPT-3 settled the architecture. This session names the resulting object — the **decoder-only Transformer** — and pins down, in one diagram, what it is: a single stack of $L$ causal pre-norm blocks between a token embedding and a tied linear head that emits next-token logits.
 
 That seems like a small thing to dedicate a session to. But "decoder-only" is the load-bearing assumption behind every refinement in the rest of Chapter 8 (GQA, SwiGLU, MLA, MoE). Every later session perturbs *one* sub-module of the decoder-only stack without disturbing the skeleton. So we want the skeleton crisp before we start cutting into it.
 

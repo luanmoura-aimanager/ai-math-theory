@@ -19,7 +19,7 @@ This session pins down the gap precisely, names the three desiderata that "usefu
 
 ---
 
-## 2. The base model's objective, exactly
+## 2. The base model's objective
 
 After pretraining (Chapter 7), the model $\pi_\theta(\cdot)$ has been optimised to minimise
 
@@ -35,7 +35,7 @@ The base model is therefore *exactly* a distribution-matcher. Any sequence $t_{1
 
 Three concrete consequences of "the base model matches the corpus."
 
-**(a) Continuation, not answer.** Given the prompt "What's the capital of France?", the most likely continuation under $p_\text{web}$ is determined by how that string actually appears on the internet. If the string most often appears in lists of practice questions (FAQ pages, quiz banks, educational worksheets), the continuation is another question. The string sometimes appears followed by "Paris." — but typically only in *answer keys*, which are a small fraction of the corpus relative to question lists.
+**(a) Continuation, not answer.** Given the prompt "What's the capital of France?", the most likely continuation under $p_\text{web}$ is determined by how that string appears on the internet. If the string most often appears in lists of practice questions (FAQ pages, quiz banks, educational worksheets), the continuation is another question. The string sometimes appears followed by "Paris." — but typically only in *answer keys*, which are a small fraction of the corpus relative to question lists.
 
 The base model has no concept of "this is a query, I should respond with an answer." It has a concept of "this is a string, here is the most-likely-string-that-follows-it-on-the-internet."
 

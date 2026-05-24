@@ -74,7 +74,7 @@ $$
 x_L = x_0 + \sum_{\ell = 1}^{L} f_\ell(x_{\ell-1}).
 $$
 
-This is *literally* the residual-stream formula. The Jacobian $\partial x_L / \partial x_0$ contains the identity term from [6.9 §3.2](/session/ch6-attention-transformer/6.9-residual-connections):
+This is the residual-stream formula. The Jacobian $\partial x_L / \partial x_0$ contains the identity term from [6.9 §3.2](/session/ch6-attention-transformer/6.9-residual-connections):
 
 $$
 \frac{\partial x_L}{\partial x_0} = \prod_{\ell = L}^{1} \big(I + J_\ell^{(f)}\big) = I \,+\, \text{(corrections)}.

@@ -97,7 +97,7 @@ $$
 which is at most 1 per step and is preserved when $f_t \approx 1$. The exponential decay of the vanilla RNN is gone; vanishing happens only when the network *chooses* to forget. The same reasoning explains why exploding is less of an issue too — each per-step Jacobian is bounded by 1 along the dominant path.
 
 <Aside type="note">
-**"Constant error carousel."** Hochreiter & Schmidhuber's 1997 paper called the additive cell-state path the **constant error carousel** (CEC): a path along which the error signal can be carried indefinitely without exponential decay. Modern terminology calls this a *gated residual*, but the conceptual content is the same. Note also that the original 1997 LSTM did *not* include a forget gate — the cell state was simply $c_t = c_{t-1} + i_t \odot \tilde c_t$. The forget gate was added by Gers, Schmidhuber, and Cummins (2000)<FN n={3} /> and quickly became standard.
+**"Constant error carousel."** Hochreiter & Schmidhuber's 1997 paper called the additive cell-state path the **constant error carousel** (CEC): a path along which the error signal can be carried indefinitely without exponential decay. Modern terminology calls this a *gated residual*, but the conceptual content is the same. Note also that the original 1997 LSTM did *not* include a forget gate — the cell state was $c_t = c_{t-1} + i_t \odot \tilde c_t$. The forget gate was added by Gers, Schmidhuber, and Cummins (2000)<FN n={3} /> and quickly became standard.
 </Aside>
 
 ---

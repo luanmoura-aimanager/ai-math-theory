@@ -39,7 +39,7 @@ Two things in this formula matter and are easy to miss.
 
 **(b) The instruction tokens are not in the sum.** The loss has no term for $\log \pi_\theta(x_t \mid x_{<t})$. The instruction is given as context, not predicted. Implementationally this is "loss masking": construct the sequence $[x; y]$, compute per-token log-likelihoods as usual, and zero out the contributions from positions in the $x$ part of the sequence before averaging.
 
-If you forget the loss mask, the model also learns to *predict instructions* — i.e., it learns the marginal distribution of training-set queries. This sometimes does not break things obviously but degrades quality: capacity is spent on the wrong task, and the model can hallucinate user-like turns ("turn-passing"; the model writes the next user message instead of stopping at the end of its response). All major SFT codebases apply the mask by default; verify it whenever you write your own training loop.
+If you forget the loss mask, the model also learns to *predict instructions* — i.e., it learns the marginal distribution of training-set queries. This sometimes does not break things but degrades quality: capacity is spent on the wrong task, and the model can hallucinate user-like turns ("turn-passing"; the model writes the next user message instead of stopping at the end of its response). All major SFT codebases apply the mask by default; verify it whenever you write your own training loop.
 
 ### 2.1 Same loss as pretraining
 

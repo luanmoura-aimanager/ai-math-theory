@@ -29,7 +29,7 @@ Split text on whitespace and punctuation, build a vocabulary of all distinct wor
 
 The fatal problems:
 
-1. **Out-of-vocabulary (OOV).** Any word not seen at training time gets mapped to a special `<unk>` token. Proper nouns, typos, neologisms, and rare inflections are all lost. The model literally cannot read them.
+1. **Out-of-vocabulary (OOV).** Any word not seen at training time gets mapped to a special `<unk>` token. Proper nouns, typos, neologisms, and rare inflections are all lost. The model cannot read them.
 2. **Morphology is hidden.** *"run"*, *"runs"*, *"running"*, *"ran"* are four unrelated integers. The model must rediscover that they share meaning purely from co-occurrence statistics.
 3. **Vocabulary explosion.** A web-scale corpus contains millions of distinct word forms. Storing an embedding row for each balloons memory; restricting to the top-$V$ pushes everything else to `<unk>`.
 4. **No graceful degradation.** No way to read an unknown word "approximately." If you've never seen *"unpresidented"* (a typo of *"unprecedented"*), it is indistinguishable from a foreign word or random noise.

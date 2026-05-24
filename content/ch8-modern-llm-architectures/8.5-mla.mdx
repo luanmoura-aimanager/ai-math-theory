@@ -43,7 +43,7 @@ $$
 Q_i = x_i\, W^Q \in \mathbb{R}^{h d_h}.
 $$
 
-### 2.1 The cache, exactly
+### 2.1 The cache
 
 At decode, the KV cache stores per token only the latent $c_i^{KV} \in \mathbb{R}^{r}$ — *not* $K_i, V_i$. So the per-token cache footprint per layer is $r$ scalars (vs $2 h d_h$ for MHA and $2 g d_h$ for GQA-$g$). Per layer over the full sequence:
 

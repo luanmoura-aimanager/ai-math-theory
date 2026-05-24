@@ -9,7 +9,7 @@ prerequisites: ["ch7-training-language-models/7.12-chinchilla", "ch6-attention-t
 
 ## 1. Why this session exists
 
-[6.13](/session/ch6-attention-transformer/6.13-long-context) introduced three families of long-context attention from the *architecture* side: sliding-window, ALiBi, and RoPE-scaling. The discussion there was mostly about *inference* — what runs at deployment. This session is the *training* counterpart: **how do you actually train a model that handles 32k–1M tokens of context?**
+[6.13](/session/ch6-attention-transformer/6.13-long-context) introduced three families of long-context attention from the *architecture* side: sliding-window, ALiBi, and RoPE-scaling. The discussion there was mostly about *inference* — what runs at deployment. This session is the *training* counterpart: **how do you train a model that handles 32k–1M tokens of context?**
 
 The brute-force answer — pretrain at the target context from scratch — is prohibitively expensive. Attention compute scales as $T^2 d$ per layer ([6.12 §2.1](/session/ch6-attention-transformer/6.12-compute-and-memory)). A 1M-context full pretraining run would cost on the order of $100^2 = 10{,}000\times$ more attention compute than a 10k-context run at the same number of training tokens. No frontier lab does this.
 
@@ -87,7 +87,7 @@ For linear interpolation, all rotations are *smaller* than during pretraining, s
 
 Even if RoPE is perfectly rescaled, the model has *never seen* a 32k-token document during pretraining. The attention heads haven't learned to attend across thousands of tokens; the FFN hasn't seen long-range syntactic or semantic dependencies. Stage 2's long documents teach the model these patterns.
 
-This is why simply applying RoPE scaling at inference (no training) only works up to a point — the model's higher-level patterns (which token to attend to, what to remember from 10k tokens ago) are untrained.
+This is why applying RoPE scaling at inference (no training) only works up to a point — the model's higher-level patterns (which token to attend to, what to remember from 10k tokens ago) are untrained.
 
 ### 4.3 Fixes degenerate behaviour
 

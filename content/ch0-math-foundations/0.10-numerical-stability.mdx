@@ -130,7 +130,7 @@ $$
 \frac{\partial \ell}{\partial x_i} = \operatorname{softmax}(x)_i - \mathbb{1}[i = y].
 $$
 
-This expression is itself stable: it's a difference of two values in $[0, 1]$. The implementation simply needs the *stable* softmax above.
+This expression is itself stable: it's a difference of two values in $[0, 1]$. The implementation needs the *stable* softmax above.
 
 ---
 

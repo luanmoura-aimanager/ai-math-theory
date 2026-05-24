@@ -35,7 +35,7 @@ $$
 p(x_1, \dots, x_T) = \prod_{t=1}^{T} p(x_t \mid x_{<t}).
 $$
 
-**This is an identity, not a modelling choice.** It is true for *any* joint distribution. The chain rule simply reorganises the joint probability as a product of conditionals.
+**This is an identity, not a modelling choice.** It is true for *any* joint distribution. The chain rule reorganises the joint probability as a product of conditionals.
 
 What *is* a modelling choice is the **autoregressive** parameterisation: we choose to model the joint by directly parameterising each of the $T$ conditionals $p(x_t \mid x_{<t})$. Equivalently, we let one model produce a categorical distribution over the next token given the prefix, and the joint emerges by multiplication.
 

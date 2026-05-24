@@ -20,7 +20,7 @@ Frontier LLMs use *both*, composed with DP and FSDP:
 - PP across nodes (lower-bandwidth IB): typically $P_p \in \{2, 4, 8, 16\}$.
 - DP/FSDP as the outermost dimension to scale to more replicas.
 
-This session derives both axes. By the end you can read a frontier-training paper's "Parallelism configuration" section ("8-way TP, 4-way PP, 16-way DP, etc.") and recognise exactly what is being split where.
+This session derives both axes. By the end you can read a frontier-training paper's "Parallelism configuration" section ("8-way TP, 4-way PP, 16-way DP, etc.") and recognise what is being split where.
 
 ---
 

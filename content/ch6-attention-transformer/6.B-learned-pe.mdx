@@ -99,7 +99,7 @@ For these reasons, every model from LLaMA-1 onward has used RoPE. Learned PE sur
 The historical progression is clear: AIAYN (sinusoidal) → GPT family (learned, simpler) → modern LLMs (RoPE, both properties). The two appendices document the first two stops; the main path is RoPE.
 
 <Aside type="history">
-**Why GPT-1 dropped sinusoidal in 2018.** Radford et al.'s [GPT-1 technical report](https://cdn.openai.com/research-covers/language-unsupervised/language_understanding_paper.pdf) does not explicitly justify the switch from sinusoidal to learned PE; it simply states learned position embeddings. BERT (Devlin et al., 2018) made the same choice for the same reason: simplicity, no empirical loss. The community-wide assumption from 2018 to 2021 was "learned is the modern default, sinusoidal is a historical curiosity." That ordering reversed with RoPE.
+**Why GPT-1 dropped sinusoidal in 2018.** Radford et al.'s [GPT-1 technical report](https://cdn.openai.com/research-covers/language-unsupervised/language_understanding_paper.pdf) does not explicitly justify the switch from sinusoidal to learned PE; it states learned position embeddings. BERT (Devlin et al., 2018) made the same choice for the same reason: simplicity, no empirical loss. The community-wide assumption from 2018 to 2021 was "learned is the modern default, sinusoidal is a historical curiosity." That ordering reversed with RoPE.
 </Aside>
 
 ---
@@ -108,7 +108,7 @@ The historical progression is clear: AIAYN (sinusoidal) → GPT family (learned,
 
 Learned PE is the simplest positional scheme: one $(T_\text{max} \times d)$ parameter matrix, looked up by position index, added to the token embedding. Parameter count $T_\text{max} d$. No extrapolation beyond $T_\text{max}$ — the structural reason it has been replaced in modern LLMs. Survives in nanoGPT, BERT, and pre-2022 codebases.
 
-This finishes the survey of positional encodings begun in [6.6](/session/ch6-attention-transformer/6.6-why-positional-info). The main path uses RoPE ([6.7](/session/ch6-attention-transformer/6.7-rope)); the two appendices cover the historical predecessors. With Chapter 6 closed, Chapter 7 turns to training: how a 1B–1T-parameter Transformer is actually pretrained on a corpus of internet-scale text.
+This finishes the survey of positional encodings begun in [6.6](/session/ch6-attention-transformer/6.6-why-positional-info). The main path uses RoPE ([6.7](/session/ch6-attention-transformer/6.7-rope)); the two appendices cover the historical predecessors. With Chapter 6 closed, Chapter 7 turns to training: how a 1B–1T-parameter Transformer is pretrained on a corpus of internet-scale text.
 
 <SelfTest>
 

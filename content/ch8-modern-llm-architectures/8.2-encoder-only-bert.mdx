@@ -43,7 +43,7 @@ where $\hat t_i$ is the original (pre-masking) token at position $i$. The condit
 
 That is it. Same Transformer block, no causal mask, MLM loss instead of next-token CE. BERT's original paper added a second loss (Next Sentence Prediction, NSP), which was shown by RoBERTa (Liu et al., 2019, [arXiv:1907.11692](https://arxiv.org/abs/1907.11692))<FN n={2} /> to be unnecessary; modern encoder-only models drop it.
 
-### 2.1 The masking recipe, exactly
+### 2.1 The masking recipe
 
 The "$[\text{MASK}]$" substitution is more subtle than just "replace with $[\text{MASK}]$". BERT's recipe, kept in most descendants:
 

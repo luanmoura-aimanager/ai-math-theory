@@ -86,7 +86,7 @@ $$
 
 with the convention that $d_\text{ff}$ is then *rounded* to a multiple of $256$ (or $128$, or the local TP-friendly granularity) for hardware efficiency. LLaMA-1-7B: $d = 4096, \lfloor 8 d / 3 \rfloor = 10922 \to 11008$ (multiple of $256$). LLaMA-2-70B: $d = 8192, \lfloor 8 d / 3 \rfloor = 21845 \to 28672$ (much larger, because in larger models the SwiGLU FFN was given extra width). The "$8/3$" rule sets the lower bound; many models exceed it for the larger sizes.
 
-### 3.1 Why "exactly $8/3$" is not actually sacred
+### 3.1 Why "exactly $8/3$" is not sacred
 
 The point of the $8/3$ rule is parameter parity at the *block* level — so that an MLM, LLaMA-1, or GPT-3 of the same advertised $N$ uses the same compute. There is no theorem that says "wider is worse" or "narrower is worse." Empirically, frontier LLMs use $d_\text{ff} / d \in [2.5, 3.5]$ for SwiGLU (so around $8/3$) and $d_\text{ff} / d = 4$ for the GELU FFN of GPT-3 / OPT. Either choice is sensible; what is required is consistency about what " $N$ " means.
 

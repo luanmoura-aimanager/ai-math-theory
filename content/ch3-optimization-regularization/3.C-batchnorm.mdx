@@ -18,7 +18,7 @@ prerequisites: ["ch2-mlps-backprop/2.10-weight-initialization"]
 
 Batch Normalization (Ioffe & Szegedy, 2015)<FN n={1} /> was, with ReLU + He init + Adam, one of the four pillars that made deep networks routinely trainable to 100+ layers around 2015. The idea: normalise each layer's pre-activations to zero mean and unit variance over the current mini-batch, then learn an affine transformation to undo the normalisation if it helps.
 
-This session does the math: the forward pass exactly, the affine, the test-time EMA, and a brief look at the backward pass (which is where many bugs live).
+This session does the math: the forward pass, the affine, the test-time EMA, and a brief look at the backward pass (which is where many bugs live).
 
 ---
 

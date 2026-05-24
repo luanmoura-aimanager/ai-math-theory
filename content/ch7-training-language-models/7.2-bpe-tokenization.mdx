@@ -150,7 +150,7 @@ Note: the encoder must follow the *exact training merge order*. Modern implement
 
 ### 3.4 BPE as compression
 
-Each iteration reduces the corpus length (in symbols) by the count of the most-frequent pair: $|\text{corpus}'| = |\text{corpus}| - \text{freq}(a, b)$. After $V - V_0$ iterations, the corpus has been compressed by the cumulative pair frequencies. BPE is **literally a compression algorithm** — Gage (1994) introduced it for lossless data compression; Sennrich rediscovered it as a tokeniser. The two views are mathematically the same.
+Each iteration reduces the corpus length (in symbols) by the count of the most-frequent pair: $|\text{corpus}'| = |\text{corpus}| - \text{freq}(a, b)$. After $V - V_0$ iterations, the corpus has been compressed by the cumulative pair frequencies. BPE is **a compression algorithm** — Gage (1994) introduced it for lossless data compression; Sennrich rediscovered it as a tokeniser. The two views are mathematically the same.
 
 ---
 
