@@ -123,7 +123,7 @@ The post-2022 generation:
 | DeepSeek-V3-671B | 671B | 14.8T | 22 |
 | Qwen2.5-72B | 72B | ~18T | ~250 |
 
-Chinchilla, LLaMA-1, and DeepSeek-V3 sit at $D/N \approx 20$ — exactly the Chinchilla-optimal prediction. LLaMA-3, Mistral, and Qwen all *over-train* significantly. Why?
+Chinchilla, LLaMA-1, and DeepSeek-V3 sit at $D/N \approx 20$ — the Chinchilla-optimal prediction. LLaMA-3, Mistral, and Qwen all *over-train* significantly. Why?
 
 ---
 
@@ -151,7 +151,7 @@ $$
 D^* / N^* \approx 20 \cdot (1 + \kappa \cdot Q / Q_\text{ref})^{1 / \beta},
 $$
 
-where $\kappa$ is a weighting factor and $Q_\text{ref}$ is the queries-equivalent of one training run. For frontier LLMs deployed broadly ($Q$ in the $10^{12}$+ range), the optimum is $D/N$ in the hundreds — exactly LLaMA-3's regime.
+where $\kappa$ is a weighting factor and $Q_\text{ref}$ is the queries-equivalent of one training run. For frontier LLMs deployed broadly ($Q$ in the $10^{12}$+ range), the optimum is $D/N$ in the hundreds — LLaMA-3's regime.
 
 **Modern frontier LLMs train at $D/N$ between $50$ and $300$**, depending on the model's expected deployment scale. Small consumer-facing models over-train the hardest (their deployment volume is huge per parameter); proprietary or research models stay closer to $D/N \approx 20$.
 

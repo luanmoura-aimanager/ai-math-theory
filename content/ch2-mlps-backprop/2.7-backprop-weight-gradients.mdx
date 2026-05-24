@@ -57,7 +57,7 @@ $$
 \boxed{\ \frac{\partial L_{\text{batch}}}{\partial W^{(\ell)}} \;=\; \frac{1}{B}\, (\Delta^{(\ell)})^\top\, A^{(\ell-1)} \;\in\; \mathbb{R}^{d_\ell \times d_{\ell-1}}.\ }
 $$
 
-(Recover the per-example case by inspecting one row of $\Delta$ and one row of $A$; the matrix product over $B$ rows is exactly the sum of outer products.)
+(Recover the per-example case by inspecting one row of $\Delta$ and one row of $A$; the matrix product over $B$ rows is the sum of outer products.)
 
 The bias gradient is the column-wise average of $\Delta^{(\ell)}$:
 

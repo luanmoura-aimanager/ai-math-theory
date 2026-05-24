@@ -41,13 +41,13 @@ We are describing **synchronous** DP — every device waits for the all-reduce, 
 
 ### 2.2 The mathematical guarantee
 
-After step 6, the parameters on every device are equal to what a single-device run of batch size $B$ would have produced — *exactly*, up to floating-point determinism. This is the same observation as gradient accumulation ([7.6 §2](/session/ch7-training-language-models/7.6-gradient-accumulation)):
+After step 6, the parameters on every device are equal to what a single-device run of batch size $B$ would have produced — up to floating-point determinism. This is the same observation as gradient accumulation ([7.6 §2](/session/ch7-training-language-models/7.6-gradient-accumulation)):
 
 $$
 g = \frac{1}{B} \sum_{i = 1}^{B} \nabla \ell_i = \frac{1}{D} \sum_{d = 1}^{D} \underbrace{\frac{1}{B_d} \sum_{i \in \text{shard } d} \nabla \ell_i}_{g_d}.
 $$
 
-The mean-of-means equals the mean — because the shards partition the batch evenly. DP is *exactly* equivalent to single-device training on the same effective batch.
+The mean-of-means equals the mean — because the shards partition the batch evenly. DP is equivalent to single-device training on the same effective batch.
 
 (Caveat from [7.6 §4.1](/session/ch7-training-language-models/7.6-gradient-accumulation): if your model uses BatchNorm, the equivalence breaks. Modern LLMs use LayerNorm/RMSNorm and are batch-linear; the equivalence holds.)
 

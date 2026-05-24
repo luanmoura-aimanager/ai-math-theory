@@ -247,7 +247,7 @@ Three things:
 
 **(a)** A pretraining run targets 4M tokens-per-step at $T = 4096$. You have $D = 32$ GPUs and can fit $b_\text{device} = 8$ sequences per micro-batch on each. What is $K$, the accumulation count?
 
-**(b)** Argue that gradient accumulation with $K$ steps is mathematically *exactly* equivalent to a single $K$-times-larger batch in a pre-LN Transformer (LayerNorm/RMSNorm + standard dropout). Where in the argument does the "linear-in-batch" property enter?
+**(b)** Argue that gradient accumulation with $K$ steps is mathematically equivalent to a single $K$-times-larger batch in a pre-LN Transformer (LayerNorm/RMSNorm + standard dropout). Where in the argument does the "linear-in-batch" property enter?
 
 **(c)** A model uses BatchNorm in some sub-layer (e.g., a CNN feature extractor on the embedding side). Argue why gradient accumulation is *not* exactly equivalent to a single large batch in this case. (Hint: BatchNorm computes statistics over the batch axis.)
 

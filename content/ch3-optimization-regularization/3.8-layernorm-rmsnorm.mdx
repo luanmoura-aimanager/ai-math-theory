@@ -131,7 +131,7 @@ Pick the one whose averaging axis is independent of the dimension you don't have
 - LayerNorm normalises *per token, across the feature dimension*. No batch coupling.
 - Same operation at train and test time; no EMAs needed.
 - Why Transformers use it: variable sequence length, small effective batches, causal correctness.
-- RMSNorm = LN without the mean-centring; what every recent LLM actually uses.
+- RMSNorm = LN without the mean-centring; what every recent LLM uses.
 - Pre-norm placement ($\operatorname{LN}(x)$ inside the sublayer, residual outside) is the modern convention.
 - Backward: same structure as BN's but summed over features instead of batch.
 

@@ -78,7 +78,7 @@ $$
 p_{\text{ensemble}}(y \mid x) = \frac{1}{2^N} \sum_m p_{f_m}(y \mid x).
 $$
 
-That sum is exponential in $N$ — uncomputable. But there's a beautiful approximation. For a **single layer**, the dropout-free forward pass with the $1/(1-p)$ scaling computes *exactly* the expectation of the dropped layer:
+That sum is exponential in $N$ — uncomputable. But there's a beautiful approximation. For a **single layer**, the dropout-free forward pass with the $1/(1-p)$ scaling computes the expectation of the dropped layer:
 
 $$
 \frac{1}{1-p}\, \mu \odot a \;\xrightarrow{\;\mathbb{E}_\mu\;}\; a.
@@ -90,7 +90,7 @@ $$
 \text{geometric mean: } \tilde p(y \mid x) \propto \exp\!\bigl(\mathbb{E}_m[z_m(y)]\bigr) \approx \exp(z_{\text{full}}(y)),
 $$
 
-provided $\mathbb{E}_m[z_m(y)] \approx z_{\text{full}}(y)$ — which is exactly what the $1/(1-p)$ scaling ensures (to first order, for activations that don't saturate). At test time, running the unmasked network with the scaled weights computes (approximately) the geometric mean of the ensemble's softmax predictions. Test-time scaling is not a heuristic; it is the closed-form for the ensemble's prediction.
+provided $\mathbb{E}_m[z_m(y)] \approx z_{\text{full}}(y)$ — which is what the $1/(1-p)$ scaling ensures (to first order, for activations that don't saturate). At test time, running the unmasked network with the scaled weights computes (approximately) the geometric mean of the ensemble's softmax predictions. Test-time scaling is not a heuristic; it is the closed-form for the ensemble's prediction.
 
 Srivastava et al. show empirically that the approximation is excellent for typical $p = 0.5$ and small enough networks; for larger $p$ or deeper networks Monte-Carlo dropout (averaging over $K$ stochastic forward passes at test time) gives slightly better calibration. MC-dropout is also the basis for Bayesian approximation in deep nets (Gal & Ghahramani, 2016).
 

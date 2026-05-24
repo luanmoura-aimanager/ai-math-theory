@@ -136,7 +136,7 @@ A head $h$ implements bigram-prediction if:
 
 Operationally: the head doesn't really "attend" to anything except itself; the OV-output then writes the most-likely-next-token distribution into the logits.
 
-In a 1-layer attention-only model, you often find $1$–$2$ such heads. They implement the conditional next-token distribution $p(x_{t+1} \mid x_t)$ — exactly the bigram baseline (Cap 5.4).
+In a 1-layer attention-only model, you often find $1$–$2$ such heads. They implement the conditional next-token distribution $p(x_{t+1} \mid x_t)$ — the bigram baseline (Cap 5.4).
 
 ### 5.1 The direct path is also a bigram
 

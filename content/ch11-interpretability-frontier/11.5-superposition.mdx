@@ -63,7 +63,7 @@ Three pieces of evidence.
 
 In any trained Transformer, most neurons (rows of $W_\text{in}$ in MLP layers) fire on multiple seemingly-unrelated inputs. Olah et al. (2020) catalogued examples in vision models: a single neuron firing on "cat faces" *and* "fronts of cars" *and* "letter E". In LLMs, similar polysemantic neurons abound — "Indonesian-language tokens" + "function-call syntax" + "third-person pronouns" all activating one MLP neuron.
 
-This is exactly the predicted consequence of superposition: features don't align with neurons, so each neuron's activation is a *projection* of multiple features.
+This is the predicted consequence of superposition: features don't align with neurons, so each neuron's activation is a *projection* of multiple features.
 
 ### 3.2 More-than-$d$ features in linear probes
 

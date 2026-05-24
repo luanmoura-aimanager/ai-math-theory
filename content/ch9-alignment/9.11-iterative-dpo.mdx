@@ -53,7 +53,7 @@ The reference model $\pi_\text{ref}$ stays fixed at $\pi_\text{SFT}$ across all 
 
 Three reasons:
 
-1. **The KL budget is cumulative.** $\mathrm{KL}(\pi_n \,\Vert\, \pi_\text{SFT})$ grows across iterations. If we instead anchored to $\pi_{n-1}$ at each step, the cumulative KL from $\pi_\text{SFT}$ could grow unboundedly — exactly the reward hacking failure mode of [9.9 §2.1](/session/ch9-alignment/9.9-kl-penalty).
+1. **The KL budget is cumulative.** $\mathrm{KL}(\pi_n \,\Vert\, \pi_\text{SFT})$ grows across iterations. If we instead anchored to $\pi_{n-1}$ at each step, the cumulative KL from $\pi_\text{SFT}$ could grow unboundedly — the reward hacking failure mode of [9.9 §2.1](/session/ch9-alignment/9.9-kl-penalty).
 2. **The reference is the "safe ground."** $\pi_\text{SFT}$ defines what valid completions look like; we never want to drift so far that we forget. Anchoring to $\pi_\text{SFT}$ throughout keeps the model grounded.
 3. **Closed-form derivation requires it.** DPO's derivation ([9.10](/session/ch9-alignment/9.10-dpo)) treats $\pi_\text{ref}$ as a fixed prior. Updating it would invalidate the derivation.
 

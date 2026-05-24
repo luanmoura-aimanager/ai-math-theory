@@ -9,7 +9,7 @@ prerequisites: ["ch0-math-foundations/0.2-matrix-calculus"]
 
 ## 1. Why this session exists
 
-All of *backpropagation* is exactly one thing: the chain rule applied to
+All of *backpropagation* is one thing: the chain rule applied to
 a directed acyclic graph (DAG). If you leave this session knowing how to
 write the chain rule as a *sum over paths in the graph*, all of Chapter 2
 (MLPs and backprop) becomes bookkeeping rather than mystery.
@@ -269,7 +269,7 @@ changes is the *order in which partial products are accumulated*.
 In reverse mode, we start with $\partial f/\partial f = 1$ at the
 terminal node and walk backwards, multiplying by each edge's local
 partial and *accumulating the sum* at nodes where paths meet. The
-result at $x$ is exactly $\partial f/\partial x$.
+result at $x$ is $\partial f/\partial x$.
 
 The advantage of reverse mode when there are many inputs and one output
 (the case for every ML loss function): a single backward pass computes

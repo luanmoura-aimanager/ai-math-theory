@@ -16,7 +16,7 @@ Chapter 6 derived the architecture in symbolic form: $d$ this, $L$ that, $\#\the
 - State the per-step FLOPs and memory cost for training, in numbers.
 - Adapt the same recipe to any other model size (GPT-2-medium/large/xl, LLaMA-7B, GPT-3) — the shapes scale, the recipe doesn't change.
 
-GPT-2-small is the right reference for two reasons: it is small enough to fit on a single GPU (so the shapes are concrete, not hypothetical), and it is exactly what the [nanoGPT walkthrough of 6.16](/session/ch6-attention-transformer/6.16-nanogpt-walkthrough) implements. The numbers here should match what you saw running `model.eval()` in that session.
+GPT-2-small is the right reference for two reasons: it is small enough to fit on a single GPU (so the shapes are concrete, not hypothetical), and it is what the [nanoGPT walkthrough of 6.16](/session/ch6-attention-transformer/6.16-nanogpt-walkthrough) implements. The numbers here should match what you saw running `model.eval()` in that session.
 
 ---
 
@@ -168,7 +168,7 @@ $$
 \#\theta_\text{GPT-2-small} = 85{,}054{,}464 + 39{,}385{,}344 = 124{,}439{,}808 \approx 124.4\,\text{M}.
 $$
 
-This matches OpenAI's headline number exactly. The often-quoted 124M is the round-down; the *exact* number is $\approx 124.4$M.
+This matches OpenAI's headline number. The often-quoted 124M is the round-down; the precise count is $\approx 124.4$M.
 
 ### 4.4 Cross-check against the $12 L d^2$ rule
 
@@ -283,7 +283,7 @@ The exact same calculation works for any decoder-only Transformer; only the cons
 
 A few patterns to notice:
 
-- **GPT-2 → GPT-3 architectural change is minimal.** Same shape, larger $L$ and $d$, longer $T_\text{max}$. The "scale is what matters" thesis is exactly this.
+- **GPT-2 → GPT-3 architectural change is minimal.** Same shape, larger $L$ and $d$, longer $T_\text{max}$. The "scale is what matters" thesis is this.
 - **LLaMA's $d_\text{ff}$ is slightly less than $4 d$.** Because it uses SwiGLU (Cap 8.4), which uses three matrices in the FFN. Adjusting $d_\text{ff}$ down keeps the parameter count similar to standard-FFN models.
 - **The ratio $d_\text{ff} / d \approx 4$ (or $8/3$ for SwiGLU)** is constant across the family — this is the only thing tied to a "shape rule"; everything else scales freely.
 

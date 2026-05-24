@@ -106,7 +106,7 @@ In short: post-LN puts a non-identity Jacobian on the *main path* of every block
 
 ### 4.1 The warmup problem of AIAYN
 
-The original AIAYN paper specifies a learning-rate warmup of $4000$ steps for $6$-layer encoder/decoder pairs. The reason is exactly the §3.2 gradient instability: at $t = 0$, with random initialisation, the gradient magnitudes near the input of a deep post-LN stack are very different from those near the output, and a small initial learning rate is needed to let the parameter scales equilibrate. Without warmup, post-LN models diverge on the first few hundred steps.
+The original AIAYN paper specifies a learning-rate warmup of $4000$ steps for $6$-layer encoder/decoder pairs. The reason is the §3.2 gradient instability: at $t = 0$, with random initialisation, the gradient magnitudes near the input of a deep post-LN stack are very different from those near the output, and a small initial learning rate is needed to let the parameter scales equilibrate. Without warmup, post-LN models diverge on the first few hundred steps.
 
 This was tolerable at 6 layers. At 12 layers (BERT-base) it was already annoying. At 96 layers (GPT-3) it would have been a constant tuning burden — and that is *if* it converged at all.
 

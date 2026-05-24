@@ -31,7 +31,7 @@ $$
 
 multiplies $\delta_{t+1}$ by a factor whose spectral norm is bounded by $\sigma_\max(W) \cdot \max_t |\phi'(\cdot)|$. For $\phi = \tanh$, $|\phi'| \le 1$, so unless $\sigma_\max(W) = 1$ *exactly*, the product over many time steps either vanishes or explodes.
 
-The structural fix is: **design the recurrence so the default backward Jacobian is the identity matrix.** If $\partial h_t / \partial h_{t-1} = I$ in the absence of any update, then the product $\partial h_T / \partial h_\tau = I$ and gradients pass through losslessly. The LSTM does exactly this — but only on a designated "memory" path, the **cell state $c_t$**, which is separate from the visible hidden state $h_t$.
+The structural fix is: **design the recurrence so the default backward Jacobian is the identity matrix.** If $\partial h_t / \partial h_{t-1} = I$ in the absence of any update, then the product $\partial h_T / \partial h_\tau = I$ and gradients pass through losslessly. The LSTM does this — but only on a designated "memory" path, the **cell state $c_t$**, which is separate from the visible hidden state $h_t$.
 
 ---
 
@@ -141,7 +141,7 @@ The *implementation* — gated cells with cell states and forget gates — is go
 
 **Highway networks (Srivastava, Greff & Schmidhuber, 2015)<FN n={7} />.** A direct generalisation of the LSTM gating idea to *feed-forward* networks: each layer outputs $(1 - g) \odot \text{input} + g \odot \text{layer}(input)$. This is the immediate predecessor of the residual connection.
 
-**Residual connections (He et al., 2015 — ResNet).** Drop the gate and always pass the input through: $\text{output} = \text{input} + \text{layer}(input)$. The residual stream of a Transformer is exactly this pattern at every block, and it is the reason a 100-layer Transformer trains stably where a 100-layer plain MLP would not (cf. [2.9 / 2.10](/session/ch2-mlps-backprop/2.10-weight-initialization)).
+**Residual connections (He et al., 2015 — ResNet).** Drop the gate and always pass the input through: $\text{output} = \text{input} + \text{layer}(input)$. The residual stream of a Transformer is this pattern at every block, and it is the reason a 100-layer Transformer trains stably where a 100-layer plain MLP would not (cf. [2.9 / 2.10](/session/ch2-mlps-backprop/2.10-weight-initialization)).
 
 **Gated FFN variants in Transformers (Shazeer, 2020).** Replace the standard FFN $W_2\, \phi(W_1 x)$ with a gated version:
 
@@ -149,7 +149,7 @@ $$
 \text{GLU}(x) = (W_1 x) \odot \sigma(W_2 x), \quad \text{SwiGLU}(x) = (W_1 x) \odot \text{Swish}(W_2 x).
 $$
 
-This is exactly the "multiplicative gate on an information path" idea from LSTMs, now applied inside a Transformer block. SwiGLU is the FFN of choice in LLaMA, Mistral, and most LLMs from 2023 onward.
+This is the "multiplicative gate on an information path" idea from LSTMs, now applied inside a Transformer block. SwiGLU is the FFN of choice in LLaMA, Mistral, and most LLMs from 2023 onward.
 
 **Selective state-space models (Mamba, Gu & Dao, 2023).** Modern linear-recurrence architectures revive the recurrence idea with carefully chosen transition matrices and *selective* (input-dependent) gating. The "selective" mechanism is structurally an LSTM forget-gate, designed for parallel computation via the parallel-scan algorithm. We will see this in Chapter 8.
 

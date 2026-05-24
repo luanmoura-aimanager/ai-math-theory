@@ -66,7 +66,7 @@ $$
 Operationally: $H[p, q]$ is the expected number of bits (or nats) you
 spend encoding draws from $p$ using an optimal code for $q$. When
 $q = p$, you've made the right choice and $H[p, q] = H[p]$. When $q
-\neq p$, you waste bits — and the wasted bits are exactly what KL
+\neq p$, you waste bits — and the wasted bits are what KL
 divergence measures.
 
 ## 4. KL divergence
@@ -161,7 +161,7 @@ invoke without re-deriving from here on:
 
 ## 7. Why this matters for what's next
 
-Cross-entropy as a training loss (§0.7) is exactly $H[p_{\text{data}},
+Cross-entropy as a training loss (§0.7) is $H[p_{\text{data}},
 q_{\theta}]$, and its gradient with respect to $\theta$ doesn't see the
 data-only term $H[p_{\text{data}}]$ — making it operationally
 identical to negative log-likelihood. KL appears explicitly in

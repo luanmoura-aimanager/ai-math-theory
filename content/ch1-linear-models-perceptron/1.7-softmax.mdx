@@ -62,7 +62,7 @@ $$
 \operatorname{softmax}(z)_1 = \frac{e^{z_1}}{e^{z_1} + e^{z_2}} = \frac{1}{1 + e^{z_2 - z_1}} = \sigma(z_1 - z_2).
 $$
 
-So the two-class softmax depends only on the *difference* of logits, which is the sigmoid of the difference. Setting $z_2 \equiv 0$ recovers the binary sigmoid exactly; the binary case is over-parameterised, which is why for $K = 2$ we usually use one logit and $\sigma$.
+So the two-class softmax depends only on the *difference* of logits, which is the sigmoid of the difference. Setting $z_2 \equiv 0$ recovers the binary sigmoid; the binary case is over-parameterised, which is why for $K = 2$ we usually use one logit and $\sigma$.
 
 ---
 
@@ -112,11 +112,11 @@ $$
 -\log \hat y_y = -z_y + \log \sum_{j=1}^K e^{z_j}.
 $$
 
-The right-hand side is exactly the log-sum-exp expression from 0.10 §4. Two consequences.
+The right-hand side is the log-sum-exp expression from 0.10 §4. Two consequences.
 
 **Stability for free.** Pair this loss with the stable log-sum-exp implementation $\max_j z_j + \log \sum_j e^{z_j - \max_j z_j}$ and you get a fused softmax + cross-entropy that never overflows.
 
-**Direct link to information theory.** $-\log p(y \mid x)$ is the **information content** of observing $y$ under the model. Summed over the dataset and divided by $m$, it is the empirical cross-entropy between the data distribution and the model (0.6, 0.7). Minimising it is exactly the Cover-and-Thomas "code-length minimisation" reading of MLE.
+**Direct link to information theory.** $-\log p(y \mid x)$ is the **information content** of observing $y$ under the model. Summed over the dataset and divided by $m$, it is the empirical cross-entropy between the data distribution and the model (0.6, 0.7). Minimising it is the Cover-and-Thomas "code-length minimisation" reading of MLE.
 
 <Aside type="note">
 **Geometric reading.** Softmax is the smooth analogue of $\arg\max$: as we scale all logits by $\beta \to \infty$, $\operatorname{softmax}(\beta z)$ converges to the one-hot indicator of $\arg\max_k z_k$. The parameter $\beta$ is sometimes called an *inverse temperature*; we'll see it in decoding (Chapter 10) and in softmax attention (Chapter 6), where temperature appears as $1/\sqrt{d_k}$.

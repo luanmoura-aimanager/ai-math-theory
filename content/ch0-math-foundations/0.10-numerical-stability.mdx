@@ -113,7 +113,7 @@ $$
 \ }
 $$
 
-This is exactly what `F.cross_entropy(logits, target)` in PyTorch computes — as a **single fused op** that takes logits, not probabilities, and never forms the softmax explicitly. Doing so by hand (probabilities first, then `.log()`) is the most common cause of NaNs in custom losses.
+This is what `F.cross_entropy(logits, target)` in PyTorch computes — as a **single fused op** that takes logits, not probabilities, and never forms the softmax explicitly. Doing so by hand (probabilities first, then `.log()`) is the most common cause of NaNs in custom losses.
 
 <Aside type="warning">
 Two patterns to avoid:

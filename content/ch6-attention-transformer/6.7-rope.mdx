@@ -51,7 +51,7 @@ $$
 \tilde q_m^\top \tilde k_n = (R(m\theta) q)^\top (R(n\theta) k) = q^\top R(m\theta)^\top R(n\theta) k = q^\top R((n - m)\theta) k.
 $$
 
-The dependence on $m$ and $n$ has collapsed into dependence on $(n - m)$ alone. **The dot product of the rotated query and key depends only on their *relative* position.** This is exactly the property [6.6 §4.3](/session/ch6-attention-transformer/6.6-why-positional-info) asked for.
+The dependence on $m$ and $n$ has collapsed into dependence on $(n - m)$ alone. **The dot product of the rotated query and key depends only on their *relative* position.** This is the property [6.6 §4.3](/session/ch6-attention-transformer/6.6-why-positional-info) asked for.
 
 There are no learnable parameters in this construction. The rotations are deterministic functions of $m$ and $n$.
 
@@ -170,7 +170,7 @@ The dot product $\tilde q_m^\top \tilde k_n$ depends only on the *relative twist
 
 Five properties make RoPE the modern default:
 
-**(a) Relative-only.** The attention score $\tilde q_m^\top \tilde k_n$ depends only on $n - m$. This is *exactly* what we want from a positional encoding for language.
+**(a) Relative-only.** The attention score $\tilde q_m^\top \tilde k_n$ depends only on $n - m$. This is what we want from a positional encoding for language.
 
 **(b) No learnable parameters.** The rotations are fixed; the schedule is fixed. No "positional embedding matrix" to size up with context length.
 

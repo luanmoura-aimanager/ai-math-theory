@@ -95,7 +95,7 @@ The training is structurally simple. The main complications are *regularisation*
 
 A reward model trained to convergence on a fixed preference dataset usually overfits — held-out preference accuracy plateaus before training-set accuracy. Standard countermeasures:
 
-- **Single epoch.** Most production RM training uses one epoch, exactly because more epochs degrade held-out performance. This is the same intuition as SFT's epoch limit (§9.2).
+- **Single epoch.** Most production RM training uses one epoch, because more epochs degrade held-out performance. This is the same intuition as SFT's epoch limit (§9.2).
 - **L2 / weight decay.** Mild weight decay ($0.01$–$0.1$ on the LM body, none on the reward head) is standard.
 - **Reward-margin regularisation.** Add a small term that penalises $|r_\phi(x, y)|$ being too large in absolute terms — keeps the rewards near 0 and prevents the optimiser from finding "blow up the differences" shortcuts.
 - **Hold-out validation.** Standard practice; the RM checkpoint with best held-out accuracy is selected, not the final-step checkpoint.

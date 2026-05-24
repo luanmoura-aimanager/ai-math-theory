@@ -52,7 +52,7 @@ $$
 
 with $\gamma, \beta \in \mathbb{R}^d$ trainable parameters (one $\gamma$ and one $\beta$ per hidden coordinate; total $2d$ extra parameters per BN layer). The output $y$ is what the next layer sees.
 
-Why this affine matters: setting $\gamma = \sqrt{\sigma_\mathcal{B}^2 + \varepsilon}$ and $\beta = \mu_\mathcal{B}$ recovers $y_i = z_i$. The BN layer **can represent the identity**. If a layer would have been better off without normalisation, it can learn to undo it. The point is that the optimiser has the *choice*, and gradient descent on $\gamma, \beta$ tends to leave most BN layers near the identity *plus* a small per-coordinate shift — exactly the behaviour that helps optimisation.
+Why this affine matters: setting $\gamma = \sqrt{\sigma_\mathcal{B}^2 + \varepsilon}$ and $\beta = \mu_\mathcal{B}$ recovers $y_i = z_i$. The BN layer **can represent the identity**. If a layer would have been better off without normalisation, it can learn to undo it. The point is that the optimiser has the *choice*, and gradient descent on $\gamma, \beta$ tends to leave most BN layers near the identity *plus* a small per-coordinate shift — the behaviour that helps optimisation.
 
 ---
 

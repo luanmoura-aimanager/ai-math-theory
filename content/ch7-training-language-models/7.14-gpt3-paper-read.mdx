@@ -99,7 +99,7 @@ Notice the disparity: CommonCrawl is the largest source but Books1 (smaller) is 
 > "(1) we downloaded and filtered a version of CommonCrawl based on similarity to a range of high-quality reference corpora,
 > (2) we performed fuzzy deduplication at the document level..."
 
-This is exactly the CCNet + MinHash pipeline of [7.1 §3](/session/ch7-training-language-models/7.1-pretraining-data). GPT-3 was an early adopter; later corpora (DCLM, FineWeb-Edu) extended the methodology with better filters and more aggressive deduplication.
+This is the CCNet + MinHash pipeline of [7.1 §3](/session/ch7-training-language-models/7.1-pretraining-data). GPT-3 was an early adopter; later corpora (DCLM, FineWeb-Edu) extended the methodology with better filters and more aggressive deduplication.
 
 ### 4.1 The tokens-per-parameter ratio
 
@@ -219,7 +219,7 @@ The follow-up — that *instruction tuning + RLHF on top* makes it dramatically 
 - **WebText2 + Books1/2 as data sources.** Replaced by DCLM, FineWeb-Edu, and other classifier-filtered web data.
 - **GPT-3-175B itself as the SOTA reference.** Beaten by every 70B+ Chinchilla-trained model from 2022 onward.
 
-GPT-3 was, in retrospect, a *correct architecture trained at the wrong scale allocation*. The 2022 Chinchilla correction shifted everyone to the right allocation; the 2023 RoPE adoption changed the positional encoding; the 2023 FSDP adoption changed the parallelism story; the 2024 inference-aware over-training changed the deployment economics. But the *skeleton* — embedding → $L$ pre-LN blocks → final LN → tied LM head, trained by causal cross-entropy on a curated web mixture — is exactly what GPT-3 said in 2020.
+GPT-3 was, in retrospect, a *correct architecture trained at the wrong scale allocation*. The 2022 Chinchilla correction shifted everyone to the right allocation; the 2023 RoPE adoption changed the positional encoding; the 2023 FSDP adoption changed the parallelism story; the 2024 inference-aware over-training changed the deployment economics. But the *skeleton* — embedding → $L$ pre-LN blocks → final LN → tied LM head, trained by causal cross-entropy on a curated web mixture — is what GPT-3 said in 2020.
 
 ---
 

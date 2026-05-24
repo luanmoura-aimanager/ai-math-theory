@@ -58,12 +58,12 @@ v_t^{(i)} &= \beta_2\, v_{t-1}^{(i)} + (1 - \beta_2)\bigl(g_t^{(i)}\bigr)^2, \\
 \ }
 $$
 
-This is exactly the EMA from §3.2 applied element-wise to the *squared* gradient, then used as a per-parameter scale. Typical $\beta_2 = 0.99$ (Hinton's slides) or $\beta_2 = 0.999$ (the value Adam will inherit). The effective averaging window is $\sim 1/(1-\beta_2) \sim 100$ to $1000$ steps.
+This is the EMA from §3.2 applied element-wise to the *squared* gradient, then used as a per-parameter scale. Typical $\beta_2 = 0.99$ (Hinton's slides) or $\beta_2 = 0.999$ (the value Adam will inherit). The effective averaging window is $\sim 1/(1-\beta_2) \sim 100$ to $1000$ steps.
 
 Because $v_t$ is an EMA rather than a sum, the effective LR no longer decays to zero — it tracks the *current* variance of the gradient. If a parameter starts seeing smaller gradients, $v_t$ adapts down, and the effective LR for that parameter goes back up. AdaGrad's monotonic decay is gone.
 
 <Aside type="note">
-RMSProp is sometimes described as "AdaGrad with a sliding window". That is exactly right, with the window being soft (geometric) rather than hard. Same per-parameter scaling philosophy, different time horizon.
+RMSProp is sometimes described as "AdaGrad with a sliding window". That is right, with the window being soft (geometric) rather than hard. Same per-parameter scaling philosophy, different time horizon.
 </Aside>
 
 ---
@@ -78,7 +78,7 @@ $$
 
 For AdaGrad, $d_t^{(i)} = \sqrt{G_t^{(i)} + \varepsilon}$. For RMSProp, $d_t^{(i)} = \sqrt{v_t^{(i)} + \varepsilon}$.
 
-Choosing $D_t$ correctly can dramatically reduce the effective condition number $\kappa(D_t^{-1} H)$ — where $H$ is the Hessian — and therefore speed up convergence (compare with the $\sqrt{\kappa}$ analysis of momentum in 3.3). A "perfect" $D_t = \sqrt{\operatorname{diag}(H)}$ would diagonalise the per-coordinate scaling; what RMSProp uses is a cheap proxy: $\sqrt{\operatorname{diag}(\mathbb{E}[g g^\top])}$, the diagonal of the *gradient covariance*. For convex quadratics with diagonal $H$, this proxy is exactly right (because the gradient covariance is proportional to $H$); for deep nets it is approximate but useful.
+Choosing $D_t$ correctly can dramatically reduce the effective condition number $\kappa(D_t^{-1} H)$ — where $H$ is the Hessian — and therefore speed up convergence (compare with the $\sqrt{\kappa}$ analysis of momentum in 3.3). A "perfect" $D_t = \sqrt{\operatorname{diag}(H)}$ would diagonalise the per-coordinate scaling; what RMSProp uses is a cheap proxy: $\sqrt{\operatorname{diag}(\mathbb{E}[g g^\top])}$, the diagonal of the *gradient covariance*. For convex quadratics with diagonal $H$, this proxy is right (because the gradient covariance is proportional to $H$); for deep nets it is approximate but useful.
 
 This is also the answer to the common question "why $\sqrt{v}$ and not $v$?" — preconditioning a gradient step needs a *length scale* ($d_t \propto$ standard deviation of gradient, not variance), and $\sqrt{v_t}$ supplies it.<FN n={3} />
 

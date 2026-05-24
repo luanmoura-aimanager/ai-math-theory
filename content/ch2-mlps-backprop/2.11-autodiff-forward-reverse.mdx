@@ -51,7 +51,7 @@ $$
 \text{if } v = f(u_1, \dots, u_n), \text{ then } \bar u_i \mathrel{+}= \bar v \cdot \frac{\partial f}{\partial u_i}.
 $$
 
-Initialise $\bar L = 1$ and sweep backward through the graph (in reverse topological order from the sink). The cotangents at the leaves are exactly the partial derivatives of $L$ with respect to those leaves.
+Initialise $\bar L = 1$ and sweep backward through the graph (in reverse topological order from the sink). The cotangents at the leaves are the partial derivatives of $L$ with respect to those leaves.
 
 **Cost.** One backward sweep gives *all* parameter gradients at once: $\Theta(\text{forward cost})$ — same order as the forward pass.
 

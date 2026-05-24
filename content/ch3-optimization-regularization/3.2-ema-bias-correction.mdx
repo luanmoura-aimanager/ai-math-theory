@@ -96,9 +96,9 @@ $$
 \boxed{\ \hat v_t \;:=\; \frac{v_t}{1 - \beta^t}.\ }
 $$
 
-Then $\mathbb{E}[\hat v_t] = g^\star$ exactly. $\hat v_t$ is the unbiased moving average; $v_t$ is the raw one.
+Then $\mathbb{E}[\hat v_t] = g^\star$. $\hat v_t$ is the unbiased moving average; $v_t$ is the raw one.
 
-The correction matters most in the **early steps**. At $t = 1$ with $\beta = 0.9$, $1 - \beta^t = 0.1$, so $\hat v_1 = 10 \cdot v_1 = g_1$ — exactly the first gradient, as it should be. At $t = 1$ with $\beta = 0.999$, $\hat v_1 = 1000 \cdot v_1 = g_1$ again. After many steps ($\beta^t \to 0$), $\hat v_t \approx v_t$ and the correction is irrelevant.
+The correction matters most in the **early steps**. At $t = 1$ with $\beta = 0.9$, $1 - \beta^t = 0.1$, so $\hat v_1 = 10 \cdot v_1 = g_1$ — the first gradient, as it should be. At $t = 1$ with $\beta = 0.999$, $\hat v_1 = 1000 \cdot v_1 = g_1$ again. After many steps ($\beta^t \to 0$), $\hat v_t \approx v_t$ and the correction is irrelevant.
 
 <Aside type="note">
 This is the same algebra you'd use for the geometric series. The unrolling gives weights $(1-\beta) \beta^{t-k}$; the total weight is $1 - \beta^t$; dividing by it normalises. No magic. The Adam paper writes it down precisely as we did, in equation (2).

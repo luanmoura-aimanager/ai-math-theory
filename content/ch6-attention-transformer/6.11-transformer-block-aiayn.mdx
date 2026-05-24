@@ -66,13 +66,13 @@ Twelve lines. The hidden complexity sits inside `MHA` and `FFN`, which we have a
 
 ### 2.2 The training objective
 
-The model is trained by **causal next-token cross-entropy**, exactly the language-modelling objective of [5.3](/session/ch5-sequence-modeling/5.3-language-modeling-objective). For a target sequence $\mathbf{y} = (y_1, \dots, y_T)$ with $y_t = t_{t+1}$ (next-token target),
+The model is trained by **causal next-token cross-entropy**, the language-modelling objective of [5.3](/session/ch5-sequence-modeling/5.3-language-modeling-objective). For a target sequence $\mathbf{y} = (y_1, \dots, y_T)$ with $y_t = t_{t+1}$ (next-token target),
 
 $$
 \mathcal{L}(\theta) = -\frac{1}{T} \sum_{t = 1}^{T} \log p_\theta(y_t \mid \mathbf{t}_{1:t}) = -\frac{1}{T} \sum_{t = 1}^{T} \log \text{softmax}(\boldsymbol{\ell}_t)_{y_t}.
 $$
 
-The *causal mask* of 6.5 is exactly what makes $\boldsymbol{\ell}_t$ depend only on $\mathbf{t}_{1:t}$. There is no separate "encoder" or "decoder" in a decoder-only model; one stack does everything.
+The *causal mask* of 6.5 is what makes $\boldsymbol{\ell}_t$ depend only on $\mathbf{t}_{1:t}$. There is no separate "encoder" or "decoder" in a decoder-only model; one stack does everything.
 
 ---
 

@@ -121,7 +121,7 @@ The causal mask is the canonical one, but the additive-$M$ machinery handles any
 - **Prefix-LM mask.** The first $k$ tokens of the sequence (the "prefix") attend bidirectionally; positions after $k$ attend causally. The mask is a block matrix: full ones in the prefix block, lower triangular in the autoregressive block. Used by T5 and some instruction-tuned variants.
 - **Cross-attention masks.** When attending between two sequences, masks can express "this target token may attend to these source tokens." Used in encoder-decoder Transformers.
 
-All of these are *additive masks* applied pre-softmax, exactly like the causal one. The only thing that varies is the pattern of zeros vs $-\infty$.
+All of these are *additive masks* applied pre-softmax, like the causal one. The only thing that varies is the pattern of zeros vs $-\infty$.
 
 ---
 

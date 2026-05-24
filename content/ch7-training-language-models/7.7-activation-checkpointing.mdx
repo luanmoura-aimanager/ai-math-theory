@@ -120,7 +120,7 @@ for block_module in self.blocks:
 
 Why checkpoint at the **block boundary** rather than at every layer (FFN, LN, attention)?
 
-Inside one block, the *biggest* activations are the attention scores $A \in \mathbb{R}^{B \times h \times T \times T}$ (size $B h T^2$, growing with $T^2$) and the FFN hidden $H \in \mathbb{R}^{B \times T \times 4d}$. Both are dropped when we re-run the block from its residual-stream input. So **checkpointing the block** sheds the worst-case attention-score and FFN-hidden buffers — exactly what we want.
+Inside one block, the *biggest* activations are the attention scores $A \in \mathbb{R}^{B \times h \times T \times T}$ (size $B h T^2$, growing with $T^2$) and the FFN hidden $H \in \mathbb{R}^{B \times T \times 4d}$. Both are dropped when we re-run the block from its residual-stream input. So **checkpointing the block** sheds the worst-case attention-score and FFN-hidden buffers — what we want.
 
 The cost of recomputing one block is: one MHA forward + one FFN forward + two LNs $\approx 33\%$ extra over the original forward (the inner detail: backward is $2\times$ forward; adding one extra forward makes total $3 + 1 = 4$, hence $33\%$).
 

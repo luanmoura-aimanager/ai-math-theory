@@ -163,7 +163,7 @@ OpenAI's production BPE library, used for GPT-3.5/4 and several open weights. Im
 
 **Token efficiency varies by domain.** English prose with a standard 32k BPE tokeniser averages ~0.75 tokens per word. Code, JSON, and math expressions are far less efficient — `4 + 8 = 12` might be 7 tokens. Non-Latin scripts and rare languages can be 2–4× less efficient than English on a tokeniser trained mostly on English data, which directly translates into compute cost asymmetries.
 
-**Arithmetic is tokenisation-sensitive.** If the tokeniser merges `123` into a single token but leaves `124` as `1` + `24`, the model sees no structural similarity between the two. Modern tokenisers (LLaMA-3, recent GPT) deliberately split digits individually for exactly this reason — it gives the model uniform access to digit-level structure.
+**Arithmetic is tokenisation-sensitive.** If the tokeniser merges `123` into a single token but leaves `124` as `1` + `24`, the model sees no structural similarity between the two. Modern tokenisers (LLaMA-3, recent GPT) deliberately split digits individually for this reason — it gives the model uniform access to digit-level structure.
 
 **Whitespace is tricky.** GPT-style tokenisers represent the leading space of a word as part of the token (e.g. `Ġhello` is `" hello"` as a single token). This makes detokenisation trivial but means *"hello"* (start of sentence) and *" hello"* (mid-sentence) are *different* tokens.
 

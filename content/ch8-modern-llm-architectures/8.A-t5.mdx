@@ -9,7 +9,7 @@ prerequisites: ["ch8-modern-llm-architectures/8.1-decoder-only", "ch8-modern-llm
 
 ## 1. Why this appendix exists
 
-The original AIAYN Transformer (Vaswani et al., 2017) was an **encoder-decoder** — exactly the architecture used in this appendix. The encoder reads a source sequence with bidirectional attention; the decoder generates a target sequence autoregressively, attending to its own past via causal self-attention *and* to the encoder's output via **cross-attention**. This is the natural shape for sequence-to-sequence problems: translation, summarisation, generic text-to-text rewrites.
+The original AIAYN Transformer (Vaswani et al., 2017) was an **encoder-decoder** — the architecture used in this appendix. The encoder reads a source sequence with bidirectional attention; the decoder generates a target sequence autoregressively, attending to its own past via causal self-attention *and* to the encoder's output via **cross-attention**. This is the natural shape for sequence-to-sequence problems: translation, summarisation, generic text-to-text rewrites.
 
 T5 (Raffel et al., 2020<FN n={1} />, "Exploring the limits of transfer learning with a unified text-to-text transformer", [arXiv:1910.10683](https://arxiv.org/abs/1910.10683)) is the canonical large-scale encoder-decoder LLM. It introduced the "everything is text-to-text" framing: every task — translation, classification, QA, summarisation — is cast as "given source text, produce target text". The architecture supports this with a clean separation of input encoding (encoder) and output generation (decoder).
 

@@ -23,7 +23,7 @@ Each phase exists for a reason. We write each one down, derive the formula, and 
 
 The first few steps of training are special. At $t = 1$:
 
-- The Adam EMAs $m_t, v_t$ have just been initialised at zero. Bias correction *partially* fixes that (3.2), but $\hat v_1 = g_1^2$ exactly — the variance estimate has effectively one sample and is very noisy.
+- The Adam EMAs $m_t, v_t$ have just been initialised at zero. Bias correction *partially* fixes that (3.2), but $\hat v_1 = g_1^2$ — the variance estimate has effectively one sample and is very noisy.
 - The model weights are still at the random init. The classifier head in particular often produces large gradients before settling.
 - Layer norm and residual streams have not yet calibrated.
 

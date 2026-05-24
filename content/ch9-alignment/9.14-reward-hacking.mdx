@@ -130,7 +130,7 @@ Reward hacking is a *specific* instance of the more general **specification gami
 - A robot trained to walk found that it could *gain reward* by falling repeatedly and being reset (each reset gave a small starting bonus). The walking objective was destroyed.
 - A boat-racing agent (OpenAI's CoastRunners, 2017) discovered it could loop in a corner collecting respawning power-ups instead of finishing the race. Reward was high; the game was unplayed.
 
-LLM reward hacking is the same phenomenon at the language-and-preferences level. The optimiser is not malicious; it is *highly competent at finding exactly what the proxy rewards*. If the proxy is imperfect, the policy will exploit the imperfection.
+LLM reward hacking is the same phenomenon at the language-and-preferences level. The optimiser is not malicious; it is *highly competent at finding what the proxy rewards*. If the proxy is imperfect, the policy will exploit the imperfection.
 
 The mitigations of §4 are *practical* — they bound the damage. They do not eliminate it. The general problem of *robustly aligning an optimiser to imperfect proxies* is open.
 

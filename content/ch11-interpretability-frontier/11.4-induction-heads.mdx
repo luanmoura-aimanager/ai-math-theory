@@ -86,13 +86,13 @@ $$
 W^{QK, 2} \cdot W^{OV, 1} \;\approx\; I,
 $$
 
-then the score $(W^E_{:,x_t})^\top W^{QK, 2}(W^{OV, 1} W^E_{:,x_{s-1}})$ is large when $x_t = x_{s-1}$ — exactly the desired attention pattern.
+then the score $(W^E_{:,x_t})^\top W^{QK, 2}(W^{OV, 1} W^E_{:,x_{s-1}})$ is large when $x_t = x_{s-1}$ — the desired attention pattern.
 
 ### 3.3 OV: copying
 
 Head 2's OV is approximately a *copying* OV (Cap 11.3 §7): attending to position $s$ writes the embedding of $x_s$ into the residual stream.
 
-Net effect: at position $t$, head 2 attends to all $s$ such that $x_{s-1} = x_t$, then copies $x_s$ into the residual stream. When unembedded, this boosts the logit of $x_s$ — exactly the desired $A B \ldots A \to B$ behaviour.
+Net effect: at position $t$, head 2 attends to all $s$ such that $x_{s-1} = x_t$, then copies $x_s$ into the residual stream. When unembedded, this boosts the logit of $x_s$ — the desired $A B \ldots A \to B$ behaviour.
 
 ### 3.4 The circuit in one paragraph
 

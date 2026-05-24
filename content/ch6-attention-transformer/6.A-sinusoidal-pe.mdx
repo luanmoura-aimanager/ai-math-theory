@@ -109,7 +109,7 @@ $$
 
 and $q_m^\top k_n$ involves cross-terms $\tilde x_m W_Q W_K^\top \text{PE}(n)^\top$, $\text{PE}(m) W_Q W_K^\top \tilde x_n^\top$, etc., which mix content and position in ways that *do not* reduce cleanly to a function of $n - m$.
 
-RoPE ([6.7](/session/ch6-attention-transformer/6.7-rope)) fixes this by rotating $q_m$ and $k_n$ *directly* by position-dependent rotations *after* the $W_Q, W_K$ projections, ensuring $q_m^\top k_n$ depends only on $n - m$ exactly. The sinusoidal-PE-as-input is the "almost right" attempt that came first.
+RoPE ([6.7](/session/ch6-attention-transformer/6.7-rope)) fixes this by rotating $q_m$ and $k_n$ *directly* by position-dependent rotations *after* the $W_Q, W_K$ projections, ensuring $q_m^\top k_n$ depends only on $n - m$. The sinusoidal-PE-as-input is the "almost right" attempt that came first.
 
 ---
 
@@ -144,7 +144,7 @@ The mathematical similarity between sinusoidal PE and RoPE deserves explicit com
 |---|---|---|
 | Where applied | Input embedding: $\tilde X \to \tilde X + \text{PE}$ | Inside attention, on $Q$ and $K$ after projection |
 | Operation | Addition | Rotation (orthogonal matrix multiplication) |
-| Effect on $q^\top k$ | Mixes position and content; not cleanly relative | $q_m^\top k_n$ depends only on $n - m$, exactly |
+| Effect on $q^\top k$ | Mixes position and content; not cleanly relative | $q_m^\top k_n$ depends only on $n - m$ |
 | Inference length | Defined at all positions but extrapolation is empirically poor | Defined at all positions; can be scaled (NTK / YaRN, 6.13 §4) |
 | Used by | Original Transformer (2017); some encoder-decoder models | LLaMA, Mistral, Qwen, Gemini, most 2024-onwards LLMs |
 
@@ -160,7 +160,7 @@ $$
 \text{PE}(\text{pos}, 2i) = \sin(\omega_i \text{pos}), \quad \text{PE}(\text{pos}, 2i+1) = \cos(\omega_i \text{pos}), \quad \omega_i = 10000^{-2i/d}.
 $$
 
-$\text{PE}(\text{pos} + k) = M_k \cdot \text{PE}(\text{pos})$ for a fixed orthogonal $M_k$ — the linearity property that motivated the design. In practice, the additive form mixed position and content in attention, and the empirical extrapolation behaviour was poor. RoPE inherits the frequencies and the relative-position promise but applies them as rotations inside attention, getting both properties exactly.
+$\text{PE}(\text{pos} + k) = M_k \cdot \text{PE}(\text{pos})$ for a fixed orthogonal $M_k$ — the linearity property that motivated the design. In practice, the additive form mixed position and content in attention, and the empirical extrapolation behaviour was poor. RoPE inherits the frequencies and the relative-position promise but applies them as rotations inside attention, getting both properties.
 
 Read AIAYN §3.5 with this appendix open; the two pages explain the design intent and you should now find the "linear function of PE(pos)" statement provable on inspection.
 

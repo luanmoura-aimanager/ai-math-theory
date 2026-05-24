@@ -46,7 +46,7 @@ $$
 \boxed{\ \frac{\partial L}{\partial w[k]} = \sum_{i = 0}^{N - K} \frac{\partial L}{\partial z[i]}\, x[i + k]. \ }
 $$
 
-This is a **cross-correlation** between the *input* $x$ and the *upstream gradient* $\partial L / \partial z$. In the ML sense (cross-correlation), it has *exactly* the same shape as a forward conv: the upstream gradient plays the role of the kernel, and we slide it over the input.
+This is a **cross-correlation** between the *input* $x$ and the *upstream gradient* $\partial L / \partial z$. In the ML sense (cross-correlation), it has the same shape as a forward conv: the upstream gradient plays the role of the kernel, and we slide it over the input.
 
 **Why this is elegant.** Forward and weight-gradient passes are both implemented by the same primitive. On a GPU, both reduce to a GEMM via `im2col` (4.1 §7), and the highly tuned matrix-multiply kernels in cuDNN serve double duty.
 
