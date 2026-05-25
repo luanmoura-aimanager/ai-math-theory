@@ -161,7 +161,7 @@ invoke without re-deriving from here on:
 
 ## 7. Why this matters for what's next
 
-Cross-entropy as a training loss (§0.7) is $H[p_{\text{data}},
+Cross-entropy as a training loss (§0.7) is exactly $H[p_{\text{data}},
 q_{\theta}]$, and its gradient with respect to $\theta$ doesn't see the
 data-only term $H[p_{\text{data}}]$ — making it operationally
 identical to negative log-likelihood. KL appears explicitly in
