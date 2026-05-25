@@ -18,7 +18,7 @@ prerequisites: ["ch2-mlps-backprop/2.10-weight-initialization"]
 
 Batch Normalization (Ioffe & Szegedy, 2015)<FN n={1} /> was, with ReLU + He init + Adam, one of the four pillars that made deep networks routinely trainable to 100+ layers around 2015. The idea: normalise each layer's pre-activations to zero mean and unit variance over the current mini-batch, then learn an affine transformation to undo the normalisation if it helps.
 
-This session does the math: the forward pass exactly, the affine, the test-time EMA, and a brief look at the backward pass (which is where many bugs live).
+This session does the math: the forward pass, the affine, the test-time EMA, and a brief look at the backward pass (which is where many bugs live).
 
 ---
 
@@ -52,7 +52,7 @@ $$
 
 with $\gamma, \beta \in \mathbb{R}^d$ trainable parameters (one $\gamma$ and one $\beta$ per hidden coordinate; total $2d$ extra parameters per BN layer). The output $y$ is what the next layer sees.
 
-Why this affine matters: setting $\gamma = \sqrt{\sigma_\mathcal{B}^2 + \varepsilon}$ and $\beta = \mu_\mathcal{B}$ recovers $y_i = z_i$. The BN layer **can represent the identity**. If a layer would have been better off without normalisation, it can learn to undo it. The point is that the optimiser has the *choice*, and gradient descent on $\gamma, \beta$ tends to leave most BN layers near the identity *plus* a small per-coordinate shift — exactly the behaviour that helps optimisation.
+Why this affine matters: setting $\gamma = \sqrt{\sigma_\mathcal{B}^2 + \varepsilon}$ and $\beta = \mu_\mathcal{B}$ recovers $y_i = z_i$. The BN layer **can represent the identity**. If a layer would have been better off without normalisation, it can learn to undo it. The point is that the optimiser has the *choice*, and gradient descent on $\gamma, \beta$ tends to leave most BN layers near the identity *plus* a small per-coordinate shift — the behaviour that helps optimisation.
 
 ---
 

@@ -123,7 +123,7 @@ The post-2022 generation:
 | DeepSeek-V3-671B | 671B | 14.8T | 22 |
 | Qwen2.5-72B | 72B | ~18T | ~250 |
 
-Chinchilla, LLaMA-1, and DeepSeek-V3 sit at $D/N \approx 20$ — exactly the Chinchilla-optimal prediction. LLaMA-3, Mistral, and Qwen all *over-train* significantly. Why?
+Chinchilla, LLaMA-1, and DeepSeek-V3 sit at $D/N \approx 20$ — the Chinchilla-optimal prediction. LLaMA-3, Mistral, and Qwen all *over-train* significantly. Why?
 
 ---
 
@@ -151,7 +151,7 @@ $$
 D^* / N^* \approx 20 \cdot (1 + \kappa \cdot Q / Q_\text{ref})^{1 / \beta},
 $$
 
-where $\kappa$ is a weighting factor and $Q_\text{ref}$ is the queries-equivalent of one training run. For frontier LLMs deployed broadly ($Q$ in the $10^{12}$+ range), the optimum is $D/N$ in the hundreds — exactly LLaMA-3's regime.
+where $\kappa$ is a weighting factor and $Q_\text{ref}$ is the queries-equivalent of one training run. For frontier LLMs deployed broadly ($Q$ in the $10^{12}$+ range), the optimum is $D/N$ in the hundreds — LLaMA-3's regime.
 
 **Modern frontier LLMs train at $D/N$ between $50$ and $300$**, depending on the model's expected deployment scale. Small consumer-facing models over-train the hardest (their deployment volume is huge per parameter); proprietary or research models stay closer to $D/N \approx 20$.
 
@@ -185,7 +185,7 @@ A summary of how the field navigates the $(N, D, C)$ space in 2026:
 
 ## 7. The diminishing-returns curve
 
-A practical question: as $D/N$ grows past Chinchilla, how much loss do you actually save?
+A practical question: as $D/N$ grows past Chinchilla, how much loss do you save?
 
 The picture is monotone but slow. From Sardana & Frankle (2024) §3, fitted to the Chinchilla parametric form: increasing $D/N$ from 20 to 200 reduces loss by $\sim 3\%$ at fixed $N$. Small in absolute terms — but at the *capability* level, this maps to several MMLU/HumanEval points and substantial qualitative improvements.
 
@@ -195,7 +195,7 @@ So over-training is "expensive per loss point" but the loss points are *valuable
 
 ## 8. Scaling laws as a planning tool
 
-How a frontier run is actually planned, in practice:
+How a frontier run is planned, in practice:
 
 1. **Pick deployment scale.** Estimate $Q$ (queries per year × deployment lifetime).
 2. **Pick target capability.** What MMLU / HumanEval / domain-specific score do you need?

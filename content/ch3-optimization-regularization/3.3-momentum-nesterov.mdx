@@ -28,7 +28,7 @@ v_t &= \beta\, v_{t-1} + (1 - \beta)\, g_t, \\
 \ }
 $$
 
-This is exactly the EMA of §3.2 applied to the gradient, followed by a step in $-v_t$. Typical $\beta = 0.9$, so $v_t$ averages the last $\sim 10$ gradients.
+This is the EMA of §3.2 applied to the gradient, followed by a step in $-v_t$. Typical $\beta = 0.9$, so $v_t$ averages the last $\sim 10$ gradients.
 
 <Aside type="note">
 You will also see the formulation $v_t = \beta v_{t-1} + g_t$ (without the $1 - \beta$ factor) and $\theta_{t+1} = \theta_t - \alpha v_t$. The two forms are equivalent up to a rescaling of the learning rate: with the un-normalised form, the effective LR is $\alpha / (1 - \beta)$. PyTorch's `SGD(momentum=β)` actually uses the un-normalised form. Adam will use the normalised one. Read the docstring of any optimiser you depend on.

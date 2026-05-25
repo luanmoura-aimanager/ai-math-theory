@@ -47,7 +47,7 @@ Pooling provides *local* translation invariance — the output is unchanged by s
 
 To see this: if you shift the input by less than the pool size, the *set* of values inside each window is (usually) unchanged. Max-pool depends only on the set, so its output is unchanged. Average-pool changes slightly because the averaged values are weighted equally, but only by what enters and leaves the window at the boundary. The shift the layer can absorb is bounded by $P_h$ or $P_w$.
 
-A stack of pooling layers compounds: $L$ pool layers of size 2 with stride 2 are invariant to shifts up to $\sim 2^L$ pixels. This is exactly the behaviour required of an image classifier, where small object translations should not change the class label.
+A stack of pooling layers compounds: $L$ pool layers of size 2 with stride 2 are invariant to shifts up to $\sim 2^L$ pixels. This is the behaviour required of an image classifier, where small object translations should not change the class label.
 
 <Aside type="note">
 **Global pooling** is the limit case: take a single window covering the whole spatial extent. This converts an equivariant feature map into an invariant feature vector and is the standard last spatial operation in classification CNNs (ResNet, EfficientNet). It also closes the link with 4.3 §6: equivariance is built up, then "cashed in" as invariance with one global pool.

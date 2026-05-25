@@ -183,7 +183,7 @@ Result: $\sim 2\times$ throughput vs. FlashAttention-1 on A100; $\sim 50$–$70\
 
 FlashAttention is most commonly thought of as a *training* speedup, but it matters at inference too — particularly during **prefill** ([10.3 §3](/session/ch10-inference-decoding/10.3-kv-cache-implementation)), where the model processes a long prompt in one forward.
 
-At prefill, the score matrix is $L_\text{prompt} \times L_\text{prompt}$ — exactly the $n \times n$ problem FlashAttention was designed for. Without FlashAttention, prompt processing for an $8\text{k}$ prompt would materialise $64$M-entry softmax matrices per head per layer; with it, it tiles through SRAM.
+At prefill, the score matrix is $L_\text{prompt} \times L_\text{prompt}$ — the $n \times n$ problem FlashAttention was designed for. Without FlashAttention, prompt processing for an $8\text{k}$ prompt would materialise $64$M-entry softmax matrices per head per layer; with it, it tiles through SRAM.
 
 At **decode**, the query is a single token; the *score matrix* is $1 \times t$, not $t \times t$. FlashAttention still wins because the $K, V$ matrix is large ($t \times d$) and FlashAttention's I/O-aware reads of the cache are faster than the textbook implementation. FlashDecoding (a variant tuned for decode) reorganises the kernel further for the $1 \times t$ shape.
 

@@ -39,7 +39,7 @@ These two sentences have identical token multisets. A purely translation-equivar
 In CNNs the symmetry can only be broken after global pooling (which is invariant, not symmetry-breaking) or by ad-hoc positional features added to the input. Attention takes the opposite stance: it bakes position-awareness into the input via *positional encodings* (Chapter 6.5) and lets the attention weights mix tokens *however they want*, with no built-in translation symmetry to fight against.
 
 <Aside type="note">
-**1D convs are still translation-equivariant on sequences.** Sliding a kernel along a token sequence treats position 5 and position 500 symmetrically: the same kernel, the same parameters, the same response. That is exactly the structure we *don't* want for language, where the verb usually lives mid-sentence and the subject before it.
+**1D convs are still translation-equivariant on sequences.** Sliding a kernel along a token sequence treats position 5 and position 500 symmetrically: the same kernel, the same parameters, the same response. That is the structure we *don't* want for language, where the verb usually lives mid-sentence and the subject before it.
 </Aside>
 
 ---

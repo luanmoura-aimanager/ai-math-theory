@@ -25,7 +25,7 @@ After 9.8 you can draw the full data flow on a whiteboard and identify every inp
 
 ### 2.1 Stage 1: SFT
 
-Start with a pretrained base LM $\pi_\text{base}$ (Chapter 7's output). Fine-tune on a corpus of $(x, y)$ pairs where $x$ is an instruction and $y$ is a human-written response. Loss: standard next-token cross-entropy on $y$ given $x$, exactly as in pretraining.
+Start with a pretrained base LM $\pi_\text{base}$ (Chapter 7's output). Fine-tune on a corpus of $(x, y)$ pairs where $x$ is an instruction and $y$ is a human-written response. Loss: standard next-token cross-entropy on $y$ given $x$, as in pretraining.
 
 Output: $\pi_\text{SFT}$, a model that **roughly follows instructions** but is unaligned in quality, safety, and helpfulness.
 

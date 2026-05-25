@@ -215,7 +215,7 @@ For 7B-class on a 32-H100 cluster, **FSDP alone is enough**, and TP/PP are unnec
 
 ## 8. The CPU-offload variant
 
-A further memory trick: offload the *Adam optimiser state* to CPU memory (which is far cheaper and more abundant than GPU memory). DeepSpeed's **ZeRO-Offload** ([Ren et al., 2021<FN n={2} />, arXiv:2101.06840](https://arxiv.org/abs/2101.06840)) and PyTorch FSDP's `cpu_offload=True` option do exactly this.
+A further memory trick: offload the *Adam optimiser state* to CPU memory (which is far cheaper and more abundant than GPU memory). DeepSpeed's **ZeRO-Offload** ([Ren et al., 2021<FN n={2} />, arXiv:2101.06840](https://arxiv.org/abs/2101.06840)) and PyTorch FSDP's `cpu_offload=True` option do this.
 
 The trade-off: GPU memory drops by another $12 N / D$ bytes per device (the local optimiser state moves to CPU). The cost: every optimiser step sends gradients to CPU and pulls updated weights back over PCIe (~$50$ GB/s, much slower than NVLink). For a 7B model at $D = 32$, this is $\sim 100$ ms per step extra — acceptable when the alternative is OOM.
 

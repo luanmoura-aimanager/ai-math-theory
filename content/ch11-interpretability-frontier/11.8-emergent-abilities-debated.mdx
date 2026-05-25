@@ -57,7 +57,7 @@ Examples:
 
 The interpretation: these capabilities are *not* present at small scale, regardless of training-time effort; they require crossing a parameter-or-compute threshold.
 
-This was widely-cited evidence for the "scale is all you need" thesis: there are capabilities you simply cannot get at small scale; the only path is bigger models.
+This was widely-cited evidence for the "scale is all you need" thesis: there are capabilities you cannot get at small scale; the only path is bigger models.
 
 ---
 
@@ -111,7 +111,7 @@ This is *grokking* — a phase transition in generalisation. The model wasn't me
 
 Nanda, Chan, Lieberum, Smith, Steinhardt (2023, [arXiv:2301.05217](https://arxiv.org/abs/2301.05217)) reverse-engineered the grokked model. The model had learned a beautiful Fourier-basis algorithm: it represents $a$ and $b$ in a frequency basis, multiplies in frequency space (using the trig identity $\cos(a)\cos(b) - \sin(a)\sin(b) = \cos(a + b)$), and reads off the result.
 
-This is a *real* emergent capability — there's a specific algorithm that wasn't present before grokking and is present after. It's also gradual at the circuit level: Nanda et al. identified an intermediate phase where the Fourier circuit is *partially formed* but not yet generalising. The test-accuracy jump happens when the circuit becomes complete enough to actually compute correctly.
+This is a *real* emergent capability — there's a specific algorithm that wasn't present before grokking and is present after. It's also gradual at the circuit level: Nanda et al. identified an intermediate phase where the Fourier circuit is *partially formed* but not yet generalising. The test-accuracy jump happens when the circuit becomes complete enough to compute correctly.
 
 So grokking is *both* — a real mechanistic transition *and* a metric artefact (the transition would be smoother if measured by something other than 0/1 test accuracy).
 

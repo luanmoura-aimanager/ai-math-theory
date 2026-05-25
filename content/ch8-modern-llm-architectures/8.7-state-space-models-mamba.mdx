@@ -85,7 +85,7 @@ This has only $n$ parameters per channel, and each coordinate of the state evolv
 
 ## 4. Selective SSM: Mamba
 
-The S4 line gave good signal-processing models but lost to Transformers on language tasks. The Mamba paper's diagnosis: a *time-invariant* SSM (with fixed $A, B, C$) cannot do **content-dependent** state updates. For language, the model often needs to decide "keep this token's information in state" vs "forget it" based on the token itself — exactly what attention's content-based addressing does, and what a content-blind SSM cannot.
+The S4 line gave good signal-processing models but lost to Transformers on language tasks. The Mamba paper's diagnosis: a *time-invariant* SSM (with fixed $A, B, C$) cannot do **content-dependent** state updates. For language, the model often needs to decide "keep this token's information in state" vs "forget it" based on the token itself — what attention's content-based addressing does, and what a content-blind SSM cannot.
 
 **Selective SSM** (Mamba's contribution): make $\Delta, B, C$ functions of the input.
 

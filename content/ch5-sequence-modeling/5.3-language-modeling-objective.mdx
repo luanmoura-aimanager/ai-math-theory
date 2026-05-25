@@ -35,7 +35,7 @@ $$
 p(x_1, \dots, x_T) = \prod_{t=1}^{T} p(x_t \mid x_{<t}).
 $$
 
-**This is an identity, not a modelling choice.** It is true for *any* joint distribution. The chain rule simply reorganises the joint probability as a product of conditionals.
+**This is an identity, not a modelling choice.** It is true for *any* joint distribution. The chain rule reorganises the joint probability as a product of conditionals.
 
 What *is* a modelling choice is the **autoregressive** parameterisation: we choose to model the joint by directly parameterising each of the $T$ conditionals $p(x_t \mid x_{<t})$. Equivalently, we let one model produce a categorical distribution over the next token given the prefix, and the joint emerges by multiplication.
 
@@ -79,7 +79,7 @@ $$
 \boxed{\ \mathcal{L}(\theta) = -\sum_{n=1}^{N} \sum_{t=1}^{T_n} \log p_\theta(x_t^{(n)} \mid x_{<t}^{(n)}). \ }
 $$
 
-Dividing by the total number of tokens $\sum_n T_n$ converts this to a **per-token negative log-likelihood**, often called the **next-token cross-entropy loss** (and exactly the multiclass CE of [1.8](/session/ch1-linear-models-perceptron/1.8-multiclass-ce-gradient), applied at each time step):
+Dividing by the total number of tokens $\sum_n T_n$ converts this to a **per-token negative log-likelihood**, often called the **next-token cross-entropy loss** (the multiclass CE of [1.8](/session/ch1-linear-models-perceptron/1.8-multiclass-ce-gradient), applied at each time step):
 
 $$
 \boxed{\ \mathcal{L}_\text{token}(\theta) = -\mathbb{E}_{(\mathbf{x}, t)}\, \log p_\theta(x_t \mid x_{<t}). \ }
@@ -91,7 +91,7 @@ Every modern LLM minimises this loss. There is no auxiliary objective for the ma
 
 Two equivalent justifications:
 
-**(a) Maximum likelihood.** As derived above, minimising $\mathcal{L}$ is exactly maximising the probability that $p_\theta$ assigns to the observed corpus. Under standard regularity conditions (compact parameter space, identifiability), MLE is consistent: $\hat\theta_\text{MLE} \to \theta^\star$ as $N \to \infty$ if the true distribution lies in the model family.
+**(a) Maximum likelihood.** As derived above, minimising $\mathcal{L}$ is maximising the probability that $p_\theta$ assigns to the observed corpus. Under standard regularity conditions (compact parameter space, identifiability), MLE is consistent: $\hat\theta_\text{MLE} \to \theta^\star$ as $N \to \infty$ if the true distribution lies in the model family.
 
 **(b) Cross-entropy with the data distribution.** Let $p^\star$ be the true distribution. Then the population version of $\mathcal{L}_\text{token}$ is
 
@@ -99,7 +99,7 @@ $$
 \mathbb{E}_{\mathbf{x} \sim p^\star,\, t}\, \left[ -\log p_\theta(x_t \mid x_{<t}) \right] = H(p^\star) + \mathbb{E}\left[ \mathrm{KL}\!\left( p^\star(\cdot \mid x_{<t}) \,\|\, p_\theta(\cdot \mid x_{<t}) \right) \right].
 $$
 
-(We saw exactly this decomposition in [0.7 §3](/session/ch0-math-foundations/0.7-cross-entropy-mle).) Since $H(p^\star)$ doesn't depend on $\theta$, minimising the cross-entropy is equivalent to minimising the **average KL divergence** of the model from the truth, position by position. That is the strongest "fit the data" criterion we have.
+(We saw this decomposition in [0.7 §3](/session/ch0-math-foundations/0.7-cross-entropy-mle).) Since $H(p^\star)$ doesn't depend on $\theta$, minimising the cross-entropy is equivalent to minimising the **average KL divergence** of the model from the truth, position by position. That is the strongest "fit the data" criterion we have.
 
 ### 3.2 The lower bound
 

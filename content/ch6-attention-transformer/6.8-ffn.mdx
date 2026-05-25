@@ -77,7 +77,7 @@ $$
 \boxed{\ \#\theta_\text{FFN} = 2 \cdot d \cdot 4d \;+\; 4d + d \;=\; 8 d^2 + 5d. \ }
 $$
 
-The bias terms are an additive $\sim d$ correction; in modern LLMs (e.g. LLaMA) they are often omitted, leaving exactly $8 d^2$. Compare with the attention sub-layer's $4 d^2$ (6.4 §3). One Transformer block therefore has
+The bias terms are an additive $\sim d$ correction; in modern LLMs (e.g. LLaMA) they are often omitted, leaving $8 d^2$. Compare with the attention sub-layer's $4 d^2$ (6.4 §3). One Transformer block therefore has
 
 $$
 \#\theta_\text{block} \approx 4 d^2 + 8 d^2 = 12 d^2
@@ -113,7 +113,7 @@ $$
 
 The $d_\text{ff}$ hidden units each define a "(detector, contribution)" pair: detect a feature in $x$, contribute a vector to the output. This view has been formalised by Geva, Schuster, Berant & Levy (2021)<FN n={2} />, who showed that FFN weights in trained Transformers behave like an *associative memory*: $W_1$ rows act as keys, $W_2$ columns as values, and the FFN as a key-value lookup mediated by the non-linearity.
 
-This is *exactly* the same structural pattern as attention — a key-value lookup — except the keys and values are *fixed weights* (learned at training time) rather than computed from the input. Attention is a *runtime* lookup against the sequence; FFN is a *parametric* lookup against memorised features.
+This is the same structural pattern as attention — a key-value lookup — except the keys and values are *fixed weights* (learned at training time) rather than computed from the input. Attention is a *runtime* lookup against the sequence; FFN is a *parametric* lookup against memorised features.
 
 The two together — runtime cross-position retrieval (attention) and per-position parametric memory (FFN) — are why a Transformer can both "look at what's in the input" and "look at what it knows." Modern interpretability papers (Cap 11) often map model behaviour to these two complementary mechanisms.
 

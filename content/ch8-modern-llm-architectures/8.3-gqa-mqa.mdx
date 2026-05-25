@@ -58,7 +58,7 @@ $$
 \text{head}_\ell = \text{Attn}\!\left( Q_{:, \ell, :}, \ K_{:, \text{group}(\ell), :}, \ V_{:, \text{group}(\ell), :} \right) \in \mathbb{R}^{T \times d_h}.
 $$
 
-Concatenate the $h$ heads, project: $\text{GQA}(X) = \text{Concat}(\text{head}_1, \dots, \text{head}_h) W_O \in \mathbb{R}^{T \times d}$. The output shape matches MHA exactly. So GQA is a drop-in replacement for MHA at the level of input/output signatures; the change is interior to MHA.
+Concatenate the $h$ heads, project: $\text{GQA}(X) = \text{Concat}(\text{head}_1, \dots, \text{head}_h) W_O \in \mathbb{R}^{T \times d}$. The output shape matches MHA. So GQA is a drop-in replacement for MHA at the level of input/output signatures; the change is interior to MHA.
 
 ---
 

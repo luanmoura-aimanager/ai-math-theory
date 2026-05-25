@@ -67,7 +67,7 @@ $$
 \#\text{FLOPs}_\text{prefill/block} = 24 T d^2 + 4 T^2 d.
 $$
 
-Setting $T = 1$ in the prefill formula recovers exactly the per-step count, confirming the cache is mathematically equivalent to "one forward pass over a 1-token sequence with a longer K, V context."
+Setting $T = 1$ in the prefill formula recovers the per-step count, confirming the cache is mathematically equivalent to "one forward pass over a 1-token sequence with a longer K, V context."
 
 Generating $N$ tokens after a $T_p$-token prompt: prefill cost $24 T_p d^2 + 4 T_p^2 d$ once, then $N$ steps of $24 d^2 + 4 d (T_p + i)$ each. For $T_p = 2048, d = 4096, N = 200$:
 
@@ -107,7 +107,7 @@ At $T = 128{,}000$, the KV cache for LLaMA-70B is *larger than 4× H100 80GB GPU
 
 ## 5. Architectural variants that shrink the cache
 
-The bytes-per-token of the KV cache is $4 L d$ in fp16 — exactly the cache size of *one* token across all layers. Cutting this number is the central design lever of modern LLMs.
+The bytes-per-token of the KV cache is $4 L d$ in fp16 — the cache size of *one* token across all layers. Cutting this number is the central design lever of modern LLMs.
 
 ### 5.1 GQA: Grouped-Query Attention
 

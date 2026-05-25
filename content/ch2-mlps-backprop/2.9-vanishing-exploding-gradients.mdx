@@ -55,7 +55,7 @@ For ReLU, $\operatorname{ReLU}'(z) \in \{0, 1\}$. On the *active* side ($z > 0$)
 
 The key statistical fact: a *path* from layer 1 to the loss is alive iff *every* ReLU along the way is active. If we initialise weights so each ReLU is active with probability $1/2$ (which is what symmetry around zero gives), then a single fixed path of length $L$ is alive with probability $2^{-L}$. **But there are exponentially many paths**, and they share weights — so the effective gradient at layer 1 stays bounded as $L$ grows, *provided* the weight matrices have the right scale.
 
-That "right scale" is the **He initialisation** of 2.10: $\operatorname{Var}(W^{(\ell)}_{i, j}) = 2 / d_{\ell - 1}$. It exactly compensates for the factor of $1/2$ from dead ReLUs.
+That "right scale" is the **He initialisation** of 2.10: $\operatorname{Var}(W^{(\ell)}_{i, j}) = 2 / d_{\ell - 1}$. It compensates for the factor of $1/2$ from dead ReLUs.
 
 ---
 

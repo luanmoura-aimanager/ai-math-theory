@@ -29,7 +29,7 @@ Split text on whitespace and punctuation, build a vocabulary of all distinct wor
 
 The fatal problems:
 
-1. **Out-of-vocabulary (OOV).** Any word not seen at training time gets mapped to a special `<unk>` token. Proper nouns, typos, neologisms, and rare inflections are all lost. The model literally cannot read them.
+1. **Out-of-vocabulary (OOV).** Any word not seen at training time gets mapped to a special `<unk>` token. Proper nouns, typos, neologisms, and rare inflections are all lost. The model cannot read them.
 2. **Morphology is hidden.** *"run"*, *"runs"*, *"running"*, *"ran"* are four unrelated integers. The model must rediscover that they share meaning purely from co-occurrence statistics.
 3. **Vocabulary explosion.** A web-scale corpus contains millions of distinct word forms. Storing an embedding row for each balloons memory; restricting to the top-$V$ pushes everything else to `<unk>`.
 4. **No graceful degradation.** No way to read an unknown word "approximately." If you've never seen *"unpresidented"* (a typo of *"unprecedented"*), it is indistinguishable from a foreign word or random noise.
@@ -163,7 +163,7 @@ OpenAI's production BPE library, used for GPT-3.5/4 and several open weights. Im
 
 **Token efficiency varies by domain.** English prose with a standard 32k BPE tokeniser averages ~0.75 tokens per word. Code, JSON, and math expressions are far less efficient — `4 + 8 = 12` might be 7 tokens. Non-Latin scripts and rare languages can be 2–4× less efficient than English on a tokeniser trained mostly on English data, which directly translates into compute cost asymmetries.
 
-**Arithmetic is tokenisation-sensitive.** If the tokeniser merges `123` into a single token but leaves `124` as `1` + `24`, the model sees no structural similarity between the two. Modern tokenisers (LLaMA-3, recent GPT) deliberately split digits individually for exactly this reason — it gives the model uniform access to digit-level structure.
+**Arithmetic is tokenisation-sensitive.** If the tokeniser merges `123` into a single token but leaves `124` as `1` + `24`, the model sees no structural similarity between the two. Modern tokenisers (LLaMA-3, recent GPT) deliberately split digits individually for this reason — it gives the model uniform access to digit-level structure.
 
 **Whitespace is tricky.** GPT-style tokenisers represent the leading space of a word as part of the token (e.g. `Ġhello` is `" hello"` as a single token). This makes detokenisation trivial but means *"hello"* (start of sentence) and *" hello"* (mid-sentence) are *different* tokens.
 

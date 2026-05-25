@@ -191,7 +191,7 @@ The standard near-deduplication algorithm. For each document $d$:
 2. Compute $r$ MinHash values: for each of $r$ independent random hash functions $h_i$, record $\min_{s \in S(d)} h_i(s)$. The resulting $r$-vector is the MinHash sketch.
 3. The Jaccard similarity $\frac{|S(d_1) \cap S(d_2)|}{|S(d_1) \cup S(d_2)|}$ is estimated by the fraction of matching components in the two sketches.
 
-Then **Locality-Sensitive Hashing (LSH)** partitions the $r$ MinHash components into bands and buckets documents that share *any* band exactly. Documents in the same bucket are candidate near-duplicates; compute their Jaccard exactly and drop those above threshold.
+Then **Locality-Sensitive Hashing (LSH)** partitions the $r$ MinHash components into bands and buckets documents that share *any* band exactly. Documents in the same bucket are candidate near-duplicates; compute their Jaccard and drop those above threshold.
 
 For a Common Crawl-scale corpus, this scales to billions of documents in $\sim 100$ CPU-days. Lee et al. (2022)<FN n={8} /> found that:
 
@@ -235,7 +235,7 @@ $$
 - **Deduplication is the highest-leverage step.** MinHash + LSH at Jaccard $\geq 0.8$, 5-gram shingles.
 - **Quality beats quantity.** Classifier-filtered, deduplicated 4 T tokens beats raw 10 T tokens at fixed compute.
 
-[Next session](/session/ch7-training-language-models/7.2-bpe-tokenization) is the *other* side of the data problem — *tokenization*: how raw UTF-8 text becomes the integer sequences the Transformer actually consumes.
+[Next session](/session/ch7-training-language-models/7.2-bpe-tokenization) is the *other* side of the data problem — *tokenization*: how raw UTF-8 text becomes the integer sequences the Transformer consumes.
 
 <SelfTest>
 

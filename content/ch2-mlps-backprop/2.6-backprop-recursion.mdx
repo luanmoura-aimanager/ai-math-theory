@@ -9,7 +9,7 @@ prerequisites: ["ch2-mlps-backprop/2.5-backprop-output-delta", "ch0-math-foundat
 
 ## 1. Why this session exists
 
-Once we have $\delta^{(L)} = \hat y - y$ at the output (2.5), we need a way to push that gradient signal *backwards* — to $\delta^{(L-1)}$, then $\delta^{(L-2)}$, all the way to $\delta^{(1)}$. The chain rule from 0.3 gives us exactly one recursion, with two factors at each step: a matrix multiply by $W^{(\ell+1)}$ and an elementwise multiply by $g'^{(\ell)}(z^{(\ell)})$. This session derives it.
+Once we have $\delta^{(L)} = \hat y - y$ at the output (2.5), we need a way to push that gradient signal *backwards* — to $\delta^{(L-1)}$, then $\delta^{(L-2)}$, all the way to $\delta^{(1)}$. The chain rule from 0.3 gives us one recursion, with two factors at each step: a matrix multiply by $W^{(\ell+1)}$ and an elementwise multiply by $g'^{(\ell)}(z^{(\ell)})$. This session derives it.
 
 ---
 
@@ -65,7 +65,7 @@ $$
 \delta^{(\ell)} \;=\; \operatorname{diag}\!\bigl(g'^{(\ell)}(z^{(\ell)})\bigr) \cdot (W^{(\ell+1)})^\top \cdot \delta^{(\ell+1)}.
 $$
 
-Multiplying a vector by $\operatorname{diag}(g'(z))$ is exactly elementwise multiplication by $g'(z)$. So
+Multiplying a vector by $\operatorname{diag}(g'(z))$ is elementwise multiplication by $g'(z)$. So
 
 $$
 \boxed{\ \delta^{(\ell)} \;=\; \Bigl((W^{(\ell+1)})^\top\, \delta^{(\ell+1)}\Bigr) \,\odot\, g'^{(\ell)}\bigl(z^{(\ell)}\bigr) \;\in\; \mathbb{R}^{d_\ell}.\ }

@@ -19,7 +19,7 @@ This session pins down the gap precisely, names the three desiderata that "usefu
 
 ---
 
-## 2. The base model's objective, exactly
+## 2. The base model's objective
 
 After pretraining (Chapter 7), the model $\pi_\theta(\cdot)$ has been optimised to minimise
 
@@ -29,13 +29,13 @@ $$
 
 where $p_\text{web}$ is the distribution of token sequences in the (filtered, deduplicated) web corpus described in [7.1](/session/ch7-training-language-models/7.1-pretraining-data). The optimiser at convergence has $\pi_\theta(\cdot) \approx p_\text{web}(\cdot)$ — i.e., the model assigns probability to text approximately in proportion to how likely it is to appear on the trained web slice.
 
-The base model is therefore *exactly* a distribution-matcher. Any sequence $t_{1:T}$ that is common in the corpus is high-probability under $\pi_\theta$; anything uncommon is low-probability. The pretraining objective has no notion of "good answer" — only "likely continuation given my training corpus."
+The base model is therefore a distribution-matcher. Any sequence $t_{1:T}$ that is common in the corpus is high-probability under $\pi_\theta$; anything uncommon is low-probability. The pretraining objective has no notion of "good answer" — only "likely continuation given my training corpus."
 
 ### 2.1 What this means in practice
 
 Three concrete consequences of "the base model matches the corpus."
 
-**(a) Continuation, not answer.** Given the prompt "What's the capital of France?", the most likely continuation under $p_\text{web}$ is determined by how that string actually appears on the internet. If the string most often appears in lists of practice questions (FAQ pages, quiz banks, educational worksheets), the continuation is another question. The string sometimes appears followed by "Paris." — but typically only in *answer keys*, which are a small fraction of the corpus relative to question lists.
+**(a) Continuation, not answer.** Given the prompt "What's the capital of France?", the most likely continuation under $p_\text{web}$ is determined by how that string appears on the internet. If the string most often appears in lists of practice questions (FAQ pages, quiz banks, educational worksheets), the continuation is another question. The string sometimes appears followed by "Paris." — but typically only in *answer keys*, which are a small fraction of the corpus relative to question lists.
 
 The base model has no concept of "this is a query, I should respond with an answer." It has a concept of "this is a string, here is the most-likely-string-that-follows-it-on-the-internet."
 
@@ -43,7 +43,7 @@ The base model has no concept of "this is a query, I should respond with an answ
 
 **(c) No persona, no stance.** Asked "What is the best programming language?", the model's distribution over completions is essentially a sample from internet flame-wars on the topic — sometimes "Python", sometimes "Rust", sometimes a several-paragraph defence of C, sometimes a snide non-answer. The base model has no consistent voice because the web has no consistent voice.
 
-The base model is, mathematically, doing exactly what its loss told it to do. The problem is not the model; it is the choice of target distribution.
+The base model is, mathematically, doing what its loss told it to do. The problem is not the model; it is the choice of target distribution.
 
 ---
 

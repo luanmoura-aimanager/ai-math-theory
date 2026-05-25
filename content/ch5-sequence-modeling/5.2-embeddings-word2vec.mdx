@@ -154,7 +154,7 @@ Word2vec (Mikolov et al., 2013)<FN n={5} /> was not the first method to produce 
 
 Every word2vec-style method has one structural feature that LLMs *do not share*: it trains embeddings as a **standalone** artefact, using an objective (SGNS) that is *not* the language-modelling objective we will define in 5.3.
 
-In an LLM, the embedding matrix $E$ is simply the first layer of the network. It is initialised randomly (typically $\mathcal{N}(0, 1/d)$ or similar) and updated by backprop from the next-token cross-entropy loss, jointly with every other parameter. There is no separate "pre-train embeddings, then train the model" step.
+In an LLM, the embedding matrix $E$ is the first layer of the network. It is initialised randomly (typically $\mathcal{N}(0, 1/d)$ or similar) and updated by backprop from the next-token cross-entropy loss, jointly with every other parameter. There is no separate "pre-train embeddings, then train the model" step.
 
 This matters for two reasons:
 

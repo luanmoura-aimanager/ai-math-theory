@@ -32,13 +32,13 @@ class LayerNorm(nn.Module):
         return F.layer_norm(input, self.weight.shape, self.weight, self.bias, 1e-5)
 ```
 
-Three lines of actual logic. This is exactly the [LayerNorm of 3.8 §2](/session/ch3-optimization-regularization/3.8-layernorm-rmsnorm):
+Three lines of actual logic. This is the [LayerNorm of 3.8 §2](/session/ch3-optimization-regularization/3.8-layernorm-rmsnorm):
 
 $$
 \text{LN}(x) = \frac{x - \mathbb{E}[x]}{\sqrt{\text{Var}[x] + \epsilon}} \odot \gamma + \beta,
 $$
 
-with $\gamma = \text{self.weight}, \beta = \text{self.bias}$, $\epsilon = 10^{-5}$. The `bias=False` option is exactly what LLaMA does — drop the affine bias, keep the scale. The `1e-5` is the variance-floor of 3.8 §2 — prevents division by zero on flat inputs.
+with $\gamma = \text{self.weight}, \beta = \text{self.bias}$, $\epsilon = 10^{-5}$. The `bias=False` option is what LLaMA does — drop the affine bias, keep the scale. The `1e-5` is the variance-floor of 3.8 §2 — prevents division by zero on flat inputs.
 
 `F.layer_norm` is PyTorch's built-in. It calls a fused CUDA kernel — same math as our numpy version, just faster.
 
@@ -120,7 +120,7 @@ After these four lines, `q, k, v` have shape `(B, n_head, T, head_dim)`. We are 
         y = att @ v
 ```
 
-The `flash` branch calls a fused kernel. The else branch is the manual fallback and matches our 6.15 numpy code **exactly**:
+The `flash` branch calls a fused kernel. The else branch is the manual fallback and matches our 6.15 numpy code:
 
 - `q @ k.transpose(-2, -1)` is $Q K^\top$, shape $(B, h, T, T)$.
 - `* (1.0 / math.sqrt(k.size(-1)))` is the $1 / \sqrt{d_k}$ scaling.
@@ -204,7 +204,7 @@ x &= x + \text{MLP}(\text{LN}_2(x)).
 \end{aligned}
 $$
 
-LN inside the residual branch; identity skip on the trunk. This is *literally* the residual-stream view from 6.9 and 6.10.
+LN inside the residual branch; identity skip on the trunk. This is the residual-stream view from 6.9 and 6.10.
 
 Five lines, two of them forward. The skeleton of a 175B-parameter LLM is *this short*.
 

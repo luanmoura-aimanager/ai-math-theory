@@ -95,7 +95,7 @@ This single inequality dictates where every "make Transformers efficient" effort
 - *Long context.* Optimise attention: sliding window (6.13), FlashAttention I/O (Cap 10.5), GQA/MQA (Cap 8.3), KV cache (6.14), linear attention (Mamba, Cap 8.7).
 
 <Aside type="note">
-**The empirical rule.** A handy back-of-envelope: training FLOPs per token per parameter ≈ $6$. Derive it: total forward FLOPs are $\approx 2 \cdot (\#\theta)$ per token if attention is dominated by the FFN's $16 T d^2 = 16 \cdot (\#\theta_\text{ffn})$ structure; backward adds another factor of 2 (the gradient pass does two matmuls per matmul forward); and updates contribute another small constant. Net: train-FLOPs $\approx 6 \cdot N \cdot D$ where $N$ = parameter count and $D$ = total training tokens. Chinchilla (Cap 7.12) uses exactly this formula.
+**The empirical rule.** A handy back-of-envelope: training FLOPs per token per parameter ≈ $6$. Derive it: total forward FLOPs are $\approx 2 \cdot (\#\theta)$ per token if attention is dominated by the FFN's $16 T d^2 = 16 \cdot (\#\theta_\text{ffn})$ structure; backward adds another factor of 2 (the gradient pass does two matmuls per matmul forward); and updates contribute another small constant. Net: train-FLOPs $\approx 6 \cdot N \cdot D$ where $N$ = parameter count and $D$ = total training tokens. Chinchilla (Cap 7.12) uses this formula.
 </Aside>
 
 ---

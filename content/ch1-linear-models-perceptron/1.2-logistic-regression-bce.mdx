@@ -119,7 +119,7 @@ $$
 \boxed{\ \frac{\partial L_{\text{BCE}}}{\partial z} \;=\; \hat y - y.\ }
 $$
 
-The $\hat y (1 - \hat y)$ in the denominator of the first factor cancels exactly with the sigmoid derivative — the same cancellation we'll see again with softmax + cross-entropy in 1.8. **This is the reason we pair sigmoid with BCE** (and softmax with CE): the gradient at the pre-activation has no $\sigma'$ tail to amplify or shrink. Compare with pairing sigmoid + MSE, which leaves a $\sigma' = \sigma(1 - \sigma) \in (0, 1/4]$ multiplier and creates a vanishing-gradient pathology when the model is confident.
+The $\hat y (1 - \hat y)$ in the denominator of the first factor cancels with the sigmoid derivative — the same cancellation we'll see again with softmax + cross-entropy in 1.8. **This is the reason we pair sigmoid with BCE** (and softmax with CE): the gradient at the pre-activation has no $\sigma'$ tail to amplify or shrink. Compare with pairing sigmoid + MSE, which leaves a $\sigma' = \sigma(1 - \sigma) \in (0, 1/4]$ multiplier and creates a vanishing-gradient pathology when the model is confident.
 
 <Aside type="note">
 This identity — the gradient of BCE at the pre-activation reducing to $\hat y - y$ — is the classical motivation for pairing sigmoid with BCE rather than MSE. It first appears in this exact form in the early neural-network literature; see Bishop, *PRML* (2006)<FN n={1} /> §4.3.2 for the textbook derivation in the notation closest to ours.

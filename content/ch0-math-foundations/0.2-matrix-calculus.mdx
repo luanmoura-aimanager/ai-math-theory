@@ -83,7 +83,7 @@ $$
 
 Define $\delta := \partial L / \partial y \in \mathbb{R}^{m}$. In matrix
 form, $\partial L / \partial W$ is the $m \times n$ matrix whose $(j,k)$
-entry is $\delta_j\, x_k$ — exactly the outer product:
+entry is $\delta_j\, x_k$ — the outer product:
 
 $$
 \boxed{\;\frac{\partial L}{\partial W} = \delta\, x^\top \;\in \mathbb{R}^{m\times n}.\;}
@@ -91,7 +91,7 @@ $$
 
 And for the bias, $\partial L/\partial b = \delta$ (each $b_i$ contributes
 $1$ to $y_i$). This completes the *local update rule* of a linear layer;
-chained across all layers, it is literally PyTorch's `backward()`.
+chained across all layers, it is PyTorch's `backward()`.
 
 ## 5. Quick check (do it with a pen)
 

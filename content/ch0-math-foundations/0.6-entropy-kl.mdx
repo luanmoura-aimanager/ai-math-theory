@@ -55,7 +55,7 @@ Properties:
 
 ## 3. Cross-entropy
 
-If $p$ is the true distribution and $q$ is the one you actually code
+If $p$ is the true distribution and $q$ is the one you code
 with (a model), the *cross-entropy* is
 
 $$
@@ -66,7 +66,7 @@ $$
 Operationally: $H[p, q]$ is the expected number of bits (or nats) you
 spend encoding draws from $p$ using an optimal code for $q$. When
 $q = p$, you've made the right choice and $H[p, q] = H[p]$. When $q
-\neq p$, you waste bits — and the wasted bits are exactly what KL
+\neq p$, you waste bits — and the wasted bits are what KL
 divergence measures.
 
 ## 4. KL divergence

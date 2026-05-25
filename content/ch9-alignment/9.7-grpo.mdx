@@ -52,7 +52,7 @@ That is *the entire advantage estimator*. No critic, no GAE, no temporal-differe
 
 ### 2.2 Why this works
 
-The PPO-style critic $V_\phi(x)$ is trying to estimate $\mathbb{E}_{y \sim \pi_\theta}[r(x, y)]$ — the expected reward under the current policy. The group sample mean $\mu_G$ is an *unbiased Monte Carlo estimate* of exactly the same quantity, computed from $K$ samples per prompt. So $\mu_G$ replaces the critic's role *at no estimation-quality cost*, given enough $K$.
+The PPO-style critic $V_\phi(x)$ is trying to estimate $\mathbb{E}_{y \sim \pi_\theta}[r(x, y)]$ — the expected reward under the current policy. The group sample mean $\mu_G$ is an *unbiased Monte Carlo estimate* of the same quantity, computed from $K$ samples per prompt. So $\mu_G$ replaces the critic's role *at no estimation-quality cost*, given enough $K$.
 
 Subtracting $\mu_G$ centres the advantage; dividing by $\sigma_G$ normalises it. After normalisation, $A_i$ is in standard-deviation units of the group's reward — comparable across prompts that have wildly different absolute reward magnitudes (e.g., easy vs hard math problems).
 

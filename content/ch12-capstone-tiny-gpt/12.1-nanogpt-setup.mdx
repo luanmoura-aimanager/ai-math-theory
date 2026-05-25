@@ -88,7 +88,7 @@ python data/shakespeare_char/prepare.py
 
 This downloads the complete works of Shakespeare (~$1.1$ MB of text), builds a character-level vocabulary ($\sim 65$ characters: letters, punctuation, whitespace, EOS), and saves `train.bin` and `val.bin` — the tokenised sequences as flat numpy memmaps.
 
-The dataset is *tiny* — the entire corpus fits in a single tensor. This is exactly what we want for the capstone: you can train a model to convergence in minutes and iterate quickly on architecture and training choices.
+The dataset is *tiny* — the entire corpus fits in a single tensor. This is what we want for the capstone: you can train a model to convergence in minutes and iterate quickly on architecture and training choices.
 
 ---
 
@@ -130,7 +130,7 @@ Output something like:
 > *And bid the kingdom for my brother's blood.*
 > *...*
 
-It's *Shakespearean-flavoured* — period vocabulary, iambic-ish rhythm, character-name-then-monologue format. It is also nonsense at any literal level. A $10$M-parameter character-level model on $1$ MB of text is exactly that capable.
+It's *Shakespearean-flavoured* — period vocabulary, iambic-ish rhythm, character-name-then-monologue format. It is also nonsense at any literal level. A $10$M-parameter character-level model on $1$ MB of text is that capable.
 
 The baseline is now reproducible. Save a sample for comparison; you'll improve on this in 12.3 and 12.4.
 

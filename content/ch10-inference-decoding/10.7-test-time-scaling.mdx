@@ -21,7 +21,7 @@ This session traces the line from chain-of-thought prompting through STaR to o1/
 
 ## 2. Chain-of-thought prompting (the prehistory)
 
-Wei et al. (2022, [arXiv:2201.11903](https://arxiv.org/abs/2201.11903)) demonstrated that simply prompting the model to "think step by step" — or showing few-shot examples with worked-out reasoning — dramatically improved its math and reasoning accuracy.
+Wei et al. (2022, [arXiv:2201.11903](https://arxiv.org/abs/2201.11903)) demonstrated that prompting the model to "think step by step" — or showing few-shot examples with worked-out reasoning — dramatically improved its math and reasoning accuracy.
 
 The example everyone uses:
 
@@ -175,7 +175,7 @@ DeepSeek-R1's paper notes a "length-reward" term that explicitly penalises overl
 
 A few open questions as of 2026.
 
-### 7.1 What does the reasoning actually do?
+### 7.1 What does the reasoning do?
 
 The mechanistic interpretability picture (Chapter 11) is incomplete for reasoning models. The thinking tokens *appear* to do real computation — there's strong empirical evidence that *the contents of the chain causally affect the answer* (ablations show large accuracy drops if you replace the chain with noise of the same length). But the chain is also partly *performative* — the model has been trained to emit reasoning, and some fraction of the chain is the model "showing its work" for the reward model rather than actually computing.
 

@@ -101,7 +101,7 @@ The constant $L_\infty$ is the **irreducible loss** — the asymptotic floor as 
 What does this represent? Three contributions:
 
 1. **Data entropy.** The true conditional entropy of the next token given the past, $H(\text{token}_t | \text{token}_{<t})$. A perfect predictor still has this loss.
-2. **Bayes-irreducible noise.** Some tokens are simply unpredictable (e.g., a random username); no model achieves loss 0 on them.
+2. **Bayes-irreducible noise.** Some tokens are unpredictable (e.g., a random username); no model achieves loss 0 on them.
 3. **Tokenization waste.** The cross-entropy of a non-optimal subword vocabulary versus the optimal one is a constant shift on top of (1).
 
 The irreducible loss is the limit; the power-law term is the *reducible* loss, which scales as $N^{-\alpha_N}$. **Modern training is exclusively in the reducible regime** — even GPT-4 is far from $L_\infty$.
