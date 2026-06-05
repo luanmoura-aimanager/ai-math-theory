@@ -24,8 +24,11 @@ export function Sidebar({ chapters }: { chapters: ChapterMeta[] }) {
   const { isCompleted } = useProgress();
   const [open, setOpen] = useState(false);
 
-  // Close the drawer when the user navigates to a session on mobile.
+  // Close the drawer when the user navigates to a session on mobile. Syncing to
+  // a route change is exactly the external-system case this setState-in-effect
+  // is meant for, so the rule's cascading-render warning doesn't apply.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setOpen(false);
   }, [pathname]);
 
