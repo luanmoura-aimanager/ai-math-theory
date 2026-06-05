@@ -7,7 +7,8 @@ import { dbEnabled } from "@/lib/db";
 // when a database is configured (dbEnabled); otherwise the site is anonymous-
 // only and there is nothing to sign in to.
 export async function Header() {
-  const session = dbEnabled() ? await auth() : null;
+  const showAuth = dbEnabled();
+  const session = showAuth ? await auth() : null;
 
   return (
     <header className="h-14 shrink-0 border-b border-[var(--rule)] bg-[var(--background-elev)]/80 backdrop-blur-sm">
@@ -20,7 +21,7 @@ export async function Header() {
         >
           AI / ML Theory
         </Link>
-        {dbEnabled() && <AuthControl session={session} />}
+        {showAuth && <AuthControl session={session} />}
       </div>
     </header>
   );

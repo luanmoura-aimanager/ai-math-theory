@@ -8,28 +8,31 @@ import { auth } from "@/auth";
  * for the signed-in user. A slug is the full session key,
  * e.g. "ch0-math-foundations/0.1-vector-spaces" (SessionMeta.slug).
  *
- * All functions degrade to "anonymous" (no DB / no session) by returning empty
- * results, never throwing — the page renders the same with or without auth.
+ * Degrades to "anonymous" (no DB / no session) without throwing — the page
+ * renders the same with or without auth.
  */
 
-/** True when a user is authenticated (and a DB is configured). */
-export async function isSignedIn(): Promise<boolean> {
-  if (!getPool()) return false;
-  const session = await auth();
-  return Boolean(session?.user?.id);
-}
+export type ProgressState = {
+  signedIn: boolean;
+  /** Studied-session slugs for the current user (empty if anon/no DB). */
+  completed: string[];
+};
 
-/** The studied-session slugs for the current user (empty if anon/no DB). */
-export async function getStudiedSlugs(): Promise<string[]> {
+/**
+ * Resolve sign-in status and studied slugs in a SINGLE auth() lookup. The
+ * layout needs both, and auth() hits the session store, so we don't want to
+ * call it twice per render.
+ */
+export async function getProgressState(): Promise<ProgressState> {
   const pool = getPool();
-  if (!pool) return [];
+  if (!pool) return { signedIn: false, completed: [] };
   const session = await auth();
   const userId = session?.user?.id;
-  if (!userId) return [];
+  if (!userId) return { signedIn: false, completed: [] };
 
   const { rows } = await pool.query<{ slug: string }>(
     "SELECT slug FROM progress WHERE user_id = $1",
     [userId],
   );
-  return rows.map((r) => r.slug);
+  return { signedIn: true, completed: rows.map((r) => r.slug) };
 }

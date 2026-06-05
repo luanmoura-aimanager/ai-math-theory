@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 import { getChapterTree } from "@/lib/content";
-import { isSignedIn, getStudiedSlugs } from "@/lib/progress";
+import { getProgressState } from "@/lib/progress";
 import { ProgressProvider } from "@/components/ProgressProvider";
 import { Sidebar } from "@/components/Sidebar";
 import { Header } from "@/components/Header";
@@ -25,10 +25,9 @@ export default async function RootLayout({
 
   // Seed the progress provider with the signed-in user's studied slugs so the
   // sidebar checkmarks are correct on first paint. Anonymous visitors get an
-  // empty seed and the provider falls back to localStorage. Both calls are
-  // no-ops (false / []) when no DB is configured.
-  const signedIn = await isSignedIn();
-  const completed = signedIn ? await getStudiedSlugs() : [];
+  // empty seed and the provider falls back to localStorage. One auth() lookup
+  // resolves both flags; a no-op (false / []) when no DB is configured.
+  const { signedIn, completed } = await getProgressState();
 
   return (
     <html lang="en" className="h-full antialiased">

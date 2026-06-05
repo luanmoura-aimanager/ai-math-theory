@@ -42,7 +42,9 @@ export async function setStudied(
     console.error("setStudied failed", err);
     return { ok: false };
   }
-  // The sidebar checkmarks are server-seeded in layout.tsx, so refresh them.
-  revalidatePath("/");
+  // The sidebar checkmarks are server-seeded in the root layout, which wraps
+  // every route (including /session/[...slug] where toggles happen). Revalidate
+  // the layout segment so the seed refreshes across all of them, not just "/".
+  revalidatePath("/", "layout");
   return { ok: true };
 }
