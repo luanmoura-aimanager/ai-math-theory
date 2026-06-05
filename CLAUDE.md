@@ -61,12 +61,14 @@ You *can* and should:
 | Content | MDX via `@next/mdx` | `.mdx` files live in `content/`, dynamically imported by `app/session/[...slug]/page.tsx`. |
 | Math | KaTeX via `remark-math` + `rehype-katex` | Plugin specifiers must be **strings**, see §7.1. |
 | Frontmatter | `gray-matter` | Parsed in `src/lib/content.ts`. |
-| Persistence | **Browser `localStorage`** | MVP only. See §5 and §8 for the future migration path to DB+auth. |
+| Persistence | **Neon Postgres** (signed-in) / `localStorage` (anonymous) | Auth.js v5 + Google. `ProgressProvider` picks the backend at runtime; unset env → anonymous-only. See §8 (now implemented) + decision log 2026-06-05. |
 | Pkg manager | npm | Lockfile is `package-lock.json`. |
 
-**Not in this MVP** (deferred — see §8): authentication, server-side database,
-deploy. The `website_plan.md` original plan assumed all of these. They will
-come back when there's reader demand for cross-device sync.
+**Now implemented** (2026-06-05, see §8 + decision log): authentication
+(Auth.js v5 + Google), a server-side database (Neon Postgres via
+`@auth/pg-adapter`), and per-user cross-device progress. The build still runs
+**anonymous-only** when the env vars are unset, so no DB is required for local
+content work. Deploy steps remain user-run.
 
 ## 5. Current state of the code
 
@@ -84,7 +86,7 @@ ai-math-theory/
 │   │   ├── globals.css                     # tokens + .prose-textbook + KaTeX overrides
 │   │   └── session/[...slug]/page.tsx      # dynamic MDX route
 │   ├── components/
-│   │   ├── Header.tsx                      # site title (no auth UI)
+│   │   ├── Header.tsx                      # site title + Google sign-in/out (server comp.)
 │   │   ├── Sidebar.tsx                     # chapter tree + checkmarks
 │   │   ├── ProgressProvider.tsx            # localStorage-backed
 │   │   ├── MarkCompleteButton.tsx          # consumes useProgress()
@@ -270,3 +272,17 @@ in `src/lib/content.ts` and document it here.
 - **2026-05-15 — Scope reduction.** Auth + DB removed; persistence moved to
   `localStorage`. Rationale: no real users yet, infrastructure was a
   distraction from content authoring. Future migration path documented in §8.
+- **2026-06-05 — §8 implemented (auth + DB + cross-device progress).** Added
+  Auth.js v5 + Google sign-in and Neon Postgres via `@auth/pg-adapter` (not the
+  Prisma sketch in §8 — followed `../ai-knowledge-tree`'s proven raw-`pg`
+  pattern instead, since the ask was to mirror akt). `ProgressProvider` now
+  selects backend at runtime per the §6 contract — `useProgress()` unchanged, so
+  `Sidebar`/`MarkCompleteButton` compile untouched; signed-in state is
+  server-seeded in `layout.tsx` and persisted via the `setStudied` server
+  action, with a one-time `localStorage`→DB migration on first sign-in. New:
+  `src/auth.ts`, `src/lib/db.ts`, `src/lib/progress.ts`,
+  `src/app/actions/progress.ts`, `src/app/api/auth/[...nextauth]/route.ts`,
+  `src/types/next-auth.d.ts`, `schema.sql`, `.env.example`. Unset env → the
+  build stays anonymous-only (verified: `/` still prerenders static). Content
+  lane untouched; the gap-lesson follow-up is specced in `MISSING_LESSONS.md`
+  (no `content/` edits).

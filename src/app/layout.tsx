@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 import { getChapterTree } from "@/lib/content";
+import { isSignedIn, getStudiedSlugs } from "@/lib/progress";
 import { ProgressProvider } from "@/components/ProgressProvider";
 import { Sidebar } from "@/components/Sidebar";
 import { Header } from "@/components/Header";
@@ -12,7 +13,7 @@ export const metadata: Metadata = {
     "A rigorous, math-first walk-through of deep learning, from linear models up to modern large language models.",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
@@ -22,10 +23,17 @@ export default function RootLayout({
   // filesystem read stays server-only.
   const chapters = getChapterTree();
 
+  // Seed the progress provider with the signed-in user's studied slugs so the
+  // sidebar checkmarks are correct on first paint. Anonymous visitors get an
+  // empty seed and the provider falls back to localStorage. Both calls are
+  // no-ops (false / []) when no DB is configured.
+  const signedIn = await isSignedIn();
+  const completed = signedIn ? await getStudiedSlugs() : [];
+
   return (
     <html lang="en" className="h-full antialiased">
       <body className="min-h-full flex flex-col">
-        <ProgressProvider>
+        <ProgressProvider signedIn={signedIn} initialCompleted={completed}>
           <Header />
           <div className="flex flex-1 min-h-0">
             <Sidebar chapters={chapters} />
